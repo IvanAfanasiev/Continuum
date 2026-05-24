@@ -1,7 +1,9 @@
 [package]
 name = "continuum"
 version = "0.1.0"
-edition = "2024"
+# edition = "2024" unstable
+# "2021" - a stable up-to-date edition
+edition = "2021"
 
 [dependencies]
 # Audio backend for audio output
