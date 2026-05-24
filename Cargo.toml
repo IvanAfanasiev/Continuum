@@ -1,6 +1,24 @@
 [package]
 name = "continuum"
 version = "0.1.0"
-edition = "2024"
+# edition = "2024" unstable
+# "2021" - a stable up-to-date edition
+edition = "2021"
 
 [dependencies]
+# Audio backend for audio output
+cpal = "0.15"
+
+# Thread-safe queue for data transfer between Composer and Performer
+crossbeam-queue = "0.3"
+
+# For working with time and timings
+chrono = "0.4"
+
+# For data serialization (in the future for LLM)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+candle-core = { version = "0.10.2", default-features = false }
+candle-transformers = { version = "0.10.2", default-features = false }
+tokenizers = "0.23.1"
