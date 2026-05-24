@@ -4,19 +4,20 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_queue::ArrayQueue;
 use std::sync::Arc;
 
-// maximum simultaneous voices
-// 8 is enough for chords and arpeggios
+// Maximum number of simultaneous voices (polyphony).
+// 8 is sufficient for chords and arpeggios; raise to 16 for denser textures.
 const MAX_VOICES: usize = 8;
 
-// one synthesizer voice is an independent sine wave
+// One synthesizer voice: an independent sine-wave oscillator.
 struct Voice {
     phase: f32,
     freq: f32,
     target_freq: f32,
     amplitude: f32,
     target_amplitude: f32,
+    // Samples remaining before the note's natural end and fade-out begins.
     samples_remaining: u32,
-    // false = the voice is free and can be occupied by a new note
+    // When false the voice is idle and can be claimed by a new note.
     active: bool,
 }
 
@@ -33,7 +34,8 @@ impl Voice {
         }
     }
 
-    // assign a new note to the voice
+    // Assign a new note to this voice.
+    // The phase is intentionally NOT reset to avoid a click on legato transitions.
     fn trigger(&mut self, event: &NoteEvent, sample_rate: f32) {
         self.target_freq = midi_to_freq(event.note);
         self.target_amplitude = event.velocity;
@@ -41,48 +43,44 @@ impl Voice {
         self.active = true;
     }
 
-    // compute the next sample and update the internal state
+    // Advance the oscillator by one sample and return the output value.
     fn next_sample(&mut self, sample_rate: f32, freq_smooth: f32, amp_smooth: f32) -> f32 {
         if !self.active {
             return 0.0;
         }
 
-        // count the remaining time
-        // when it expires, start fade-out
+        // Count down the note duration; start fade-out when it reaches zero.
         if self.samples_remaining > 0 {
             self.samples_remaining -= 1;
         } else {
             self.target_amplitude = 0.0;
         }
 
-        // exponential smoothing (legato and soft attacks)
-        self.freq += (self.target_freq - self.freq) * freq_smooth;
+        // Exponential smoothing — creates natural portamento and soft attacks.
+        self.freq      += (self.target_freq      - self.freq)      * freq_smooth;
         self.amplitude += (self.target_amplitude - self.amplitude) * amp_smooth;
 
-        // deactivate the voice when the amplitude is almost zero
-        // free the slot
+        // Release the voice slot once the fade-out is complete.
         if self.amplitude < 0.0001 && self.target_amplitude == 0.0 {
             self.active = false;
             return 0.0;
         }
 
-        // sinusoidal oscillator
+        // Sine-wave oscillator.
         self.phase = (self.phase + self.freq / sample_rate) % 1.0;
         (self.phase * 2.0 * std::f32::consts::PI).sin() * self.amplitude
     }
 }
 
 pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) {
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .expect("Output device not found");
+    let host   = cpal::default_host();
+    let device = host.default_output_device().expect("no output device found");
     let config = device.default_output_config().unwrap().config();
     let sample_rate = config.sample_rate.0 as f32;
 
-    // exponential smoothing coefficients normalized by sample rate.
-    // freq_smooth  ~20ms - smooth sliding between notes (portamento effect)
-    // amp_smooth   ~8ms  - soft attack/release without clicks
+    // Smoothing coefficients derived from time constants, normalized by sample rate.
+    // freq_smooth (~20 ms): smooth pitch slides between notes (portamento).
+    // amp_smooth  (~8 ms):  soft attack and release to prevent clicks.
     let freq_smooth = 1.0 - (-1.0f32 / (0.020 * sample_rate)).exp();
     let amp_smooth  = 1.0 - (-1.0f32 / (0.008 * sample_rate)).exp();
 
@@ -93,41 +91,35 @@ pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) {
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 for sample in data.iter_mut() {
-                    // read all available events from the queue at once
-                    // this allows chords to start in one buffer
+                    // Drain all pending events in one pass so chords start together.
                     while let Some(event) = queue.pop() {
-                        // look for a free voice to play the note
                         if let Some(voice) = voices.iter_mut().find(|v| !v.active) {
+                            // Claim a free voice.
                             voice.trigger(&event, sample_rate);
                         } else {
-                            // all the voices are occupied - replace the one with
-                            // the least amount of time left (least noticeable)
-                            if let Some(voice) = voices
-                                .iter_mut()
-                                .min_by_key(|v| v.samples_remaining)
-                            {
+                            // All voices busy: steal the one closest to finishing.
+                            if let Some(voice) = voices.iter_mut().min_by_key(|v| v.samples_remaining) {
                                 voice.trigger(&event, sample_rate);
                             }
                         }
                     }
 
-                    // summarize all the active voices
+                    // Sum all active voices.
                     let out: f32 = voices
                         .iter_mut()
                         .map(|v| v.next_sample(sample_rate, freq_smooth, amp_smooth))
                         .sum();
 
-                    // normalization: divide by MAX_VOICES to prevent clipping
-                    // when multiple voices are playing simultaneously
+                    // Normalize by MAX_VOICES to prevent clipping when all voices are active.
                     *sample = out / MAX_VOICES as f32;
                 }
             },
-            |err| eprintln!("audio error: {}", err),
+            |err| eprintln!("[audio] stream error: {}", err),
             None,
         )
-        .expect("output stream error");
+        .expect("failed to build output stream");
 
-    stream.play().expect("stream play error");
+    stream.play().expect("failed to start audio stream");
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));

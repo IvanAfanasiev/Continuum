@@ -1,13 +1,15 @@
-use crate::NoteEvent;
 use crate::midi_to_freq;
+use crate::note_buffer::NoteBuffer;
+use crate::NoteEvent;
 use crossbeam_queue::ArrayQueue;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-// ────────────────────────────────────────
-//  THE REFERENCE BOOK OF MUSICAL CONSTANTS
-// ────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  MIDI NOTE CONSTANTS
+// ─────────────────────────────────────────────────────────────
+
 #[allow(dead_code)]
 pub mod notes {
     // Octave 3
@@ -27,72 +29,83 @@ pub mod notes {
     pub const A5:  u8 = 81; pub const AS5: u8 = 82; pub const B5:  u8 = 83;
 }
 
-// ─────────────────
-//  HELPER FUNCTIONS
-// ─────────────────
+// ─────────────────────────────────────────────────────────────
+//  MAIN LOOP
+// ─────────────────────────────────────────────────────────────
 
-// send one note to the queue.
-fn play_note(queue: &ArrayQueue<NoteEvent>, note: u8, velocity: f32, duration_ms: f32) {
-    let event = NoteEvent { note, velocity, duration: duration_ms };
-    if queue.push(event).is_err() {
-        eprintln!("composer: queue full, dropped note {}", note);
-    } else {
-        println!("▶ note {:>3}  {:.1} Hz  vel={:.2}  dur={}ms",
-            note, midi_to_freq(note), velocity, duration_ms as u32);
+// Reads notes from the LLM buffer one at a time and forwards them to
+// the audio engine queue, sleeping for the note's duration between each.
+// This sleep is what turns durations into actual musical timing.
+pub fn start_composing(
+    buffer: Arc<NoteBuffer>,
+    audio_queue: Arc<ArrayQueue<NoteEvent>>,
+) {
+    // Brief delay to let the audio engine initialize before the first note.
+    thread::sleep(Duration::from_millis(300));
+    println!("[composer] ready — waiting for notes from LLM");
+
+    loop {
+        // Block here until the LLM places a note in the buffer.
+        let event = buffer.pop();
+
+        println!(
+            "[composer] note {:>3}  {:.1} Hz  vel={:.2}  dur={}ms",
+            event.note,
+            midi_to_freq(event.note),
+            event.velocity,
+            event.duration as u32,
+        );
+
+        let duration_ms = event.duration as u64;
+
+        if audio_queue.push(event).is_err() {
+            eprintln!("[composer] audio queue full — note dropped");
+        }
+
+        // Sleep for the note's duration; this drives the musical tempo.
+        thread::sleep(Duration::from_millis(duration_ms));
     }
 }
 
-// send a chord
-fn play_chord(queue: &ArrayQueue<NoteEvent>, chord: &[u8], velocity: f32, duration_ms: f32) {
-    println!("≡ chord {:?}", chord);
+// ─────────────────────────────────────────────────────────────
+//  TESTING HELPERS (manual playback without the LLM)
+// ─────────────────────────────────────────────────────────────
+
+#[allow(dead_code)]
+pub fn play_note(queue: &ArrayQueue<NoteEvent>, note: u8, velocity: f32, duration_ms: f32) {
+    let event = NoteEvent { note, velocity, duration: duration_ms };
+    if queue.push(event).is_err() {
+        eprintln!("[composer] queue full — note {} dropped", note);
+    }
+}
+
+#[allow(dead_code)]
+pub fn play_chord(queue: &ArrayQueue<NoteEvent>, chord: &[u8], velocity: f32, duration_ms: f32) {
     for &note in chord {
         play_note(queue, note, velocity, duration_ms);
     }
 }
 
-// send an arpeggio (the same notes but with a delay 'step_ms'  between them)
-fn play_arpeggio(
+#[allow(dead_code)]
+pub fn play_arpeggio(
     queue: &ArrayQueue<NoteEvent>,
     notes: &[u8],
     velocity: f32,
     duration_ms: f32,
     step_ms: u64,
 ) {
-    println!("~ arpeggio {:?} step={}ms", notes, step_ms);
     for &note in notes {
         play_note(queue, note, velocity, duration_ms);
         thread::sleep(Duration::from_millis(step_ms));
     }
 }
 
-// transpose a set of notes into semitones of semitones.
-// useful for changing the key without rewriting patterns.
-fn transpose(notes: &[u8], semitones: i8) -> Vec<u8> {
-    notes.iter()
+// Shift every note in a slice by the given number of semitones.
+// Useful for transposing a pattern to a different key without rewriting it.
+#[allow(dead_code)]
+pub fn transpose(notes: &[u8], semitones: i8) -> Vec<u8> {
+    notes
+        .iter()
         .map(|&n| (n as i16 + semitones as i16).clamp(0, 127) as u8)
         .collect()
-}
-
-// ───────────────────────────
-//  THE MAIN COMPOSER FUNCTION 
-// ───────────────────────────
-pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>) {
-    use notes::*;
-
-    // a short pause so that the audio engine can start up
-    thread::sleep(Duration::from_millis(300));
-
-    let chords: &[&[u8]] = &[
-        &[C4, E4, G4],
-        &[A3, C4, E4],
-        &[F3, A3, C4],
-        &[G3, B3, D4],
-    ];
-    let mut idx = 0usize;
-    loop {
-        let chord = chords[idx % chords.len()];
-        play_chord(&queue, chord, 0.45, 900.0);
-        idx += 1;
-        thread::sleep(Duration::from_millis(1000));
-    }
 }
