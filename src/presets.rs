@@ -20,19 +20,13 @@ impl Preset {
     // Build the system prompt that is sent to the LLM before each generation.
     pub fn system_prompt(&self) -> String {
         format!(
-            "You are a music composer AI. Generate a sequence of musical notes.\n\
+            "You are a music generator. Generate exactly {} musical events.\n\
+             Format each event as: note|velocity|duration\n\
+             Separate events with spaces. Example: 64|0.5|600 60|0.4|500\n\
              Style: {}\n\
-             Music theory rules: {}\n\
-             \n\
-             IMPORTANT: Respond ONLY with valid JSON. No explanation, no markdown fences.\n\
-             Format:\n\
-             {{\"notes\":[{{\"note\":60,\"velocity\":0.6,\"duration\":400}}, ...]}}\n\
-             - note: MIDI number 48-84 (C3-C6)\n\
-             - velocity: 0.1-0.9 (loudness)\n\
-             - duration: 200-2000 (milliseconds)\n\
-             - for chords: push multiple notes in sequence with no sleep between them\n\
-             Generate exactly {} notes or note-groups.",
-            self.style, self.theory, self.batch_size
+             Rules: {}\n\
+             Output ONLY the sequence of events, no other text.",
+            self.batch_size, self.style, self.theory
         )
     }
 }
@@ -46,10 +40,11 @@ pub const AMBIENT: Preset = Preset {
     name: "Ambient",
     style: "slow, sparse, ethereal, lots of silence between notes, \
             long sustained tones, peaceful and meditative",
-    theory: "use pentatonic scale (C D E G A), avoid semitones, \
-             prefer intervals of 4ths and 5ths, notes 52-76, \
-             long durations 800-2000ms, low velocity 0.2-0.5",
-    batch_size: 8,
+    theory: "ALLOWED MIDI NOTES ONLY: [60, 62, 64, 67, 69, 72, 74, 76]. \
+             Strictly avoid any other notes. \
+             Durations must be long: 800-2500ms. \
+             Velocity must be quiet: 0.2-0.5.",
+    batch_size: 16,
     refill_threshold: 4,
 };
 
@@ -62,7 +57,7 @@ pub const JAZZ: Preset = Preset {
              chromatic passing tones allowed, notes 48-80, \
              mix short 200-400ms and medium 600-800ms durations, \
              vary velocity 0.3-0.8 for expression",
-    batch_size: 12,
+    batch_size: 28,
     refill_threshold: 6,
 };
 
@@ -75,7 +70,7 @@ pub const MINIMAL: Preset = Preset {
              repeat short motifs of 3-4 notes with slight rhythmic variation, \
              notes 60-76, durations 250-500ms, \
              consistent velocity 0.4-0.6",
-    batch_size: 16,
+    batch_size: 48,
     refill_threshold: 8,
 };
 
@@ -88,7 +83,7 @@ pub const CHAOS: Preset = Preset {
              dissonant intervals encouraged (semitones, tritones), \
              wildly varying durations 100-1500ms, \
              extreme velocity swings 0.1-0.95",
-    batch_size: 10,
+    batch_size: 22,
     refill_threshold: 5,
 };
 
@@ -102,7 +97,7 @@ pub const CLASSICAL: Preset = Preset {
              melody in range 60-79, bass 48-60, \
              mix quarter-note 400ms and half-note 800ms values, \
              velocity 0.4-0.7",
-    batch_size: 12,
+    batch_size: 26,
     refill_threshold: 6,
 };
 
@@ -116,7 +111,7 @@ pub const DRONE: Preset = Preset {
              very long durations 1500-3000ms, \
              low velocity 0.15-0.4, \
              use minor scale (C D Eb F G Ab Bb)",
-    batch_size: 6,
+    batch_size: 12,
     refill_threshold: 3,
 };
 

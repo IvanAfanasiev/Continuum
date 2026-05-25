@@ -15,17 +15,20 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Candle — local inference in pure Rust, no cmake required
-candle-core = { version = "0.8", default-features = false }
-candle-nn = { version = "0.8", default-features = false }
-candle-transformers = { version = "0.8", default-features = false }
+# Version must match exactly across all three crates
+candle-core = { version = "0.10.2", default-features = false }
+candle-nn = { version = "0.10.2", default-features = false }
+candle-transformers = { version = "0.10.2", default-features = false }
 
 # HuggingFace tokenizer
 tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
 
-# Model download / cache (desktop); bundled path used on Android
-# "online" enables network + TLS; "tokio" for the async downloader
+# Model download / cache — "default-tls" enables HTTPS on all platforms
 hf-hub = { version = "0.5", features = ["default-tls", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Sampling (top-p / temperature) — must match the version candle-transformers uses
+rand = "0.9"
 
 [profile.release]
 opt-level = 3
@@ -34,4 +37,4 @@ codegen-units = 1  # Slower compile, faster runtime
 strip = true       # Strip debug symbols to reduce binary size
 
 [profile.dev]
-opt-level = 1      # Candle is very slow without at least basic optimization
+opt-level = 1      # Candle is very slow at opt-level 0
