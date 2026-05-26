@@ -4,20 +4,26 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_queue::ArrayQueue;
 use std::sync::Arc;
 
-// maximum simultaneous voices
-// 8 is enough for chords and arpeggios
-const MAX_VOICES: usize = 8;
+const MAX_VOICES: usize = 16;
 
-// one synthesizer voice is an independent sine wave
+#[derive(PartialEq)]
+enum EnvState {
+    Idle,
+    Attack,
+    Sustain,
+    Release,
+}
+
 struct Voice {
     phase: f32,
     freq: f32,
-    target_freq: f32,
     amplitude: f32,
-    target_amplitude: f32,
+    current_vol: f32,
+    state: EnvState,
     samples_remaining: u32,
-    // false = the voice is free and can be occupied by a new note
-    active: bool,
+    
+    attack_samples: f32,
+    release_samples: f32,
 }
 
 impl Voice {
@@ -25,66 +31,69 @@ impl Voice {
         Self {
             phase: 0.0,
             freq: 440.0,
-            target_freq: 440.0,
             amplitude: 0.0,
-            target_amplitude: 0.0,
+            current_vol: 0.0,
+            state: EnvState::Idle,
             samples_remaining: 0,
-            active: false,
+            attack_samples: 0.0,
+            release_samples: 0.0,
         }
     }
 
-    // assign a new note to the voice
     fn trigger(&mut self, event: &NoteEvent, sample_rate: f32) {
-        self.target_freq = midi_to_freq(event.note);
-        self.target_amplitude = event.velocity;
+        self.freq = midi_to_freq(event.note);
+        self.amplitude = event.velocity;
+        
+        self.attack_samples = 0.100 * sample_rate;
+        self.release_samples = 0.400 * sample_rate;
+        
         self.samples_remaining = (event.duration / 1000.0 * sample_rate) as u32;
-        self.active = true;
+        
+        self.state = EnvState::Attack;
     }
 
-    // compute the next sample and update the internal state
-    fn next_sample(&mut self, sample_rate: f32, freq_smooth: f32, amp_smooth: f32) -> f32 {
-        if !self.active {
+    fn next_sample(&mut self, sample_rate: f32) -> f32 {
+        if self.state == EnvState::Idle {
             return 0.0;
         }
 
-        // count the remaining time
-        // when it expires, start fade-out
-        if self.samples_remaining > 0 {
-            self.samples_remaining -= 1;
-        } else {
-            self.target_amplitude = 0.0;
+        match self.state {
+            EnvState::Attack => {
+                self.current_vol += self.amplitude / self.attack_samples;
+                if self.current_vol >= self.amplitude {
+                    self.current_vol = self.amplitude;
+                    self.state = EnvState::Sustain;
+                }
+            }
+            EnvState::Sustain => {
+                if self.samples_remaining > 0 {
+                    self.samples_remaining -= 1;
+                } else {
+                    self.state = EnvState::Release;
+                }
+            }
+            EnvState::Release => {
+                self.current_vol -= self.amplitude / self.release_samples;
+                if self.current_vol <= 0.0 {
+                    self.current_vol = 0.0;
+                    self.state = EnvState::Idle;
+                }
+            }
+            EnvState::Idle => {}
         }
 
-        // exponential smoothing (legato and soft attacks)
-        self.freq += (self.target_freq - self.freq) * freq_smooth;
-        self.amplitude += (self.target_amplitude - self.amplitude) * amp_smooth;
-
-        // deactivate the voice when the amplitude is almost zero
-        // free the slot
-        if self.amplitude < 0.0001 && self.target_amplitude == 0.0 {
-            self.active = false;
-            return 0.0;
-        }
-
-        // sinusoidal oscillator
         self.phase = (self.phase + self.freq / sample_rate) % 1.0;
-        (self.phase * 2.0 * std::f32::consts::PI).sin() * self.amplitude
+        let osc = (self.phase * 2.0 * std::f32::consts::PI).sin();
+        
+        osc * self.current_vol
     }
 }
 
 pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .expect("Output device not found");
+    let device = host.default_output_device().expect("Output device not found");
     let config = device.default_output_config().unwrap().config();
     let sample_rate = config.sample_rate.0 as f32;
-
-    // exponential smoothing coefficients normalized by sample rate.
-    // freq_smooth  ~20ms - smooth sliding between notes (portamento effect)
-    // amp_smooth   ~8ms  - soft attack/release without clicks
-    let freq_smooth = 1.0 - (-1.0f32 / (0.020 * sample_rate)).exp();
-    let amp_smooth  = 1.0 - (-1.0f32 / (0.008 * sample_rate)).exp();
 
     let mut voices: [Voice; MAX_VOICES] = std::array::from_fn(|_| Voice::new());
 
@@ -93,33 +102,18 @@ pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) {
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 for sample in data.iter_mut() {
-                    // read all available events from the queue at once
-                    // this allows chords to start in one buffer
                     while let Some(event) = queue.pop() {
-                        // look for a free voice to play the note
-                        if let Some(voice) = voices.iter_mut().find(|v| !v.active) {
+                        if let Some(voice) = voices.iter_mut().find(|v| v.state == EnvState::Idle) {
                             voice.trigger(&event, sample_rate);
-                        } else {
-                            // all the voices are occupied - replace the one with
-                            // the least amount of time left (least noticeable)
-                            if let Some(voice) = voices
-                                .iter_mut()
-                                .min_by_key(|v| v.samples_remaining)
-                            {
-                                voice.trigger(&event, sample_rate);
-                            }
+                        } else if let Some(voice) = voices.iter_mut().min_by_key(|v| v.samples_remaining) {
+                            voice.trigger(&event, sample_rate);
                         }
                     }
 
-                    // summarize all the active voices
-                    let out: f32 = voices
-                        .iter_mut()
-                        .map(|v| v.next_sample(sample_rate, freq_smooth, amp_smooth))
-                        .sum();
-
-                    // normalization: divide by MAX_VOICES to prevent clipping
-                    // when multiple voices are playing simultaneously
-                    *sample = out / MAX_VOICES as f32;
+                    let out: f32 = voices.iter_mut().map(|v| v.next_sample(sample_rate)).sum();
+                    
+                    let master_volume = 0.4;
+                    *sample = (out * master_volume).clamp(-1.0, 1.0);
                 }
             },
             |err| eprintln!("audio error: {}", err),
