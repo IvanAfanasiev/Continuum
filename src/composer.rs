@@ -1,68 +1,55 @@
 use crate::markov::{get_preset, MarkovGenerator};
+use crate::midi_to_freq;
 use crate::NoteEvent;
 use crossbeam_queue::ArrayQueue;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-const PRESET_NAME: &str = "Ambient";
-
-struct LayerConfig {
-    name: &'static str,
-    octave_shift: i8,
-    duration_mult: f32,
-    overlap: f32,
-}
+// presets: "Ambient" "Jazz" "Minimal" "Classical" "Drone" "Chaos"
+const PRESET_NAME: &str = "Jazz";
 
 pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>) {
-    println!("[composer] Starting multi-layer composer...");
+    thread::sleep(Duration::from_millis(300));
 
-    let layers = vec![
-        LayerConfig { name: "Bass",   octave_shift: -18, duration_mult: 1.0, overlap: 1.0 },
-    ];
+    let preset  = get_preset(PRESET_NAME);
+    let mut gen = MarkovGenerator::new(preset);
 
-    for config in layers {
-        let q = queue.clone();
-        thread::spawn(move || {
-            run_layer(config, q);
-        });
-    }
+    println!("[composer] ready | preset: {}", preset.name);
+    println!("[composer] grid step: {:.0}ms", preset.grid_step_ms);
 
     loop {
-        thread::sleep(Duration::from_secs(1));
+        if let Some(rest_ms) = gen.phrase_rest_ms() {
+            println!("[composer] rest {:.0}ms", rest_ms);
+            thread::sleep(Duration::from_millis(rest_ms as u64));
+        }
+
+        let event = gen.next();
+
+        println!(
+            "[composer] note {:>3}  {:.1} Hz  vel={:.2}  dur={:.0}ms",
+            event.note,
+            midi_to_freq(event.note),
+            event.velocity,
+            event.duration,
+        );
+
+        if queue.push(event).is_err() {
+            eprintln!("[composer] queue full - note dropped");
+        }
+
+        // Sleep for the GRID STEP
+        // This means notes overlap, next note starts before current one ends
+        // That is what creates a legato, connected melody instead of
+        // a sequence of isolated sounds separated by silence
+        let step = gen.grid_step_ms();
+        thread::sleep(Duration::from_millis(step as u64));
     }
 }
 
-fn run_layer(config: LayerConfig, queue: Arc<ArrayQueue<NoteEvent>>) {
-    let preset = get_preset(PRESET_NAME);
-    let mut gen = MarkovGenerator::new(preset);
-    
-    let mut buffer = Vec::with_capacity(50);
-
-    loop {
-        if buffer.len() < 10 {
-            for _ in 0..40 {
-                buffer.push(gen.next());
-            }
-        }
-
-        if let Some(mut event) = buffer.pop() {
-            let shifted_note = (event.note as i16 + config.octave_shift as i16).clamp(0, 127) as u8;
-            event.note = shifted_note;
-            
-            if config.octave_shift < -12 {
-                event.velocity *= 0.6; 
-            }
-
-            event.duration *= config.duration_mult;
-
-            let sleep_ms = (event.duration * config.overlap) as u64;
-
-            if queue.push(event).is_err() {
-                // Queue is full, wait
-            }
-
-            thread::sleep(Duration::from_millis(sleep_ms));
-        }
+#[allow(dead_code)]
+pub fn play_note(queue: &ArrayQueue<NoteEvent>, note: u8, velocity: f32, duration_ms: f32) {
+    if queue.push(NoteEvent { note, velocity, duration: duration_ms }).is_err() {
+        eprintln!("[composer] queue full - note {} dropped", note);
     }
 }

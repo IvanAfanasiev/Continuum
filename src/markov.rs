@@ -1,41 +1,126 @@
-// Markov chain music generator.
+// Melodic Markov generator.
 //
-// A second-order Markov chain: the next note depends on the previous two.
-// Each preset has its own transition table built from hand-crafted musical
-// patterns — scales, chord tones, typical jazz/classical voice leading, etc.
+// Note selection weights (computed per candidate, not stored as tables):
+//   chord_bonus        - scale tone belonging to the current chord: weight x3.5
+//   inertia            - continuing in the prevailing direction: weight x(1+inertia)
+//   recency_penalty    - recently played notes are down-weighted
+//   edge_penalty       - notes near the range extremes are less likely
 //
-// The chain produces a stream of (note, velocity, duration) tuples.
-// Velocity and duration are also Markov-driven via separate tables so the
-// rhythm and dynamics feel idiomatic for each style.
+// Timing:
+//   The composer sleeps grid_step_ms between notes, NOT the note duration.
+//   Note duration > grid_step → legato overlap.
+//   Note duration < grid_step → natural gap between notes.
 
 use crate::NoteEvent;
 use rand::prelude::*;
+use std::collections::VecDeque;
 
 // ─────────────────────────────────────────────────────────────
-//  TRANSITION TABLE
-//
-//  Maps (prev2, prev1) -> [(next_note, weight), ...]
-//  Weights are relative probabilities; they are normalised at sample time.
+//  SCALE
 // ─────────────────────────────────────────────────────────────
 
-pub struct NoteTransition {
-    pub from: (u8, u8),             // (prev2, prev1)
-    pub to:   &'static [(u8, u32)], // (next_note, weight)
+pub struct Scale {
+    pub root:      u8,
+    pub intervals: &'static [u8],
 }
 
-// Duration pool: list of (duration_ms, weight)
-pub type DurPool = &'static [(u32, u32)];
+impl Scale {
+    pub fn tones_in_range(&self, min: u8, max: u8) -> Vec<u8> {
+        let root_pc = self.root % 12;
+        let mut out = Vec::new();
+        let start = (min / 12).saturating_sub(1) * 12;
+        let end   = (max / 12 + 2) * 12;
+        for base in (start..end).step_by(12) {
+            for &iv in self.intervals {
+                let n = base + root_pc + iv;
+                if n >= min && n <= max { out.push(n); }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
 
-// Velocity pool: list of (velocity * 100 as u8, weight)  e.g. 60 => 0.60
-pub type VelPool = &'static [(u8, u32)];
+pub static PENTATONIC_MINOR: Scale = Scale { root: 57, intervals: &[0,3,5,7,10] };
+pub static PENTATONIC_MAJOR: Scale = Scale { root: 60, intervals: &[0,2,4,7,9] };
+pub static NATURAL_MINOR:    Scale = Scale { root: 57, intervals: &[0,2,3,5,7,8,10] };
+pub static MAJOR:            Scale = Scale { root: 60, intervals: &[0,2,4,5,7,9,11] };
+pub static DORIAN:           Scale = Scale { root: 62, intervals: &[0,2,3,5,7,9,10] };
+pub static CHROMATIC:        Scale = Scale { root: 60, intervals: &[0,1,2,3,4,5,6,7,8,9,10,11] };
+
+// ─────────────────────────────────────────────────────────────
+//  CHORD
+// ─────────────────────────────────────────────────────────────
+
+pub struct Chord { pub root: u8, pub intervals: &'static [u8] }
+
+impl Chord {
+    pub fn contains(&self, note: u8) -> bool {
+        let iv = (note % 12) as i16 - (self.root % 12) as i16;
+        self.intervals.contains(&(iv.rem_euclid(12) as u8))
+    }
+}
+
+static C_MAJ:  Chord = Chord { root: 60, intervals: &[0,4,7] };
+static A_MIN:  Chord = Chord { root: 57, intervals: &[0,3,7] };
+static F_MAJ:  Chord = Chord { root: 65, intervals: &[0,4,7] };
+static G_MAJ:  Chord = Chord { root: 67, intervals: &[0,4,7] };
+static G_DOM7: Chord = Chord { root: 67, intervals: &[0,4,7,10] };
+static D_MIN7: Chord = Chord { root: 62, intervals: &[0,3,7,10] };
+static G_MIN:  Chord = Chord { root: 67, intervals: &[0,3,7] };
+static D_MIN:  Chord = Chord { root: 62, intervals: &[0,3,7] };
+static E_MIN:  Chord = Chord { root: 64, intervals: &[0,3,7] };
+static B_FLAT: Chord = Chord { root: 70, intervals: &[0,4,7] };
+static E_FLAT: Chord = Chord { root: 63, intervals: &[0,4,7] };
+static A_MAJ:  Chord = Chord { root: 69, intervals: &[0,4,7] };
+
+// ─────────────────────────────────────────────────────────────
+//  RHYTHM VALUE
+// ─────────────────────────────────────────────────────────────
+
+pub struct RhythmValue { pub duration_ms: f32, pub weight: u32 }
+
+// ─────────────────────────────────────────────────────────────
+//  PRESET
+// ─────────────────────────────────────────────────────────────
 
 pub struct MarkovPreset {
-    pub name:        &'static str,
-    pub transitions: &'static [NoteTransition],
-    pub durations:   DurPool,
-    pub velocities:  VelPool,
-    // Starting notes: randomly pick one of these to seed the chain
-    pub seeds:       &'static [u8],
+    pub name:  &'static str,
+    pub scale: &'static Scale,
+    pub note_min: u8,
+    pub note_max: u8,
+
+    // Harmonic progression, looped, one chord per phrase
+    pub chords: &'static [&'static Chord],
+
+    // Notes per phrase
+    pub phrase_min: usize,
+    pub phrase_max: usize,
+
+    // Anti-repeat: how many recent notes to remember
+    pub history_len: usize,
+
+    // Direction inertia [0..1]: higher = smoother melodic contour
+    pub inertia: f32,
+
+    // Max scale-degree step per note
+    pub max_step: usize,
+
+    // Note durations
+    pub rhythm: &'static [RhythmValue],
+
+    // Time between note onsets (eighth note in the tempo)
+    pub grid_step_ms: f32,
+
+
+    // Velocity range
+    pub vel_min: f32,
+    pub vel_max: f32,
+
+    // Rest between phrases: probability and length in grid steps
+    pub rest_prob:  f64,
+    pub rest_steps: u32,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -43,306 +128,316 @@ pub struct MarkovPreset {
 // ─────────────────────────────────────────────────────────────
 
 pub struct MarkovGenerator {
-    preset:  &'static MarkovPreset,
-    prev2:   u8,
-    prev1:   u8,
-    rng:     rand::rngs::ThreadRng,
+    preset:       &'static MarkovPreset,
+    rng:          rand::rngs::ThreadRng,
+    tones:        Vec<u8>,
+    history:      VecDeque<u8>,
+    direction:    i32,         // +1 up, -1 down
+    phrase_pos:   usize,
+    phrase_len:   usize,
+    chord_idx:    usize,
+    current_vel:  f32,
+    // Counts how many steps since last direction change, prevents
+    // flip-flopping on every note at the range edges.
+    steps_in_dir: usize,
 }
 
 impl MarkovGenerator {
     pub fn new(preset: &'static MarkovPreset) -> Self {
-        let mut rng = rand::rng();
-        // Seed with two random notes from the preset's seed pool
-        let a = *preset.seeds.choose(&mut rng).unwrap_or(&60);
-        let b = *preset.seeds.choose(&mut rng).unwrap_or(&62);
-        Self { preset, prev2: a, prev1: b, rng }
+        let mut rng  = rand::rng();
+        let tones    = preset.scale.tones_in_range(preset.note_min, preset.note_max);
+        let start    = tones[tones.len() / 3];
+        let phrase_len = rng.random_range(preset.phrase_min..=preset.phrase_max);
+        let vel = (preset.vel_min + preset.vel_max) / 2.0;
+        let mut history = VecDeque::with_capacity(preset.history_len + 1);
+        history.push_back(start);
+        Self {
+            preset, rng, tones, history,
+            direction: 1,
+            phrase_pos: 0, phrase_len,
+            chord_idx: 0,
+            current_vel: vel,
+            steps_in_dir: 0,
+        }
     }
 
-    // Generate the next NoteEvent using the Markov chain.
-    pub fn next(&mut self) -> NoteEvent {
-        let note     = self.next_note();
-        let duration = self.sample_pool_u32(self.preset.durations) as f32;
-        let velocity = self.sample_pool_u8(self.preset.velocities) as f32 / 100.0;
-
-        self.prev2 = self.prev1;
-        self.prev1 = note;
-
-        NoteEvent { note, velocity, duration }
+    // How long to sleep before the next note onset.
+    pub fn grid_step_ms(&self) -> f32 {
+        self.preset.grid_step_ms
     }
 
-    // Generate a batch of `count` notes.
-    pub fn batch(&mut self, count: usize) -> Vec<NoteEvent> {
-        (0..count).map(|_| self.next()).collect()
-    }
-
-    // ── internals ──────────────────────────────────────────────
-
-    fn next_note(&mut self) -> u8 {
-        // Try exact (prev2, prev1) match first
-        let candidates = self.lookup(self.prev2, self.prev1)
-            // Fall back to (any, prev1) — ignore second-order context
-            .or_else(|| self.lookup_first_order(self.prev1));
-
-        if let Some(table) = candidates {
-            self.weighted_pick(table)
+    // Returns Some(ms) at phrase boundaries when a rest should occur.
+    // Rests happen AFTER a phrase ends, before the next begins.
+    pub fn phrase_rest_ms(&mut self) -> Option<f32> {
+        // Only at phrase boundary, and only sometimes
+        if self.phrase_pos == 0 && self.rng.random_bool(self.preset.rest_prob) {
+            Some(self.preset.grid_step_ms * self.preset.rest_steps as f32)
         } else {
-            // No match at all — pick a random seed note
-            *self.preset.seeds.choose(&mut self.rng).unwrap_or(&60)
+            None
         }
     }
 
-    fn lookup(&self, p2: u8, p1: u8) -> Option<&'static [(u8, u32)]> {
-        self.preset.transitions
-            .iter()
-            .find(|t| t.from == (p2, p1))
-            .map(|t| t.to)
-    }
-
-    fn lookup_first_order(&self, p1: u8) -> Option<&'static [(u8, u32)]> {
-        // Find any transition whose second element matches prev1
-        self.preset.transitions
-            .iter()
-            .find(|t| t.from.1 == p1)
-            .map(|t| t.to)
-    }
-
-    fn weighted_pick(&mut self, table: &[(u8, u32)]) -> u8 {
-        let total: u32 = table.iter().map(|&(_, w)| w).sum();
-        let mut r = self.rng.random_range(0..total);
-        for &(note, weight) in table {
-            if r < weight { return note; }
-            r -= weight;
+    pub fn next(&mut self) -> NoteEvent {
+        // ── phrase boundary ───────────────────────────────────
+        if self.phrase_pos >= self.phrase_len {
+            self.phrase_pos = 0;
+            self.phrase_len = self.rng.random_range(
+                self.preset.phrase_min..=self.preset.phrase_max
+            );
+            // Advance chord on phrase boundary
+            self.chord_idx = (self.chord_idx + 1) % self.preset.chords.len();
+            // Do NOT flip direction here, let the note-picking logic
+            // handle direction naturally. Flipping at phrase boundary
+            // caused sudden melodic jumps.
         }
-        table.last().map(|&(n, _)| n).unwrap_or(60)
+
+        let note = self.pick_note();
+        let dur  = self.pick_duration();
+
+        let drift = self.rng.random_range(-0.03f32..0.03);
+        self.current_vel = (self.current_vel + drift)
+            .clamp(self.preset.vel_min, self.preset.vel_max);
+
+        self.history.push_back(note);
+        while self.history.len() > self.preset.history_len {
+            self.history.pop_front();
+        }
+        self.phrase_pos += 1;
+
+        NoteEvent { note, velocity: self.current_vel, duration: dur }
     }
 
-    fn sample_pool_u32(&mut self, pool: DurPool) -> u32 {
-        let total: u32 = pool.iter().map(|&(_, w)| w).sum();
-        let mut r = self.rng.random_range(0..total);
-        for &(val, w) in pool {
-            if r < w { return val; }
+    // ── private ────────────────────────────────────────────────
+
+    fn pick_note(&mut self) -> u8 {
+        let prev = *self.history.back().unwrap_or(&60);
+        let chord = self.preset.chords[self.chord_idx];
+
+        let cur_idx = self.tones.iter().position(|&n| n == prev)
+            .unwrap_or(self.tones.len() / 2);
+
+        let max_step = self.preset.max_step;
+        let lo = cur_idx.saturating_sub(max_step);
+        let hi = (cur_idx + max_step).min(self.tones.len().saturating_sub(1));
+
+        // Auto-reverse direction when we hit the range edges,
+        // but only after staying there for at least 2 steps.
+        // This prevents the generator from camping at one extreme.
+        let at_top = cur_idx + 1 >= self.tones.len();
+        let at_bot = cur_idx == 0;
+        if (at_top && self.direction > 0) || (at_bot && self.direction < 0) {
+            if self.steps_in_dir >= 2 {
+                self.direction = -self.direction;
+                self.steps_in_dir = 0;
+            }
+        }
+
+        let mut candidates: Vec<(usize, f32)> = (lo..=hi)
+            .filter(|&i| i != cur_idx)
+            .map(|i| {
+                let note = self.tones[i];
+                let mut w = 1.0f32;
+
+                // Chord tone bonus
+                if chord.contains(note) { w *= 3.5; }
+
+                // Direction inertia with fade:
+                // after 'steps_in_dir' steps the inertia decays so the melody
+                // naturally turns rather than running to the range extremes.
+                let decay = 1.0 / (1.0 + self.steps_in_dir as f32 * 0.35);
+                let effective_inertia = self.preset.inertia * decay;
+                let step_dir = i as i32 - cur_idx as i32;
+                if step_dir.signum() == self.direction {
+                    w *= 1.0 + effective_inertia;
+                } else {
+                    w *= (1.0 - effective_inertia * 0.6).max(0.15);
+                }
+                w = w.max(0.01);
+
+                // Recency penalty
+                for (age, &h) in self.history.iter().rev().enumerate() {
+                    if h == note {
+                        let p = 0.90 / (1.0 + age as f32 * 0.4);
+                        w *= 1.0 - p;
+                        break;
+                    }
+                }
+                w = w.max(0.01);
+
+                // Edge penalty, avoid camping at extremes
+                let dist = i.min(self.tones.len().saturating_sub(1) - i) as f32;
+                if dist < 2.0 { w *= 0.4 + dist * 0.3; }
+
+                (i, w.max(0.01))
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            // Fallback: step toward the middle of the range
+            let mid = self.tones.len() / 2;
+            let fallback = if cur_idx < mid {
+                (cur_idx + 1).min(self.tones.len() - 1)
+            } else {
+                cur_idx.saturating_sub(1)
+            };
+            return self.tones[fallback];
+        }
+
+        let total: f32 = candidates.iter().map(|&(_, w)| w).sum();
+        let mut r = self.rng.random_range(0.0f32..total);
+        let mut chosen = candidates[0].0;
+        for &(idx, w) in &candidates {
+            if r < w { chosen = idx; break; }
             r -= w;
         }
-        pool.last().map(|&(v, _)| v).unwrap_or(400)
+
+        // Track direction and step count
+        let moved = chosen as i32 - cur_idx as i32;
+        if moved.signum() == self.direction {
+            self.steps_in_dir += 1;
+        } else if moved != 0 {
+            self.direction    = moved.signum();
+            self.steps_in_dir = 1;
+        }
+
+        self.tones[chosen]
     }
 
-    fn sample_pool_u8(&mut self, pool: VelPool) -> u8 {
-        let total: u32 = pool.iter().map(|&(_, w)| w).sum();
+    fn pick_duration(&mut self) -> f32 {
+        let total: u32 = self.preset.rhythm.iter().map(|r| r.weight).sum();
         let mut r = self.rng.random_range(0..total);
-        for &(val, w) in pool {
-            if r < w { return val; }
-            r -= w;
+        for rv in self.preset.rhythm {
+            if r < rv.weight { return rv.duration_ms; }
+            r -= rv.weight;
         }
-        pool.last().map(|&(v, _)| v).unwrap_or(55)
+        self.preset.rhythm.last().map(|r| r.duration_ms).unwrap_or(400.0)
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-//  PRESET DEFINITIONS
-//
-//  Note naming reference (MIDI numbers):
-//  C3=48 D3=50 E3=52 F3=53 G3=55 A3=57 B3=59
-//  C4=60 D4=62 E4=64 F4=65 G4=67 A4=69 B4=71
-//  C5=72 D5=74 E5=76 F5=77 G5=79 A5=81 B5=83
+//  PRESETS
 // ─────────────────────────────────────────────────────────────
-
-// ── AMBIENT ────────────────────────────────────────────────
-// Pentatonic Am: A3 C4 D4 E4 G4 A4 C5 D5 E5 G5
-// Sparse stepwise motion, lots of repeated long notes.
 
 pub static AMBIENT: MarkovPreset = MarkovPreset {
     name: "Ambient",
-    seeds: &[45, 48, 50, 52, 55], // A3 C4 D4 E4 G4
-    durations: &[
-        (800, 10), (1000, 25), (1200, 30), (1600, 20), (2000, 15),
+    scale: &PENTATONIC_MINOR,
+    note_min: 48, note_max: 69,
+    chords: &[&A_MIN, &C_MAJ, &G_MAJ, &F_MAJ],
+    phrase_min: 4, phrase_max: 7,
+    history_len: 6,
+    inertia: 0.55,  // fades after 3-4 steps so melody turns naturally
+    max_step: 2,    // allows steps of 1 or 2 scale degrees
+    rhythm: &[
+        RhythmValue { duration_ms: 1800.0, weight: 15 },
+        RhythmValue { duration_ms: 1200.0, weight: 40 },
+        RhythmValue { duration_ms:  900.0, weight: 30 },
+        RhythmValue { duration_ms:  600.0, weight: 15 },
     ],
-    velocities: &[
-        (22, 10), (30, 25), (38, 30), (45, 25), (52, 10),
-    ],
-    transitions: &[
-        NoteTransition { from: (57, 60), to: &[(60,30),(62,40),(64,20),(67,10)] },
-        NoteTransition { from: (60, 62), to: &[(62,10),(64,40),(67,30),(69,20)] },
-        NoteTransition { from: (62, 64), to: &[(64,20),(67,40),(69,30),(72,10)] },
-        NoteTransition { from: (64, 67), to: &[(67,20),(69,30),(72,30),(74,20)] },
-        NoteTransition { from: (67, 69), to: &[(69,20),(72,40),(74,20),(67,20)] },
-        NoteTransition { from: (69, 72), to: &[(72,10),(74,30),(76,30),(69,30)] },
-        NoteTransition { from: (72, 74), to: &[(74,20),(72,30),(69,30),(67,20)] },
-        NoteTransition { from: (74, 76), to: &[(76,10),(74,30),(72,30),(69,30)] },
-        // Descending phrases
-        NoteTransition { from: (76, 74), to: &[(74,20),(72,40),(69,30),(67,10)] },
-        NoteTransition { from: (74, 72), to: &[(72,20),(69,40),(67,30),(64,10)] },
-        NoteTransition { from: (72, 69), to: &[(69,20),(67,40),(64,30),(62,10)] },
-        NoteTransition { from: (69, 67), to: &[(67,20),(64,40),(62,30),(60,10)] },
-        NoteTransition { from: (67, 64), to: &[(64,20),(62,40),(60,30),(57,10)] },
-        NoteTransition { from: (64, 62), to: &[(62,20),(60,40),(57,30),(64,10)] },
-        NoteTransition { from: (62, 60), to: &[(60,30),(62,30),(57,30),(64,10)] },
-        NoteTransition { from: (60, 57), to: &[(57,20),(60,40),(62,30),(64,10)] },
-    ],
+    grid_step_ms: 400.0, // onset every 400ms; 1200ms note = 3x overlap = legato
+    vel_min: 0.28, vel_max: 0.52,
+    rest_prob: 0.40, rest_steps: 2,
 };
-
-// ── JAZZ ───────────────────────────────────────────────────
-// Dm7-G7-Cmaj7 ii-V-I in C.
-// Notes: D F A C E G B + chromatic passing tones (Eb, Bb, F#)
 
 pub static JAZZ: MarkovPreset = MarkovPreset {
     name: "Jazz",
-    seeds: &[62, 65, 69, 72, 74], // D4 F4 A4 C5 D5
-    durations: &[
-        (200, 15), (300, 30), (400, 25), (600, 20), (800, 10),
+    scale: &DORIAN,
+    note_min: 52, note_max: 74,
+    chords: &[&D_MIN7, &G_DOM7, &C_MAJ, &A_MIN],
+    phrase_min: 5, phrase_max: 8,
+    history_len: 5,
+    inertia: 0.38,
+    max_step: 3,
+    rhythm: &[
+        RhythmValue { duration_ms: 450.0, weight: 15 },
+        RhythmValue { duration_ms: 300.0, weight: 40 },
+        RhythmValue { duration_ms: 225.0, weight: 30 },
+        RhythmValue { duration_ms: 150.0, weight: 15 },
     ],
-    velocities: &[
-        (35, 10), (45, 20), (55, 30), (65, 25), (75, 15),
-    ],
-    transitions: &[
-        // ii chord tones (Dm7: D F A C)
-        NoteTransition { from: (62, 65), to: &[(65,20),(67,30),(69,30),(63,20)] },  // Eb chromatic
-        NoteTransition { from: (65, 69), to: &[(69,25),(71,25),(72,25),(68,25)] },
-        NoteTransition { from: (69, 72), to: &[(72,30),(74,30),(71,20),(69,20)] },
-        // V chord tones (G7: G B D F)
-        NoteTransition { from: (67, 71), to: &[(71,30),(72,30),(74,20),(69,20)] },
-        NoteTransition { from: (71, 74), to: &[(74,25),(72,25),(71,25),(69,25)] },
-        NoteTransition { from: (74, 77), to: &[(77,20),(76,30),(74,30),(72,20)] },
-        // I chord tones (Cmaj7: C E G B)
-        NoteTransition { from: (72, 76), to: &[(76,30),(77,20),(79,30),(74,20)] },
-        NoteTransition { from: (76, 79), to: &[(79,20),(81,20),(77,30),(76,30)] },
-        NoteTransition { from: (79, 81), to: &[(81,20),(79,20),(76,30),(74,30)] },
-        // Chromatic approach notes
-        NoteTransition { from: (63, 62), to: &[(62,40),(60,30),(65,30)] },
-        NoteTransition { from: (70, 69), to: &[(69,40),(67,30),(72,30)] },
-        NoteTransition { from: (68, 67), to: &[(67,40),(69,30),(65,30)] },
-        // Fallbacks
-        NoteTransition { from: (72, 74), to: &[(74,30),(72,20),(76,30),(71,20)] },
-        NoteTransition { from: (69, 71), to: &[(71,30),(72,30),(74,20),(69,20)] },
-        NoteTransition { from: (65, 67), to: &[(67,30),(69,30),(72,20),(65,20)] },
-        NoteTransition { from: (62, 60), to: &[(60,30),(62,30),(64,20),(65,20)] },
-    ],
+    grid_step_ms: 225.0,
+    vel_min: 0.38, vel_max: 0.75,
+    rest_prob: 0.28, rest_steps: 2,
 };
-
-// ── MINIMAL ────────────────────────────────────────────────
-// C major scale, repeating short motifs.
-// High probability of returning to nearby notes = hypnotic loops.
 
 pub static MINIMAL: MarkovPreset = MarkovPreset {
     name: "Minimal",
-    seeds: &[60, 62, 64, 65, 67],
-    durations: &[
-        (250, 30), (300, 30), (400, 25), (500, 15),
+    scale: &MAJOR,
+    note_min: 57, note_max: 74, // A3-D5
+    chords: &[&C_MAJ, &A_MIN, &F_MAJ, &G_MAJ],
+    phrase_min: 6, phrase_max: 8,
+    history_len: 4,
+    inertia: 0.38,
+    max_step: 2,
+    rhythm: &[
+        RhythmValue { duration_ms: 500.0, weight: 20 },
+        RhythmValue { duration_ms: 375.0, weight: 40 },
+        RhythmValue { duration_ms: 250.0, weight: 30 },
+        RhythmValue { duration_ms: 187.0, weight: 10 },
     ],
-    velocities: &[
-        (42, 20), (50, 40), (58, 30), (65, 10),
-    ],
-    transitions: &[
-        NoteTransition { from: (60, 62), to: &[(62,15),(64,40),(62,30),(60,15)] },
-        NoteTransition { from: (62, 64), to: &[(64,15),(65,35),(62,35),(67,15)] },
-        NoteTransition { from: (64, 65), to: &[(65,15),(67,35),(64,35),(62,15)] },
-        NoteTransition { from: (65, 67), to: &[(67,15),(69,35),(65,35),(64,15)] },
-        NoteTransition { from: (67, 69), to: &[(69,15),(71,30),(67,40),(65,15)] },
-        NoteTransition { from: (69, 71), to: &[(71,15),(72,25),(69,45),(67,15)] },
-        NoteTransition { from: (71, 72), to: &[(72,10),(71,30),(69,40),(67,20)] },
-        NoteTransition { from: (72, 71), to: &[(71,20),(69,40),(67,30),(72,10)] },
-        NoteTransition { from: (71, 69), to: &[(69,20),(67,40),(65,30),(71,10)] },
-        NoteTransition { from: (69, 67), to: &[(67,20),(65,40),(64,30),(69,10)] },
-        NoteTransition { from: (67, 65), to: &[(65,20),(64,40),(62,30),(67,10)] },
-        NoteTransition { from: (65, 64), to: &[(64,20),(62,40),(60,30),(65,10)] },
-        NoteTransition { from: (64, 62), to: &[(62,20),(60,40),(64,30),(65,10)] },
-        NoteTransition { from: (62, 60), to: &[(60,30),(62,40),(64,20),(67,10)] },
-        NoteTransition { from: (60, 60), to: &[(60,20),(62,40),(64,30),(65,10)] },
-        NoteTransition { from: (64, 64), to: &[(64,20),(65,30),(67,30),(62,20)] },
-    ],
+    grid_step_ms:     250.0,
+    vel_min: 0.42, vel_max: 0.62,
+    rest_prob: 0.18, rest_steps: 2,
 };
-
-// ── CLASSICAL ──────────────────────────────────────────────
-// G major. Mix of melody (upper voice) and bass motion.
-// Follows I-IV-V-I voice leading.
 
 pub static CLASSICAL: MarkovPreset = MarkovPreset {
     name: "Classical",
-    seeds: &[55, 59, 62, 67, 71], // G3 B3 D4 G4 B4
-    durations: &[
-        (300, 20), (400, 35), (600, 25), (800, 20),
+    scale: &MAJOR,
+    note_min: 52, note_max: 74, // E3-D5
+    chords: &[&C_MAJ, &F_MAJ, &G_DOM7, &C_MAJ],
+    phrase_min: 6, phrase_max: 8,
+    history_len: 5,
+    inertia: 0.52,
+    max_step: 2,
+    rhythm: &[
+        RhythmValue { duration_ms: 600.0, weight: 15 },
+        RhythmValue { duration_ms: 450.0, weight: 30 },
+        RhythmValue { duration_ms: 300.0, weight: 35 },
+        RhythmValue { duration_ms: 150.0, weight: 20 },
     ],
-    velocities: &[
-        (45, 20), (55, 40), (65, 30), (72, 10),
-    ],
-    transitions: &[
-        // G major chord (G B D)
-        NoteTransition { from: (55, 59), to: &[(59,30),(62,35),(67,25),(55,10)] },
-        NoteTransition { from: (59, 62), to: &[(62,25),(64,35),(67,25),(59,15)] },
-        NoteTransition { from: (62, 67), to: &[(67,30),(69,30),(71,25),(64,15)] },
-        // C major chord (C E G) — IV
-        NoteTransition { from: (60, 64), to: &[(64,30),(67,35),(72,20),(62,15)] },
-        NoteTransition { from: (64, 67), to: &[(67,25),(69,30),(72,25),(64,20)] },
-        NoteTransition { from: (67, 72), to: &[(72,25),(74,25),(71,30),(69,20)] },
-        // D major chord (D F# A) — V
-        NoteTransition { from: (62, 66), to: &[(66,30),(69,30),(74,25),(62,15)] },
-        NoteTransition { from: (66, 69), to: &[(69,30),(71,30),(74,25),(67,15)] },
-        NoteTransition { from: (69, 74), to: &[(74,25),(72,30),(71,25),(69,20)] },
-        // Leading tone resolution B->C, F#->G
-        NoteTransition { from: (71, 72), to: &[(72,50),(74,25),(67,25)] },
-        NoteTransition { from: (66, 67), to: &[(67,50),(69,25),(62,25)] },
-        // Stepwise descending
-        NoteTransition { from: (74, 72), to: &[(72,30),(71,30),(69,25),(67,15)] },
-        NoteTransition { from: (72, 71), to: &[(71,25),(69,35),(67,25),(72,15)] },
-        NoteTransition { from: (71, 69), to: &[(69,25),(67,35),(66,20),(71,20)] },
-        NoteTransition { from: (69, 67), to: &[(67,30),(66,25),(64,25),(69,20)] },
-        NoteTransition { from: (67, 64), to: &[(64,30),(62,35),(60,20),(67,15)] },
-    ],
+    grid_step_ms:     300.0,
+    vel_min: 0.42, vel_max: 0.68,
+    rest_prob: 0.32, rest_steps: 2,
 };
-
-// ── DRONE ──────────────────────────────────────────────────
-// D minor. Very slow, pedal on D+A, narrow melodic range.
 
 pub static DRONE: MarkovPreset = MarkovPreset {
     name: "Drone",
-    seeds: &[50, 57, 62, 65, 69], // D3 A3 D4 F4 A4
-    durations: &[
-        (1200, 15), (1600, 25), (2000, 30), (2500, 20), (3000, 10),
+    scale: &NATURAL_MINOR,
+    note_min: 45, note_max: 65, // A2-F4
+    chords: &[&A_MIN, &G_MIN, &D_MIN, &E_MIN],
+    phrase_min: 3, phrase_max: 5,
+    history_len: 4,
+    inertia: 0.62,
+    max_step: 2,
+    rhythm: &[
+        RhythmValue { duration_ms: 3000.0, weight: 15 },
+        RhythmValue { duration_ms: 2400.0, weight: 25 },
+        RhythmValue { duration_ms: 1800.0, weight: 35 },
+        RhythmValue { duration_ms: 1200.0, weight: 25 },
     ],
-    velocities: &[
-        (18, 20), (25, 35), (33, 30), (40, 15),
-    ],
-    transitions: &[
-        NoteTransition { from: (50, 57), to: &[(57,30),(60,30),(62,25),(65,15)] },
-        NoteTransition { from: (57, 62), to: &[(62,30),(65,30),(67,25),(60,15)] },
-        NoteTransition { from: (62, 65), to: &[(65,30),(67,25),(69,25),(62,20)] },
-        NoteTransition { from: (65, 69), to: &[(69,25),(67,30),(65,30),(72,15)] },
-        NoteTransition { from: (69, 67), to: &[(67,30),(65,30),(62,25),(69,15)] },
-        NoteTransition { from: (67, 65), to: &[(65,30),(62,30),(60,25),(57,15)] },
-        NoteTransition { from: (65, 62), to: &[(62,30),(60,30),(57,25),(65,15)] },
-        NoteTransition { from: (62, 60), to: &[(60,30),(57,35),(62,25),(65,10)] },
-        NoteTransition { from: (60, 57), to: &[(57,30),(50,25),(62,30),(65,15)] },
-        NoteTransition { from: (57, 50), to: &[(50,30),(57,40),(62,30)] },
-        // Pedal oscillation
-        NoteTransition { from: (50, 50), to: &[(50,20),(57,40),(62,40)] },
-        NoteTransition { from: (57, 57), to: &[(57,20),(62,40),(65,40)] },
-    ],
+    grid_step_ms:     900.0,
+    vel_min: 0.18, vel_max: 0.40,
+    rest_prob: 0.50, rest_steps: 3,
 };
-
-// ── CHAOS ──────────────────────────────────────────────────
-// Atonal. Wide leaps, chromatic, unpredictable.
 
 pub static CHAOS: MarkovPreset = MarkovPreset {
     name: "Chaos",
-    seeds: &[48, 55, 63, 71, 80, 88],
-    durations: &[
-        (100, 15), (200, 20), (400, 20), (700, 20), (1000, 15), (1400, 10),
+    scale: &CHROMATIC,
+    note_min: 40, note_max: 84,
+    chords: &[&C_MAJ, &E_FLAT, &B_FLAT, &A_MAJ],
+    phrase_min: 3, phrase_max: 10,
+    history_len: 3,
+    inertia: 0.10,
+    max_step: 7,
+    rhythm: &[
+        RhythmValue { duration_ms: 800.0, weight: 10 },
+        RhythmValue { duration_ms: 500.0, weight: 20 },
+        RhythmValue { duration_ms: 300.0, weight: 30 },
+        RhythmValue { duration_ms: 150.0, weight: 25 },
+        RhythmValue { duration_ms:  80.0, weight: 15 },
     ],
-    velocities: &[
-        (15, 15), (35, 20), (55, 20), (70, 25), (88, 20),
-    ],
-    transitions: &[
-        NoteTransition { from: (48, 55), to: &[(55,15),(71,15),(80,15),(63,15),(42,15),(88,10),(36,15)] },
-        NoteTransition { from: (55, 71), to: &[(71,15),(48,15),(85,15),(60,15),(77,15),(43,15),(91,10)] },
-        NoteTransition { from: (71, 80), to: &[(80,15),(55,15),(63,15),(90,15),(48,15),(75,10),(36,15)] },
-        NoteTransition { from: (80, 63), to: &[(63,15),(88,15),(48,15),(74,15),(55,15),(40,10),(96,10)] },
-        NoteTransition { from: (63, 88), to: &[(88,15),(50,15),(72,15),(60,15),(85,15),(45,10),(36,10)] },
-        NoteTransition { from: (88, 48), to: &[(48,15),(75,15),(60,15),(84,15),(55,15),(90,10),(40,10)] },
-        NoteTransition { from: (48, 63), to: &[(63,15),(77,15),(54,15),(88,15),(45,15),(70,10),(36,10)] },
-        NoteTransition { from: (63, 55), to: &[(55,15),(80,15),(48,15),(69,15),(88,15),(41,10),(96,10)] },
-    ],
+    grid_step_ms:     180.0,
+    vel_min: 0.20, vel_max: 0.85,
+    rest_prob: 0.18, rest_steps: 1,
 };
-
-// ── All presets ─────────────────────────────────────────────
 
 pub fn get_preset(name: &str) -> &'static MarkovPreset {
     match name {
@@ -351,6 +446,6 @@ pub fn get_preset(name: &str) -> &'static MarkovPreset {
         "Classical" => &CLASSICAL,
         "Drone"     => &DRONE,
         "Chaos"     => &CHAOS,
-        _           => &AMBIENT, // default
+        _           => &AMBIENT,
     }
 }
