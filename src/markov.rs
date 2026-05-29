@@ -1,4 +1,5 @@
-
+// Melodic Markov generator.
+//
 // Note selection weights (computed dynamically each step):
 //   chord_bonus      - chord tone: weight x3.5
 //   inertia (fading) - continue prevailing direction, decays after 3-4 steps
@@ -17,6 +18,7 @@
 //   replays it verbatim (same notes, current figure durations).
 //   This creates the recognisable-theme / call-and-response effect.
 
+use crate::instruments::Instrument;
 use crate::NoteEvent;
 use rand::prelude::*;
 use std::collections::VecDeque;
@@ -53,6 +55,41 @@ pub static NATURAL_MINOR:    Scale = Scale { root: 57, intervals: &[0,2,3,5,7,8,
 pub static MAJOR:            Scale = Scale { root: 60, intervals: &[0,2,4,5,7,9,11] };
 pub static DORIAN:           Scale = Scale { root: 62, intervals: &[0,2,3,5,7,9,10] };
 pub static CHROMATIC:        Scale = Scale { root: 60, intervals: &[0,1,2,3,4,5,6,7,8,9,10,11] };
+
+// ─────────────────────────────────────────────────────────────
+//  LAYER CONFIG
+//
+//  A preset has one or more layers. Each layer runs its own
+//  MarkovGenerator sharing the preset's scale and chords, but
+//  with its own note range, instrument, and rhythm role.
+// ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RhythmRole {
+    // Full Markov melody with motif memory
+    Melody,
+    // Only plays root tones of the current chord, slowly
+    Bass,
+    // Holds one chord tone for a long duration, changes rarely
+    Pad,
+    // Ignores pitch - plays a fixed note on a rhythmic pattern
+    Percussion,
+}
+
+pub struct LayerConfig {
+    pub instrument:  Instrument,
+    pub role:        RhythmRole,
+    pub note_min:    u8,
+    pub note_max:    u8,
+    // Velocity multiplier relative to the preset base (1.0 = normal)
+    pub vel_scale:   f32,
+    // Grid step multiplier (1.0 = same as preset, 2.0 = twice as slow)
+    pub grid_mult:   f32,
+    // For Percussion: the fixed MIDI note to play
+    pub fixed_note:  u8,
+    // For Percussion: pattern of grid steps between hits (true = hit, false = rest)
+    pub beat_pattern: &'static [bool],
+}
 
 // ─────────────────────────────────────────────────────────────
 //  CHORD
@@ -153,6 +190,9 @@ pub struct MarkovPreset {
     // Motif recall settings
     pub motif_recall_prob:  f64,
     pub motif_recall_after: usize,
+
+    // Layers (instruments) for this preset
+    pub layers: &'static [LayerConfig],
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -179,8 +219,14 @@ pub struct MarkovGenerator {
 
 impl MarkovGenerator {
     pub fn new(preset: &'static MarkovPreset) -> Self {
+        Self::new_with_range(preset, preset.note_min, preset.note_max)
+    }
+
+    // Create a generator with a custom note range (used by layer system).
+    // All other parameters come from the preset.
+    pub fn new_with_range(preset: &'static MarkovPreset, note_min: u8, note_max: u8) -> Self {
         let mut rng    = rand::rng();
-        let tones      = preset.scale.tones_in_range(preset.note_min, preset.note_max);
+        let tones      = preset.scale.tones_in_range(note_min, note_max);
         let start      = tones[tones.len() / 3];
         let phrase_len = rng.random_range(preset.phrase_min..=preset.phrase_max);
         let vel        = (preset.vel_min + preset.vel_max) / 2.0;
@@ -280,7 +326,7 @@ impl MarkovGenerator {
         }
         self.phrase_pos += 1;
 
-        NoteEvent { note, velocity: vel, duration: dur }
+        NoteEvent { note, velocity: vel, duration: dur, instrument: Instrument::default() }
     }
 
     // ── private ────────────────────────────────────────────────
@@ -447,6 +493,22 @@ pub static AMBIENT: MarkovPreset = MarkovPreset {
     tonic_pull: 0.65,
     motif_recall_prob:  0.25,
     motif_recall_after: 4,
+    layers: &[
+        LayerConfig {
+            instrument:   Instrument::Pad,
+            role:         RhythmRole::Melody,
+            note_min:     52, note_max: 67,
+            vel_scale:    1.0, grid_mult: 1.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Sine,
+            role:         RhythmRole::Pad,
+            note_min:     36, note_max: 52,
+            vel_scale:    0.5, grid_mult: 4.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+    ],
 };
 
 // JAZZ - steady pulse, constant tempo, rich harmonic range.
@@ -475,6 +537,31 @@ pub static JAZZ: MarkovPreset = MarkovPreset {
     tonic_pull: 0.50,
     motif_recall_prob:  0.22,
     motif_recall_after: 4,
+    layers: &[
+        LayerConfig {
+            instrument:   Instrument::Piano,
+            role:         RhythmRole::Melody,
+            note_min:     60, note_max: 76,
+            vel_scale:    1.0, grid_mult: 1.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Bass,
+            role:         RhythmRole::Bass,
+            note_min:     36, note_max: 52,
+            vel_scale:    0.65, grid_mult: 2.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Hihat,
+            role:         RhythmRole::Percussion,
+            note_min:     42, note_max: 42,
+            vel_scale:    0.38, grid_mult: 1.0,
+            fixed_note:   42,
+            // swing hihat: hit on 1 and 3, lighter on 2 and 4
+            beat_pattern: &[true, true, true, true],
+        },
+    ],
 };
 
 // MINIMAL - irregular rhythm, short notes, frequent repetition.
@@ -503,6 +590,22 @@ pub static MINIMAL: MarkovPreset = MarkovPreset {
     tonic_pull: 0.45,
     motif_recall_prob:  0.60,
     motif_recall_after: 2,
+    layers: &[
+        LayerConfig {
+            instrument:   Instrument::Piano,
+            role:         RhythmRole::Melody,
+            note_min:     60, note_max: 76,
+            vel_scale:    1.0, grid_mult: 1.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Organ,
+            role:         RhythmRole::Pad,
+            note_min:     48, note_max: 60,
+            vel_scale:    0.45, grid_mult: 8.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+    ],
 };
 
 // CLASSICAL - expressive dynamics, phrase peaks, clear cadences.
@@ -531,6 +634,22 @@ pub static CLASSICAL: MarkovPreset = MarkovPreset {
     tonic_pull: 0.72,
     motif_recall_prob:  0.42,
     motif_recall_after: 3,
+    layers: &[
+        LayerConfig {
+            instrument:   Instrument::Piano,
+            role:         RhythmRole::Melody,
+            note_min:     60, note_max: 76,
+            vel_scale:    1.0, grid_mult: 1.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Bass,
+            role:         RhythmRole::Bass,
+            note_min:     40, note_max: 55,
+            vel_scale:    0.60, grid_mult: 2.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+    ],
 };
 
 // DRONE - dark, sustained. Similar to ambient but lower and minor.
@@ -559,6 +678,22 @@ pub static DRONE: MarkovPreset = MarkovPreset {
     tonic_pull: 0.75,
     motif_recall_prob:  0.50,
     motif_recall_after: 2,
+    layers: &[
+        LayerConfig {
+            instrument:   Instrument::Pad,
+            role:         RhythmRole::Melody,
+            note_min:     48, note_max: 64,
+            vel_scale:    1.0, grid_mult: 1.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Bass,
+            role:         RhythmRole::Pad,
+            note_min:     33, note_max: 48,
+            vel_scale:    0.55, grid_mult: 3.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+    ],
 };
 
 // CHAOS - all values at extremes, maximum contrast.
@@ -588,6 +723,23 @@ pub static CHAOS: MarkovPreset = MarkovPreset {
     tonic_pull: 0.08,
     motif_recall_prob:  0.08,
     motif_recall_after: 6,
+    layers: &[
+        LayerConfig {
+            instrument:   Instrument::Pluck,
+            role:         RhythmRole::Melody,
+            note_min:     40, note_max: 88,
+            vel_scale:    1.0, grid_mult: 1.0,
+            fixed_note:   0, beat_pattern: &[true],
+        },
+        LayerConfig {
+            instrument:   Instrument::Kick,
+            role:         RhythmRole::Percussion,
+            note_min:     36, note_max: 36,
+            vel_scale:    0.80, grid_mult: 3.0,
+            fixed_note:   36,
+            beat_pattern: &[true, false, false],
+        },
+    ],
 };
 
 pub fn get_preset(name: &str) -> &'static MarkovPreset {

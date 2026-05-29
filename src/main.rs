@@ -1,20 +1,23 @@
 mod audio_engine;
 mod composer;
+mod instruments;
 mod markov;
 
 use crossbeam_queue::ArrayQueue;
+use instruments::Instrument;
 use std::sync::Arc;
 
 pub struct NoteEvent {
-    pub note:     u8,  // MIDI note number (0-127)
-    pub velocity: f32, // amplitude (0.0-1.0)
-    pub duration: f32, // milliseconds
+    pub note:       u8,
+    pub velocity:   f32,
+    pub duration:   f32,
+    pub instrument: Instrument,
 }
 
 fn main() {
     println!("[main] Starting Continuum");
 
-    let queue          = Arc::new(ArrayQueue::<NoteEvent>::new(256));
+    let queue          = Arc::new(ArrayQueue::<NoteEvent>::new(512));
     let audio_queue    = queue.clone();
     let composer_queue = queue.clone();
 
