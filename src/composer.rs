@@ -87,8 +87,9 @@ fn run_melody(
         }
 
         let mut event = gen.next();
-        event.velocity = (event.velocity * layer.vel_scale).clamp(0.0, 1.0);
+        event.velocity   = (event.velocity * layer.vel_scale).clamp(0.0, 1.0);
         event.instrument = layer.instrument;
+        event.envelope   = resolve_envelope(layer);
 
         push_note(&queue, event, instrument_name(layer.instrument));
         thread::sleep(Duration::from_millis(grid_ms as u64));
@@ -138,6 +139,7 @@ fn run_bass(
             velocity,
             duration,
             instrument: layer.instrument,
+            envelope:   resolve_envelope(layer),
         }, instrument_name(layer.instrument));
 
         step += 1;
@@ -187,6 +189,7 @@ fn run_pad(
             push_note(&queue, NoteEvent {
                 note, velocity, duration,
                 instrument: layer.instrument,
+                envelope:   resolve_envelope(layer),
             }, instrument_name(layer.instrument));
         }
 
@@ -223,8 +226,9 @@ fn run_percussion(
             push_note(&queue, NoteEvent {
                 note:       layer.fixed_note,
                 velocity:   vel,
-                duration:   grid_ms * 0.55, // shorter than grid → staccato hit
+                duration:   grid_ms * 0.55,
                 instrument: layer.instrument,
+                envelope:   resolve_envelope(layer),
             }, instrument_name(layer.instrument));
         }
 
@@ -249,6 +253,11 @@ fn push_note(queue: &ArrayQueue<NoteEvent>, event: NoteEvent, label: &str) {
     if queue.push(event).is_err() {
         eprintln!("[composer] queue full - note dropped");
     }
+}
+
+// Resolve the envelope: use LayerConfig override if set, else instrument default.
+fn resolve_envelope(layer: &LayerConfig) -> crate::instruments::EnvelopeConfig {
+    layer.envelope.unwrap_or_else(|| layer.instrument.default_envelope())
 }
 
 fn instrument_name(i: Instrument) -> &'static str {

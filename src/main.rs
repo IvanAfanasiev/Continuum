@@ -3,8 +3,8 @@ mod composer;
 mod instruments;
 mod markov;
 
+use instruments::{EnvelopeConfig, Instrument};
 use crossbeam_queue::ArrayQueue;
-use instruments::Instrument;
 use std::sync::Arc;
 
 pub struct NoteEvent {
@@ -12,6 +12,7 @@ pub struct NoteEvent {
     pub velocity:   f32,
     pub duration:   f32,
     pub instrument: Instrument,
+    pub envelope:   EnvelopeConfig,
 }
 
 fn main() {

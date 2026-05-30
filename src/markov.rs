@@ -18,7 +18,7 @@
 //   replays it verbatim (same notes, current figure durations).
 //   This creates the recognisable-theme / call-and-response effect.
 
-use crate::instruments::Instrument;
+use crate::instruments::{EnvelopeConfig, Instrument};
 use crate::NoteEvent;
 use rand::prelude::*;
 use std::collections::VecDeque;
@@ -50,11 +50,12 @@ impl Scale {
     }
 }
 
-pub static PENTATONIC_MINOR: Scale = Scale { root: 57, intervals: &[0,3,5,7,10] };
-pub static NATURAL_MINOR:    Scale = Scale { root: 57, intervals: &[0,2,3,5,7,8,10] };
-pub static MAJOR:            Scale = Scale { root: 60, intervals: &[0,2,4,5,7,9,11] };
-pub static DORIAN:           Scale = Scale { root: 62, intervals: &[0,2,3,5,7,9,10] };
-pub static CHROMATIC:        Scale = Scale { root: 60, intervals: &[0,1,2,3,4,5,6,7,8,9,10,11] };
+pub static PENTATONIC_MINOR:    Scale = Scale { root: 57, intervals: &[0,3,5,7,10] };
+pub static NATURAL_MINOR:       Scale = Scale { root: 57, intervals: &[0,2,3,5,7,8,10] };
+pub static MAJOR:               Scale = Scale { root: 60, intervals: &[0,2,4,5,7,9,11] };
+pub static DORIAN:              Scale = Scale { root: 62, intervals: &[0,2,3,5,7,9,10] };
+pub static CHROMATIC:           Scale = Scale { root: 60, intervals: &[0,1,2,3,4,5,6,7,8,9,10,11] };
+pub static LYDIAN_FLOATING:     Scale = Scale { root: 60, intervals: &[0, 2, 4, 6, 7, 9, 11] };
 
 // ─────────────────────────────────────────────────────────────
 //  LAYER CONFIG
@@ -89,6 +90,8 @@ pub struct LayerConfig {
     pub fixed_note:  u8,
     // For Percussion: pattern of grid steps between hits (true = hit, false = rest)
     pub beat_pattern: &'static [bool],
+    // Optional ADSR override. None = use instrument default_envelope().
+    pub envelope: Option<EnvelopeConfig>,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -326,7 +329,13 @@ impl MarkovGenerator {
         }
         self.phrase_pos += 1;
 
-        NoteEvent { note, velocity: vel, duration: dur, instrument: Instrument::default() }
+        NoteEvent {
+            note,
+            velocity: vel,
+            duration: dur,
+            instrument: crate::instruments::Instrument::Sine,
+            envelope: crate::instruments::Instrument::Sine.default_envelope(),
+        }
     }
 
     // ── private ────────────────────────────────────────────────
@@ -473,40 +482,57 @@ impl MarkovGenerator {
 // Low velocity, high rest probability → space between ideas.
 pub static AMBIENT: MarkovPreset = MarkovPreset {
     name:     "Ambient",
-    scale:    &PENTATONIC_MINOR,
-    note_min: 48, note_max: 67,   // A2-G4: comfortable, never piercing
-    chords:   &[&A_MIN, &C_MAJ, &G_MAJ, &F_MAJ],
-    phrase_min: 4, phrase_max: 7,
-    history_len: 7,
-    inertia:  0.62,
-    max_step: 2,
+    scale:    &LYDIAN_FLOATING,
+    note_min: 36, 
+    note_max: 84,
+    chords:   &[&C_MAJ, &F_MAJ, &A_MIN, &G_MAJ],
+    phrase_min: 4, 
+    phrase_max: 8,
+    history_len: 3,
+    inertia:  0.4,
+    max_step: 3,
+    
+    grid_step_ms: 2200.0, 
     figures: &[
-        RhythmFigure { durations: &[2000.0, 1600.0],                 weight: 30 },
-        RhythmFigure { durations: &[1600.0, 1200.0, 1600.0],         weight: 35 },
-        RhythmFigure { durations: &[2400.0, 1200.0],                 weight: 20 },
-        RhythmFigure { durations: &[1200.0, 800.0, 1200.0, 1600.0],  weight: 15 },
+        RhythmFigure { durations: &[5000.0, 7000.0, 6000.0], weight: 40 },
+        RhythmFigure { durations: &[9000.0, 3500.0, 4500.0], weight: 35 },
+        RhythmFigure { durations: &[4000.0, 8000.0], weight: 25 },
     ],
-    grid_step_ms: 500.0,
-    vel_min: 0.20, vel_max: 0.44,
-    accent:  1.12,
-    rest_prob: 0.55, rest_steps: 3,
-    tonic_pull: 0.65,
-    motif_recall_prob:  0.25,
-    motif_recall_after: 4,
+
+    vel_min: 0.15, 
+    vel_max: 0.35,
+    accent:  1.01,
+
+    rest_prob: 0.3, 
+    rest_steps: 2,
+    
+    tonic_pull: 0.15,
+    motif_recall_prob:  0.35,
+    motif_recall_after: 3,
+    
     layers: &[
         LayerConfig {
-            instrument:   Instrument::Pad,
-            role:         RhythmRole::Melody,
-            note_min:     52, note_max: 67,
-            vel_scale:    1.0, grid_mult: 1.0,
-            fixed_note:   0, beat_pattern: &[true],
-        },
-        LayerConfig {
             instrument:   Instrument::Sine,
+            role:         RhythmRole::Bass,
+            note_min:     52, 
+            note_max:     64,
+            vel_scale:    0.3,
+            grid_mult:    2.0,
+            fixed_note:   0, 
+            beat_pattern: &[true],
+            envelope:     Some(EnvelopeConfig::new(3000.0, 1000.0, 1.0, 5000.0)),
+        },
+
+        LayerConfig {
+            instrument:   Instrument::Pad,
             role:         RhythmRole::Pad,
-            note_min:     36, note_max: 52,
-            vel_scale:    0.5, grid_mult: 4.0,
-            fixed_note:   0, beat_pattern: &[true],
+            note_min:     48, 
+            note_max:     67,
+            vel_scale:    0.3, 
+            grid_mult:    1.0, 
+            fixed_note:   0, 
+            beat_pattern: &[true],
+            envelope:     Some(EnvelopeConfig::new(4000.0, 2000.0, 0.8, 6000.0)),
         },
     ],
 };
@@ -544,6 +570,7 @@ pub static JAZZ: MarkovPreset = MarkovPreset {
             note_min:     60, note_max: 76,
             vel_scale:    1.0, grid_mult: 1.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
         LayerConfig {
             instrument:   Instrument::Bass,
@@ -551,6 +578,7 @@ pub static JAZZ: MarkovPreset = MarkovPreset {
             note_min:     36, note_max: 52,
             vel_scale:    0.65, grid_mult: 2.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
         LayerConfig {
             instrument:   Instrument::Hihat,
@@ -560,6 +588,7 @@ pub static JAZZ: MarkovPreset = MarkovPreset {
             fixed_note:   42,
             // swing hihat: hit on 1 and 3, lighter on 2 and 4
             beat_pattern: &[true, true, true, true],
+            envelope: None,
         },
     ],
 };
@@ -597,6 +626,7 @@ pub static MINIMAL: MarkovPreset = MarkovPreset {
             note_min:     60, note_max: 76,
             vel_scale:    1.0, grid_mult: 1.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
         LayerConfig {
             instrument:   Instrument::Organ,
@@ -604,6 +634,7 @@ pub static MINIMAL: MarkovPreset = MarkovPreset {
             note_min:     48, note_max: 60,
             vel_scale:    0.45, grid_mult: 8.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
     ],
 };
@@ -641,6 +672,7 @@ pub static CLASSICAL: MarkovPreset = MarkovPreset {
             note_min:     60, note_max: 76,
             vel_scale:    1.0, grid_mult: 1.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
         LayerConfig {
             instrument:   Instrument::Bass,
@@ -648,6 +680,7 @@ pub static CLASSICAL: MarkovPreset = MarkovPreset {
             note_min:     40, note_max: 55,
             vel_scale:    0.60, grid_mult: 2.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
     ],
 };
@@ -685,6 +718,7 @@ pub static DRONE: MarkovPreset = MarkovPreset {
             note_min:     48, note_max: 64,
             vel_scale:    1.0, grid_mult: 1.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
         LayerConfig {
             instrument:   Instrument::Bass,
@@ -692,6 +726,7 @@ pub static DRONE: MarkovPreset = MarkovPreset {
             note_min:     33, note_max: 48,
             vel_scale:    0.55, grid_mult: 3.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
     ],
 };
@@ -730,6 +765,7 @@ pub static CHAOS: MarkovPreset = MarkovPreset {
             note_min:     40, note_max: 88,
             vel_scale:    1.0, grid_mult: 1.0,
             fixed_note:   0, beat_pattern: &[true],
+            envelope: None,
         },
         LayerConfig {
             instrument:   Instrument::Kick,
@@ -738,6 +774,7 @@ pub static CHAOS: MarkovPreset = MarkovPreset {
             vel_scale:    0.80, grid_mult: 3.0,
             fixed_note:   36,
             beat_pattern: &[true, false, false],
+            envelope: None,
         },
     ],
 };
