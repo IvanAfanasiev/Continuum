@@ -21,7 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 // Change to switch style: "Ambient" "Jazz" "Minimal" "Classical" "Drone" "Chaos"
-const PRESET_NAME: &str = "Ambient";
+const PRESET_NAME: &str = "Jazz";
 
 pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>) {
     thread::sleep(Duration::from_millis(300));

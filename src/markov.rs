@@ -56,6 +56,7 @@ pub static MAJOR:               Scale = Scale { root: 60, intervals: &[0,2,4,5,7
 pub static DORIAN:              Scale = Scale { root: 62, intervals: &[0,2,3,5,7,9,10] };
 pub static CHROMATIC:           Scale = Scale { root: 60, intervals: &[0,1,2,3,4,5,6,7,8,9,10,11] };
 pub static LYDIAN_FLOATING:     Scale = Scale { root: 60, intervals: &[0, 2, 4, 6, 7, 9, 11] };
+pub static SPRING_FOREST:       Scale = Scale { root: 60, intervals: &[0, 2, 4, 7, 9, 11] };
 
 // ─────────────────────────────────────────────────────────────
 //  LAYER CONFIG
@@ -134,6 +135,12 @@ static E_MIN:  Chord = Chord { root: 64, intervals: &[0,3,7] };
 static E_FLAT: Chord = Chord { root: 63, intervals: &[0,4,7] };
 static B_FLAT: Chord = Chord { root: 70, intervals: &[0,4,7] };
 static A_MAJ:  Chord = Chord { root: 69, intervals: &[0,4,7] };
+static D_MAJ:  Chord = Chord { root: 62, intervals: &[0,4,7] };      // D major — warm tonic
+static B_MIN:  Chord = Chord { root: 59, intervals: &[0,3,7] };      // Bm — gentle relative minor
+static FS_MIN: Chord = Chord { root: 66, intervals: &[0,3,7] };      // F#m — soft colour
+static A_ADD9: Chord = Chord { root: 69, intervals: &[0,4,7,2] };    // Aadd9 — open, airy
+static D_MAJ7: Chord = Chord { root: 62, intervals: &[0,4,7,11] };   // Dmaj7 — dreamy
+static G_MAJ9: Chord = Chord { root: 67, intervals: &[0,4,7,2] };    // Gadd9 — floating
 
 // ─────────────────────────────────────────────────────────────
 //  RHYTHM FIGURE
@@ -481,62 +488,61 @@ impl MarkovGenerator {
 // Very slow onsets (500ms), long durations (1200-2400ms) → deep overlap.
 // Low velocity, high rest probability → space between ideas.
 pub static AMBIENT: MarkovPreset = MarkovPreset {
-    name:     "Ambient",
-    scale:    &LYDIAN_FLOATING,
+    name: "Ambient",
+
+    scale:    &SPRING_FOREST,
     note_min: 36, 
-    note_max: 84,
-    chords:   &[&C_MAJ, &F_MAJ, &A_MIN, &G_MAJ],
+    note_max: 88,
+    chords:   &[&C_MAJ, &F_MAJ, &A_MIN, &G_MAJ], 
     phrase_min: 4, 
     phrase_max: 8,
-    history_len: 3,
-    inertia:  0.4,
+    history_len: 4,
+    
+    inertia:  0.45,
     max_step: 3,
     
-    grid_step_ms: 2200.0, 
+    grid_step_ms: 1800.0, 
+    
     figures: &[
-        RhythmFigure { durations: &[5000.0, 7000.0, 6000.0], weight: 40 },
-        RhythmFigure { durations: &[9000.0, 3500.0, 4500.0], weight: 35 },
-        RhythmFigure { durations: &[4000.0, 8000.0], weight: 25 },
+        RhythmFigure { durations: &[3600.0, 3600.0],          weight: 35 },
+        RhythmFigure { durations: &[5400.0, 1800.0],          weight: 30 },
+        RhythmFigure { durations: &[1800.0, 1800.0, 3600.0],  weight: 25 },
+        RhythmFigure { durations: &[7200.0],                  weight: 10 },
     ],
-
-    vel_min: 0.15, 
-    vel_max: 0.35,
-    accent:  1.01,
-
-    rest_prob: 0.3, 
+    
+    vel_min: 0.20, 
+    vel_max: 0.45,
+    accent:  1.05,
+    
+    rest_prob: 0.35, 
     rest_steps: 2,
     
-    tonic_pull: 0.15,
-    motif_recall_prob:  0.35,
+    tonic_pull: 0.40,
+    motif_recall_prob:  0.25,
     motif_recall_after: 3,
-    
+
     layers: &[
         LayerConfig {
             instrument:   Instrument::Sine,
             role:         RhythmRole::Bass,
-            note_min:     52, 
-            note_max:     64,
-            vel_scale:    0.3,
+            note_min:     36, note_max: 48,
+            vel_scale:    0.35, 
             grid_mult:    2.0,
-            fixed_note:   0, 
-            beat_pattern: &[true],
-            envelope:     Some(EnvelopeConfig::new(3000.0, 1000.0, 1.0, 5000.0)),
+            fixed_note:   0, beat_pattern: &[true],
+            envelope:     Some(EnvelopeConfig::new(2500.0, 1000.0, 0.8, 4000.0)),
         },
 
         LayerConfig {
-            instrument:   Instrument::Pad,
+            instrument:   Instrument::Pad, 
             role:         RhythmRole::Pad,
-            note_min:     48, 
-            note_max:     67,
-            vel_scale:    0.3, 
+            note_min:     52, note_max: 72,
+            vel_scale:    0.40, 
             grid_mult:    1.0, 
-            fixed_note:   0, 
-            beat_pattern: &[true],
-            envelope:     Some(EnvelopeConfig::new(4000.0, 2000.0, 0.8, 6000.0)),
+            fixed_note:   0, beat_pattern: &[true],
+            envelope:     Some(EnvelopeConfig::new(4500.0, 2000.0, 0.7, 5000.0)),
         },
     ],
 };
-
 // JAZZ - steady pulse, constant tempo, rich harmonic range.
 // Dorian with ii-V-I. Swing figures (long-short pairs).
 // Moderate inertia → phrases move without running away.
@@ -586,7 +592,6 @@ pub static JAZZ: MarkovPreset = MarkovPreset {
             note_min:     42, note_max: 42,
             vel_scale:    0.38, grid_mult: 1.0,
             fixed_note:   42,
-            // swing hihat: hit on 1 and 3, lighter on 2 and 4
             beat_pattern: &[true, true, true, true],
             envelope: None,
         },
