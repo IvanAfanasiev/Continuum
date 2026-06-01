@@ -20,13 +20,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-// Change to switch style: "Ambient" "Jazz" "Minimal" "Classical" "Drone" "Chaos"
-const PRESET_NAME: &str = "Jazz";
-
-pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>) {
+pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>, preset_name: &str) {
     thread::sleep(Duration::from_millis(300));
 
-    let preset = get_preset(PRESET_NAME);
+    let preset = get_preset(preset_name);
     println!("[composer] preset: {} | {} layer(s)", preset.name, preset.layers.len());
 
     // Spawn one thread per layer; all share the audio queue
@@ -53,9 +50,6 @@ fn run_layer(
     preset: &'static MarkovPreset,
     queue:  Arc<ArrayQueue<NoteEvent>>,
 ) {
-    // Give each layer a small staggered start so they don't all fire at once
-    thread::sleep(Duration::from_millis(idx as u64 * 80));
-
     let grid_ms = preset.grid_step_ms * layer.grid_mult;
 
     match layer.role {

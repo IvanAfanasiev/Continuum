@@ -142,6 +142,10 @@ static A_ADD9: Chord = Chord { root: 69, intervals: &[0,4,7,2] };    // Aadd9 �
 static D_MAJ7: Chord = Chord { root: 62, intervals: &[0,4,7,11] };   // Dmaj7 — dreamy
 static G_MAJ9: Chord = Chord { root: 67, intervals: &[0,4,7,2] };    // Gadd9 — floating
 
+pub const PRESET_NAMES: &[&str] = &[
+    "Ambient", "Jazz", "Minimal", "Classical", "Drone", "Chaos",
+];
+
 // ─────────────────────────────────────────────────────────────
 //  RHYTHM FIGURE
 // ─────────────────────────────────────────────────────────────
@@ -785,12 +789,19 @@ pub static CHAOS: MarkovPreset = MarkovPreset {
 };
 
 pub fn get_preset(name: &str) -> &'static MarkovPreset {
-    match name {
-        "Jazz"      => &JAZZ,
-        "Minimal"   => &MINIMAL,
-        "Classical" => &CLASSICAL,
-        "Drone"     => &DRONE,
-        "Chaos"     => &CHAOS,
-        _           => &AMBIENT,
+    match name.to_lowercase().as_str() {
+        "ambient"   => &AMBIENT,
+        "jazz"      => &JAZZ,
+        "minimal"   => &MINIMAL,
+        "classical" => &CLASSICAL,
+        "drone"     => &DRONE,
+        "chaos"     => &CHAOS,
+        other       => {
+            eprintln!(
+                "[main] Unknown preset {:?}, using Ambient. Run with 'list' to see options.",
+                other
+            );
+            &AMBIENT
+        }
     }
 }
