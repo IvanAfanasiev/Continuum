@@ -186,17 +186,44 @@ impl InstrumentState {
     }
 
     fn synth_piano(&mut self, freq: f32, sr: f32) -> f32 {
-        self.phase = (self.phase + freq / sr) % 1.0;
+        const DETUNE: f32 = 0.00035; 
+        self.phase  = (self.phase  + freq / sr) % 1.0;
+        self.phase2 = (self.phase2 + freq * (1.0 + DETUNE) / sr) % 1.0;
+        self.phase3 = (self.phase3 + freq * (1.0 - DETUNE) / sr) % 1.0;
+
         const H: [(f32, f32); 8] = [
-            (1.00, 0.8), (0.55, 2.5), (0.28, 5.0), (0.16, 8.5),
-            (0.10,13.0), (0.06,18.0), (0.03,25.0), (0.02,34.0),
+            (1.00, 0.7),
+            (0.60, 1.5),
+            (0.35, 3.0),
+            (0.20, 5.0),
+            (0.12, 8.0),
+            (0.07, 12.0),
+            (0.04, 16.0),
+            (0.02, 22.0),
         ];
+
         let mut out = 0.0f32;
         for (i, &(amp, rate)) in H.iter().enumerate() {
-            out += amp * (-rate * self.t).exp()
-                * (self.phase * (i + 1) as f32 * 2.0 * PI).sin();
+            let h_num = (i + 1) as f32;
+            
+            let p1 = (self.phase  * h_num * 2.0 * PI).sin();
+            let p2 = (self.phase2 * h_num * 2.0 * PI).sin();
+            let p3 = (self.phase3 * h_num * 2.0 * PI).sin();
+            
+            let string_chord = p1 * 0.45 + p2 * 0.275 + p3 * 0.275;
+
+            out += amp * (-rate * self.t).exp() * string_chord;
         }
-        (out * 0.7).tanh()
+
+        let hammer_click = if self.t < 0.012 {
+            self.white_noise() * (1.0 - self.t / 0.012).powi(2) * 0.025
+        } else { 0.0 };
+
+        let key_weight = if self.t < 0.020 {
+            (self.t * 50.0 * 2.0 * PI).sin() * (1.0 - self.t / 0.020).powi(2) * 0.06
+        } else { 0.0 };
+
+        (out + hammer_click + key_weight) * 0.55
     }
 
     fn synth_pluck(&mut self) -> f32 {
@@ -222,11 +249,25 @@ impl InstrumentState {
     }
 
     fn synth_bass(&mut self, freq: f32, sr: f32) -> f32 {
-        self.phase  = (self.phase  + freq       / sr) % 1.0;
-        self.phase2 = (self.phase2 + freq * 0.5 / sr) % 1.0;
+        let pitch_envelope = 1.0 + 0.08 * (-50.0 * self.t).exp();
+        let active_freq = freq * pitch_envelope;
+
+        self.phase  = (self.phase  + active_freq         / sr) % 1.0;
+        self.phase2 = (self.phase2 + active_freq * 1.005 / sr) % 1.0;
+
         let fund = (self.phase  * 2.0 * PI).sin();
-        let sub  = (self.phase2 * 2.0 * PI).sin() * 0.45;
-        ((fund + sub) * 1.15).tanh() * 0.82
+        let harm = (self.phase2 * 2.0 * PI).sin() * 0.4;
+        let sub  = (self.phase  * 1.0 * PI).sin() * 0.2;
+        
+        let string_sound = fund + harm + sub;
+        
+        let finger_click = if self.t < 0.012 {
+            let noise = self.white_noise();
+            noise * (1.0 - self.t / 0.012) * 0.25
+        } else { 0.0 };
+        
+        let output = (string_sound + finger_click) * 1.2;
+        output.tanh() * 0.75
     }
 
     fn synth_organ(&mut self, freq: f32, sr: f32) -> f32 {
@@ -255,11 +296,20 @@ impl InstrumentState {
 
     fn synth_hihat(&mut self, sr: f32) -> f32 {
         let noise = self.white_noise();
-        let hp = noise - self.phase + 0.92 * self.phase2;
-        self.phase  = noise;
+        
+        let mut metallic_ring = 0.0;
+        let metallic_freqs = [2850.0, 3620.0, 4150.0, 5800.0];
+        for &f in &metallic_freqs {
+            metallic_ring += (self.t * f * 2.0 * PI).sin();
+        }
+        
+        let source = noise * 0.65 + (metallic_ring / 4.0) * 0.35;
+        
+        let hp = source - self.phase + 0.94 * self.phase2;
+        self.phase  = source;
         self.phase2 = hp;
-        // Hihat manages its own amplitude decay
-        hp * (-32.0 * self.t).exp()
+        
+        hp * (-36.0 * self.t).exp()
     }
 
     fn synth_snare(&mut self, freq: f32, sr: f32) -> f32 {

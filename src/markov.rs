@@ -57,6 +57,7 @@ pub static DORIAN:              Scale = Scale { root: 62, intervals: &[0,2,3,5,7
 pub static CHROMATIC:           Scale = Scale { root: 60, intervals: &[0,1,2,3,4,5,6,7,8,9,10,11] };
 pub static LYDIAN_FLOATING:     Scale = Scale { root: 60, intervals: &[0, 2, 4, 6, 7, 9, 11] };
 pub static SPRING_FOREST:       Scale = Scale { root: 60, intervals: &[0, 2, 4, 7, 9, 11] };
+pub static JAZZ_BLUES:          Scale = Scale { root: 50, intervals: &[0, 2, 3, 4, 5, 7, 9, 10, 11] };
 
 // ─────────────────────────────────────────────────────────────
 //  LAYER CONFIG
@@ -76,6 +77,8 @@ pub enum RhythmRole {
     Pad,
     // Ignores pitch - plays a fixed note on a rhythmic pattern
     Percussion,
+    // premium non-linear playback with rubato, strumming and voicings --- IGNORE ---
+    Piano, 
 }
 
 pub struct LayerConfig {
@@ -135,12 +138,17 @@ static E_MIN:  Chord = Chord { root: 64, intervals: &[0,3,7] };
 static E_FLAT: Chord = Chord { root: 63, intervals: &[0,4,7] };
 static B_FLAT: Chord = Chord { root: 70, intervals: &[0,4,7] };
 static A_MAJ:  Chord = Chord { root: 69, intervals: &[0,4,7] };
-static D_MAJ:  Chord = Chord { root: 62, intervals: &[0,4,7] };      // D major — warm tonic
-static B_MIN:  Chord = Chord { root: 59, intervals: &[0,3,7] };      // Bm — gentle relative minor
-static FS_MIN: Chord = Chord { root: 66, intervals: &[0,3,7] };      // F#m — soft colour
-static A_ADD9: Chord = Chord { root: 69, intervals: &[0,4,7,2] };    // Aadd9 — open, airy
-static D_MAJ7: Chord = Chord { root: 62, intervals: &[0,4,7,11] };   // Dmaj7 — dreamy
-static G_MAJ9: Chord = Chord { root: 67, intervals: &[0,4,7,2] };    // Gadd9 — floating
+static D_MAJ:  Chord = Chord { root: 62, intervals: &[0,4,7] };
+static B_MIN:  Chord = Chord { root: 59, intervals: &[0,3,7] };
+static FS_MIN: Chord = Chord { root: 66, intervals: &[0,3,7] };
+static A_ADD9: Chord = Chord { root: 69, intervals: &[0,4,7,2] };
+static D_MAJ7: Chord = Chord { root: 62, intervals: &[0,4,7,11] };
+static G_MAJ9: Chord = Chord { root: 67, intervals: &[0,4,7,2] };
+static D_MIN9:  Chord = Chord { root: 62, intervals: &[0, 2, 3, 7, 10] };
+static G_ALT:   Chord = Chord { root: 67, intervals: &[0, 1, 4, 8, 10] };
+static C_MAJ9:  Chord = Chord { root: 60, intervals: &[0, 2, 4, 7, 11] };
+static A_7ALT:  Chord = Chord { root: 57, intervals: &[0, 1, 4, 7, 10] };
+
 
 pub const PRESET_NAMES: &[&str] = &[
     "Ambient", "Jazz", "Minimal", "Classical", "Drone", "Chaos",
@@ -346,7 +354,14 @@ impl MarkovGenerator {
             duration: dur,
             instrument: crate::instruments::Instrument::Sine,
             envelope: crate::instruments::Instrument::Sine.default_envelope(),
+            is_phrase_start: is_first,
+            is_phrase_end: is_last,
         }
+
+    }
+    
+    pub fn current_chord(&self) -> &'static Chord {
+        self.preset.chords[self.chord_idx]
     }
 
     // ── private ────────────────────────────────────────────────
@@ -478,19 +493,8 @@ impl MarkovGenerator {
 
 // ─────────────────────────────────────────────────────────────
 //  PRESETS
-//
-//  grid_step_ms = time between note onsets (the tempo).
-//  note duration > grid_step → overlap → legato.
-//  note duration < grid_step → gap → staccato.
-//
-//  Chord bonus x3.5 means chord tones dominate but scale tones
-//  still appear as passing notes - keeps melody tonal but not rigid.
 // ─────────────────────────────────────────────────────────────
 
-// AMBIENT - light, unobtrusive. Rare, long, soft notes.
-// Pentatonic minor: no semitones, always consonant.
-// Very slow onsets (500ms), long durations (1200-2400ms) → deep overlap.
-// Low velocity, high rest probability → space between ideas.
 pub static AMBIENT: MarkovPreset = MarkovPreset {
     name: "Ambient",
 
@@ -547,65 +551,51 @@ pub static AMBIENT: MarkovPreset = MarkovPreset {
         },
     ],
 };
-// JAZZ - steady pulse, constant tempo, rich harmonic range.
-// Dorian with ii-V-I. Swing figures (long-short pairs).
-// Moderate inertia → phrases move without running away.
-// Wide note range (D3-E5) → room for different instruments later.
+
 pub static JAZZ: MarkovPreset = MarkovPreset {
-    name:     "Jazz",
-    scale:    &DORIAN,
-    note_min: 50, note_max: 76,
-    chords:   &[&D_MIN7, &G_DOM7, &C_MAJ, &A_MIN],
-    phrase_min: 5, phrase_max: 9,
+    name:        "Jazz",
+    scale:       &DORIAN,
+    note_min:    50, note_max: 76,
+    chords:      &[&D_MIN7, &G_DOM7, &C_MAJ, &A_MIN],
+    phrase_min:  12, phrase_max: 24,
     history_len: 5,
-    inertia:  0.38,
-    max_step: 3,
-    figures: &[
-        RhythmFigure { durations: &[450.0, 225.0],                   weight: 35 },
-        RhythmFigure { durations: &[450.0, 225.0, 450.0, 225.0],     weight: 25 },
-        RhythmFigure { durations: &[675.0, 225.0],                   weight: 20 },
-        RhythmFigure { durations: &[225.0, 225.0, 225.0, 675.0],     weight: 20 },
+    inertia:     0.45,
+    max_step:    2,
+    figures:     &[
+        RhythmFigure { durations: &[450.0, 450.0],                   weight: 40 },
+        RhythmFigure { durations: &[675.0, 225.0, 450.0],            weight: 10 },
+        RhythmFigure { durations: &[225.0, 225.0, 225.0, 900.0],     weight: 10 },
+        RhythmFigure { durations: &[900.0, 450.0],                   weight: 30 },
     ],
     grid_step_ms: 225.0,
-    vel_min: 0.38, vel_max: 0.72,
-    accent:  1.22,
-    rest_prob: 0.22, rest_steps: 2,
-    tonic_pull: 0.50,
-    motif_recall_prob:  0.22,
-    motif_recall_after: 4,
+    vel_min:      0.3, vel_max: 0.65,
+    accent:       1.15,
+    rest_prob:    0.4, rest_steps: 4,
+    tonic_pull:   0.65,
+    motif_recall_prob:  0.3,
+    motif_recall_after: 3,
     layers: &[
         LayerConfig {
             instrument:   Instrument::Piano,
-            role:         RhythmRole::Melody,
-            note_min:     60, note_max: 76,
+            role:         RhythmRole::Melody, 
+            note_min:     54, note_max: 67,
             vel_scale:    1.0, grid_mult: 1.0,
             fixed_note:   0, beat_pattern: &[true],
-            envelope: None,
+            envelope:     None,
         },
         LayerConfig {
-            instrument:   Instrument::Bass,
-            role:         RhythmRole::Bass,
-            note_min:     36, note_max: 52,
-            vel_scale:    0.65, grid_mult: 2.0,
-            fixed_note:   0, beat_pattern: &[true],
-            envelope: None,
-        },
-        LayerConfig {
-            instrument:   Instrument::Hihat,
-            role:         RhythmRole::Percussion,
-            note_min:     42, note_max: 42,
-            vel_scale:    0.38, grid_mult: 1.0,
-            fixed_note:   42,
-            beat_pattern: &[true, true, true, true],
-            envelope: None,
+            instrument: Instrument::Bass,
+            role:       RhythmRole::Bass,
+            note_min:   36, note_max: 48,
+            vel_scale:  0.6,
+            grid_mult:  8.0,
+            fixed_note: 0,
+            beat_pattern: &[true],
+            envelope:   Some(EnvelopeConfig::new(50.0, 100.0, 0.7, 500.0)),
         },
     ],
 };
 
-// MINIMAL - irregular rhythm, short notes, frequent repetition.
-// Stepwise only (max_step:1). Fast grid (200ms) with varying durations
-// creates the Philip Glass "irregular pulse" feel.
-// High motif recall → the same motif keeps cycling with variations.
 pub static MINIMAL: MarkovPreset = MarkovPreset {
     name:     "Minimal",
     scale:    &MAJOR,
@@ -648,10 +638,6 @@ pub static MINIMAL: MarkovPreset = MarkovPreset {
     ],
 };
 
-// CLASSICAL - expressive dynamics, phrase peaks, clear cadences.
-// Strong accent (1.28) makes phrase starts pop. Wide velocity range.
-// Mix of quarter and eighth figures → natural tempo variation feel.
-// Strong tonic pull (0.72) → clear cadential resolutions.
 pub static CLASSICAL: MarkovPreset = MarkovPreset {
     name:     "Classical",
     scale:    &MAJOR,
@@ -694,10 +680,6 @@ pub static CLASSICAL: MarkovPreset = MarkovPreset {
     ],
 };
 
-// DRONE - dark, sustained. Similar to ambient but lower and minor.
-// Natural minor (darker colour than pentatonic minor).
-// Very slow grid (1000ms), very long notes → maximum overlap, blurring.
-// Almost no accent → undifferentiated, hypnotic mass of sound.
 pub static DRONE: MarkovPreset = MarkovPreset {
     name:     "Drone",
     scale:    &NATURAL_MINOR,
@@ -740,10 +722,6 @@ pub static DRONE: MarkovPreset = MarkovPreset {
     ],
 };
 
-// CHAOS - all values at extremes, maximum contrast.
-// Chromatic scale, huge leaps, extreme velocity swings.
-// Short machine-gun bursts next to sudden long held notes.
-// Almost no inertia, no tonic pull, almost no motif recall.
 pub static CHAOS: MarkovPreset = MarkovPreset {
     name:     "Chaos",
     scale:    &CHROMATIC,

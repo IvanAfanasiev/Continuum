@@ -56,7 +56,8 @@ fn run_layer(
         RhythmRole::Melody     => run_melody(layer, preset, grid_ms, queue),
         RhythmRole::Bass       => run_bass(layer, preset, grid_ms, queue),
         RhythmRole::Pad        => run_pad(layer, preset, grid_ms, queue),
-        RhythmRole::Percussion => run_percussion(layer, grid_ms, queue),
+        RhythmRole::Percussion => run_percussion(layer, preset, grid_ms, queue),
+        RhythmRole::Piano      => run_piano(layer, preset, queue),
     }
 }
 
@@ -80,13 +81,16 @@ fn run_melody(
             thread::sleep(Duration::from_millis(rest_ms as u64));
         }
 
-        let mut event = gen.next();
+        let event = gen.next();
+        let base_sleep = event.duration; // Read duration before moving ownership to push_note
+
+        let mut event = event;
         event.velocity   = (event.velocity * layer.vel_scale).clamp(0.0, 1.0);
         event.instrument = layer.instrument;
         event.envelope   = resolve_envelope(layer);
 
         push_note(&queue, event, instrument_name(layer.instrument));
-        thread::sleep(Duration::from_millis(grid_ms as u64));
+        thread::sleep(Duration::from_millis(base_sleep as u64));
     }
 }
 
@@ -128,12 +132,17 @@ fn run_bass(
             preset.vel_min * layer.vel_scale..preset.vel_max * layer.vel_scale
         );
 
+        let is_phrase_start = step % phrase_len == 0;
+        let is_phrase_end   = (step + 1) % phrase_len == 0;
+
         push_note(&queue, NoteEvent {
             note,
             velocity,
             duration,
             instrument: layer.instrument,
             envelope:   resolve_envelope(layer),
+            is_phrase_start,
+            is_phrase_end,
         }, instrument_name(layer.instrument));
 
         step += 1;
@@ -180,10 +189,18 @@ fn run_pad(
             // Duration slightly longer than grid step for smooth overlap
             let duration = grid_ms * 1.2;
 
+            let is_phrase_start = step % phrase_len == 0;
+            let is_phrase_end   = (step + 1) % phrase_len == 0;
+
             push_note(&queue, NoteEvent {
-                note, velocity, duration,
+                note, 
+                velocity, 
+                duration,
                 instrument: layer.instrument,
                 envelope:   resolve_envelope(layer),
+                is_phrase_start,
+                is_phrase_end,
+                
             }, instrument_name(layer.instrument));
         }
 
@@ -197,37 +214,137 @@ fn run_pad(
 }
 
 // ── PERCUSSION ────────────────────────────────────────────────
-// Plays a fixed note on a repeating beat pattern.
-// beat_pattern: &[true, false, true, false] → hit on steps 0 and 2.
+// Plays a fixed note on a rhythmic beat pattern.
 
 fn run_percussion(
     layer:   &'static LayerConfig,
+    _preset: &'static MarkovPreset,
     grid_ms: f32,
     queue:   Arc<ArrayQueue<NoteEvent>>,
 ) {
-    let mut rng      = rand::rng();
-    let mut pat_pos  = 0usize;
-    let pattern      = layer.beat_pattern;
+    let mut rng = rand::rng();
+    let mut pat_pos = 0usize;
 
     println!("[perc] started | {}", instrument_name(layer.instrument));
 
     loop {
-        if pattern[pat_pos % pattern.len()] {
-            // Slight velocity variation for human feel
+        if layer.beat_pattern.is_empty() {
+            thread::sleep(Duration::from_millis(grid_ms as u64));
+            continue;
+        }
+
+        let idx = pat_pos % layer.beat_pattern.len();
+        if layer.beat_pattern[idx] {
             let vel = rng.random_range(
-                (layer.vel_scale * 0.85)..(layer.vel_scale * 1.0f32).min(0.95)
-            );
+                0.7 * layer.vel_scale..1.0 * layer.vel_scale
+            ).clamp(0.0, 1.0);
+
+            let is_phrase_start = idx == 0;
+            let is_phrase_end   = idx == layer.beat_pattern.len() - 1;
+
             push_note(&queue, NoteEvent {
                 note:       layer.fixed_note,
                 velocity:   vel,
                 duration:   grid_ms * 0.55,
                 instrument: layer.instrument,
                 envelope:   resolve_envelope(layer),
+                is_phrase_start,
+                is_phrase_end,
             }, instrument_name(layer.instrument));
         }
 
         pat_pos += 1;
         thread::sleep(Duration::from_millis(grid_ms as u64));
+    }
+}
+
+// ── PIANO ──────────────────────────────────────
+
+fn run_piano(
+    layer:   &'static LayerConfig,
+    preset:  &'static MarkovPreset,
+    queue:   Arc<ArrayQueue<NoteEvent>>,
+) {
+    let mut rng = rand::rng();
+    let mut gen = MarkovGenerator::new_with_range(preset, layer.note_min, layer.note_max);
+    
+    println!("[piano] started | Calm Melodic Phrasing Mode");
+
+    loop {
+        if let Some(rest_ms) = gen.phrase_rest_ms() {
+            thread::sleep(Duration::from_millis(rest_ms as u64));
+        }
+
+        let base_event = gen.next();
+        let chord = gen.current_chord();
+        
+        let is_start = base_event.is_phrase_start;
+        let is_end   = base_event.is_phrase_end;
+        let is_structural_anchor = is_start || is_end;
+        
+        let mut notes_to_play = Vec::new();
+
+        if is_structural_anchor {
+            let mut tones = preset.scale.tones_in_range(layer.note_min, layer.note_max);
+            tones.retain(|&n| chord.contains(n));
+            tones.shuffle(&mut rng);
+            
+            let extra_notes = if is_start { 1 } else { 2 };
+            notes_to_play = tones.into_iter().take(extra_notes).collect();
+            
+            if !notes_to_play.contains(&base_event.note) {
+                notes_to_play.push(base_event.note);
+            }
+            notes_to_play.sort_unstable();
+        } else {
+            notes_to_play.push(base_event.note);
+        }
+
+        let total_notes = notes_to_play.len();
+        
+        let strum_delay = if is_structural_anchor { rng.random_range(40..60) } else { 0 };
+
+        let mut actual_dur = base_event.duration;
+        if is_end {
+            actual_dur *= 2.0;
+        } else if is_start {
+            actual_dur *= 1.2; 
+        }
+
+        for (i, &note) in notes_to_play.iter().enumerate() {
+            let vel_mod = if is_structural_anchor {
+                if i == total_notes - 1 { 1.0 } else { 0.45 } 
+            } else {
+                rng.random_range(0.90..1.05)
+            };
+            
+            let velocity = (base_event.velocity * layer.vel_scale * vel_mod).clamp(0.0, 1.0);
+            let sustain_overlap = if !is_structural_anchor { 1.10 } else { 1.0 };
+
+            let ev = NoteEvent {
+                note,
+                velocity,
+                duration: actual_dur * sustain_overlap,
+                instrument: layer.instrument,
+                envelope: resolve_envelope(layer),
+                is_phrase_start: base_event.is_phrase_start,
+                is_phrase_end: base_event.is_phrase_end,
+            };
+
+            push_note(&queue, ev, "piano");
+
+            if strum_delay > 0 {
+                thread::sleep(Duration::from_millis(strum_delay));
+            }
+        }
+
+        let time_spent_strumming = (total_notes as u64).saturating_sub(1) * strum_delay;
+        let remaining_sleep = (actual_dur as u64).saturating_sub(time_spent_strumming);
+        
+        let humanize = if is_structural_anchor { rng.random_range(-15i64..30i64) } else { 0 };
+        let final_sleep = (remaining_sleep as i64 + humanize).max(20) as u64;
+
+        thread::sleep(Duration::from_millis(final_sleep));
     }
 }
 

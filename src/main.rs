@@ -13,6 +13,8 @@ pub struct NoteEvent {
     pub duration:   f32,
     pub instrument: Instrument,
     pub envelope:   EnvelopeConfig,
+    pub is_phrase_start: bool, 
+    pub is_phrase_end: bool,
 }
 
 fn main() {
