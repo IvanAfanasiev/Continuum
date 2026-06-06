@@ -3,31 +3,28 @@ mod composer;
 mod instruments;
 mod markov;
 
-use instruments::{EnvelopeConfig, Instrument};
 use crossbeam_queue::ArrayQueue;
+use instruments::{EnvelopeConfig, Instrument};
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy)]
 pub struct NoteEvent {
-    pub note:       u8,
-    pub velocity:   f32,
-    pub duration:   f32,
+    pub note: u8,
+    pub velocity: f32,
+    pub duration: f32,
     pub instrument: Instrument,
-    pub envelope:   EnvelopeConfig,
-    pub is_phrase_start: bool, 
+    pub envelope: EnvelopeConfig,
+    pub is_phrase_start: bool,
     pub is_phrase_end: bool,
 }
 
-fn main() {
-    // Usage: cargo run -- [preset] [flags]
-    //   cargo run                 → Ambient (default)
-    //   cargo run -- jazz         → Jazz
-    //   cargo run -- list         → print all preset names and exit
-    //
-    // Case-insensitive: "JAZZ", "Jazz", "jazz" - same.
+pub fn midi_to_freq(note: u8) -> f32 {
+    440.0 * 2.0f32.powf((note as f32 - 69.0) / 12.0)
+}
 
+fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    // "list" prints available presets and exits
     if args.get(1).map(|s| s.as_str()) == Some("list") {
         println!("Available presets:");
         for name in markov::PRESET_NAMES {
@@ -41,31 +38,26 @@ fn main() {
 
     println!("[main] Continuum - preset: {}", preset.name);
     println!("[main] Layers: {}", preset.layers.len());
-    println!("[main] Scale: {} tones in range {}-{}",
-        preset.scale.tones_in_range(preset.note_min, preset.note_max).len(),
-        preset.note_min,
-        preset.note_max,
-    );
     println!("[main] Chords: {}", preset.chords.len());
-    println!("[main] Tempo grid: {:.0}ms ({:.1} BPM equivalent)",
-        preset.grid_step_ms,
-        60000.0 / preset.grid_step_ms / 2.0, // rough BPM at eighth-note grid
+    println!(
+        "[main] Base step: {:.0}ms (Continuum LFO modulated)",
+        preset.base_step_ms
     );
     println!();
 
-    let queue          = Arc::new(ArrayQueue::<NoteEvent>::new(512));
-    let audio_queue    = queue.clone();
+    let queue = Arc::new(ArrayQueue::<NoteEvent>::new(512));
+    let audio_queue = queue.clone();
     let composer_queue = queue.clone();
 
-    // Pass preset name to composer so it uses the CLI-chosen preset
     let preset_name_owned = preset_name.to_string();
 
-    std::thread::spawn(move || audio_engine::start_engine(audio_queue));
-    std::thread::spawn(move || composer::start_composing(composer_queue, &preset_name_owned));
+    let _audio_engine = match audio_engine::start_engine(audio_queue) {
+        Ok(engine) => engine,
+        Err(err) => {
+            eprintln!("[audio] {}", err);
+            return;
+        }
+    };
 
-    loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
-}
-
-pub fn midi_to_freq(note: u8) -> f32 {
-    440.0 * 2.0f32.powf((note as f32 - 69.0) / 12.0)
+    composer::start_composing(composer_queue, &preset_name_owned);
 }
