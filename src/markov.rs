@@ -351,6 +351,12 @@ impl MarkovGenerator {
             self.history.pop_front();
         }
     }
+
+    pub fn revise_last_note(&mut self, note: u8) {
+        if let Some(last) = self.history.back_mut() {
+            *last = note;
+        }
+    }
 }
 
 fn pitch_class_distance(a: u8, b: u8) -> u8 {
@@ -402,7 +408,7 @@ pub static PRESET_NAMES: &[&str] = &["Ambient", "Jazz"];
 
 pub fn get_preset(name: &str) -> &'static MarkovPreset {
     match name.trim().to_ascii_lowercase().as_str() {
-        "jazz" => &JAZZ_PRESET,
+        "jazz" | "night coffee jazz" => &JAZZ_PRESET,
         _ => &AMBIENT_PRESET,
     }
 }
@@ -414,26 +420,26 @@ static AMBIENT_PRESET: MarkovPreset = MarkovPreset {
         intervals: &[0, 2, 4, 5, 7, 9, 11],
     },
     chords: &[&C_MAJ9, &G_9, &A_MIN7_9, &F_MAJ9],
-    phrase_len: 10,
-    base_step_ms: 920.0,
-    vel_min: 0.14,
-    vel_max: 0.38,
+    phrase_len: 12,
+    base_step_ms: 1040.0,
+    vel_min: 0.10,
+    vel_max: 0.30,
     layers: &[
         LayerConfig {
             instrument: Instrument::Pad,
             role: RhythmRole::Melody,
-            note_min: 57,
-            note_max: 76,
-            vel_scale: 0.24,
-            envelope: Some(EnvelopeConfig::new(2600.0, 900.0, 0.55, 2800.0)),
+            note_min: 62,
+            note_max: 81,
+            vel_scale: 0.14,
+            envelope: Some(EnvelopeConfig::new(3400.0, 1200.0, 0.34, 2200.0)),
         },
         LayerConfig {
             instrument: Instrument::Piano,
             role: RhythmRole::Melody,
-            note_min: 65,
-            note_max: 84,
-            vel_scale: 0.20,
-            envelope: Some(EnvelopeConfig::new(65.0, 950.0, 0.18, 3400.0)),
+            note_min: 72,
+            note_max: 91,
+            vel_scale: 0.10,
+            envelope: Some(EnvelopeConfig::new(120.0, 1300.0, 0.08, 4200.0)),
         },
     ],
 };
@@ -447,24 +453,24 @@ static JAZZ_PRESET: MarkovPreset = MarkovPreset {
     chords: &[&D_MIN9, &G_13, &C_6_9, &A_MIN11],
     phrase_len: 12,
     base_step_ms: 380.0,
-    vel_min: 0.30,
-    vel_max: 0.72,
+    vel_min: 0.26,
+    vel_max: 0.64,
     layers: &[
         LayerConfig {
             instrument: Instrument::Bass,
             role: RhythmRole::Bass,
             note_min: 36,
-            note_max: 55,
-            vel_scale: 0.62,
-            envelope: Some(EnvelopeConfig::new(9.0, 820.0, 0.08, 180.0)),
+            note_max: 57,
+            vel_scale: 0.52,
+            envelope: Some(EnvelopeConfig::new(10.0, 620.0, 0.05, 120.0)),
         },
         LayerConfig {
             instrument: Instrument::Piano,
             role: RhythmRole::Melody,
             note_min: 60,
             note_max: 81,
-            vel_scale: 0.42,
-            envelope: Some(EnvelopeConfig::new(28.0, 430.0, 0.34, 1200.0)),
+            vel_scale: 0.34,
+            envelope: Some(EnvelopeConfig::new(45.0, 620.0, 0.24, 1350.0)),
         },
     ],
 };

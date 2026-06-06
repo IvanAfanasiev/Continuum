@@ -303,9 +303,9 @@ impl InstrumentState {
         self.phase2 = (self.phase2 + active_freq * 1.005 / sr) % 1.0;
         self.phase3 = (self.phase3 + active_freq * 0.5 / sr) % 1.0;
 
-        let fund = (self.phase * 2.0 * PI).sin();
-        let harm = (self.phase2 * 2.0 * PI).sin() * 0.34;
-        let sub = (self.phase3 * 2.0 * PI).sin() * 0.16;
+        let fund = (self.phase * 2.0 * PI).sin() * 0.78;
+        let harm = (self.phase2 * 2.0 * PI).sin() * 0.24;
+        let sub = (self.phase3 * 2.0 * PI).sin() * 0.10;
 
         let string_sound = fund + harm + sub;
 
@@ -316,8 +316,9 @@ impl InstrumentState {
             0.0
         };
 
-        let raw = (string_sound + finger_click) * 1.05;
-        self.low_pass(raw.tanh(), 1400.0, sr) * 0.82
+        let raw = (string_sound + finger_click) * 0.82;
+        let cleaned = self.high_pass(raw, 38.0, sr);
+        self.low_pass(cleaned, 1050.0, sr) * 0.76
     }
 
     fn synth_organ(&mut self, freq: f32, sr: f32) -> f32 {
