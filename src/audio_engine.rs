@@ -7,8 +7,8 @@ use crossbeam_queue::ArrayQueue;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-const MAX_VOICES: usize = 24;
-const MASTER_GAIN: f32 = 0.85;
+const MAX_VOICES: usize = 32;
+const MASTER_GAIN: f32 = 0.72;
 
 pub struct AudioEngine {
     _stream: cpal::Stream,
@@ -282,7 +282,7 @@ fn write_output<T>(
             .filter(|voice| voice.is_active())
             .count()
             .max(1) as f32;
-        let voice_gain = MASTER_GAIN / active_count.sqrt();
+        let voice_gain = MASTER_GAIN / (1.0 + (active_count - 1.0) * 0.08);
         let mut left = 0.0f32;
         let mut right = 0.0f32;
 
@@ -335,6 +335,9 @@ fn pan_for(instrument: Instrument, note: u8) -> f32 {
         Instrument::Piano => ((note as f32 - 66.0) / 36.0).clamp(-0.35, 0.35),
         Instrument::Pluck | Instrument::Sine => ((note as f32 - 64.0) / 40.0).clamp(-0.45, 0.45),
         Instrument::Organ => -0.15,
+        Instrument::Sax => -0.22,
+        Instrument::Triangle => 0.38,
+        Instrument::Ride => 0.26,
         Instrument::Hihat => 0.28,
     }
 }
