@@ -92,7 +92,11 @@ impl MarkovGenerator {
             tones.push(layer.note_min.min(layer.note_max));
         }
 
-        let start_note = tones[tones.len() / 2];
+        let center = tones.len() / 2;
+        let spread = (tones.len() / 3).max(1);
+        let low = center.saturating_sub(spread);
+        let high = (center + spread).min(tones.len() - 1);
+        let start_note = tones[rng.random_range(low..=high)];
 
         Self {
             history: VecDeque::from(vec![start_note]),
@@ -130,6 +134,7 @@ impl MarkovGenerator {
             note: final_note,
             velocity: (base_vel * layer.vel_scale).clamp(0.0, 1.0),
             duration,
+            start_delay_ms: 0.0,
             instrument: layer.instrument,
             envelope: layer
                 .envelope
@@ -459,42 +464,50 @@ static JAZZ_PRESET: MarkovPreset = MarkovPreset {
         intervals: &[0, 2, 3, 5, 7, 9, 10],
     },
     chords: &[&D_MIN9, &G_13, &C_6_9, &A_MIN11],
-    phrase_len: 12,
-    base_step_ms: 380.0,
+    phrase_len: 16,
+    base_step_ms: 175.0,
     vel_min: 0.28,
     vel_max: 0.38,
     layers: &[
         LayerConfig {
             instrument: Instrument::Piano,
             role: RhythmRole::Melody,
-            note_min: 57,
-            note_max: 74,
-            vel_scale: 0.46,
-            envelope: Some(EnvelopeConfig::new(10.0, 820.0, 0.14, 1250.0)),
+            note_min: 60,
+            note_max: 72,
+            vel_scale: 0.36,
+            envelope: Some(EnvelopeConfig::new(7.0, 580.0, 0.10, 780.0)),
         },
         LayerConfig {
             instrument: Instrument::Bass,
             role: RhythmRole::Bass,
             note_min: 33,
-            note_max: 50,
-            vel_scale: 0.44,
-            envelope: Some(EnvelopeConfig::new(6.0, 980.0, 0.20, 620.0)),
+            note_max: 40,
+            vel_scale: 0.86,
+            envelope: Some(EnvelopeConfig::new(5.0, 720.0, 0.18, 360.0)),
         },
         LayerConfig {
             instrument: Instrument::Kick,
             role: RhythmRole::Bass,
             note_min: 36,
             note_max: 36,
-            vel_scale: 1.0,
+            vel_scale: 0.85,
             envelope: Some(EnvelopeConfig::new(20.0, 250.0, 0.0, 50.0)),
+        },
+        LayerConfig {
+            instrument: Instrument::Ride,
+            role: RhythmRole::Melody,
+            note_min: 89,
+            note_max: 89,
+            vel_scale: 0.08,
+            envelope: Some(EnvelopeConfig::new(1.0, 420.0, 0.0, 80.0)),
         },
         LayerConfig {
             instrument: Instrument::Hihat,
             role: RhythmRole::Melody,
             note_min: 92,
             note_max: 92,
-            vel_scale: 0.044,
-            envelope: Some(EnvelopeConfig::new(1.0, 28.0, 0.0, 16.0)),
+            vel_scale: 0.052,
+            envelope: Some(EnvelopeConfig::new(1.0, 42.0, 0.0, 18.0)),
         },
     ],
 };

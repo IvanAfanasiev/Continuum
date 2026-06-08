@@ -39,6 +39,12 @@ struct Voice {
     istate: InstrumentState,
 }
 
+#[derive(Clone, Copy)]
+struct PendingNote {
+    start_sample: u64,
+    event: NoteEvent,
+}
+
 impl Voice {
     fn new() -> Self {
         Self {
@@ -250,12 +256,22 @@ where
     T: SizedSample + Sample + FromSample<f32>,
 {
     let mut voices: Vec<Voice> = (0..MAX_VOICES).map(|_| Voice::new()).collect();
+    let mut pending_notes: Vec<PendingNote> = Vec::new();
+    let mut sample_clock = 0u64;
 
     device
         .build_output_stream(
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                write_output(data, num_channels, sample_rate, queue.as_ref(), &mut voices);
+                write_output(
+                    data,
+                    num_channels,
+                    sample_rate,
+                    queue.as_ref(),
+                    &mut voices,
+                    &mut pending_notes,
+                    &mut sample_clock,
+                );
             },
             |err| eprintln!("[audio] stream error: {err}"),
             None,
@@ -269,14 +285,16 @@ fn write_output<T>(
     sample_rate: f32,
     queue: &ArrayQueue<NoteEvent>,
     voices: &mut [Voice],
+    pending_notes: &mut Vec<PendingNote>,
+    sample_clock: &mut u64,
 ) where
     T: Sample + FromSample<f32>,
 {
-    while let Some(event) = queue.pop() {
-        trigger_voice(voices, &event, sample_rate);
-    }
+    drain_note_queue(queue, pending_notes, *sample_clock, sample_rate);
 
     for frame in output.chunks_mut(num_channels) {
+        trigger_due_notes(voices, pending_notes, *sample_clock, sample_rate);
+
         let active_count = voices
             .iter()
             .filter(|voice| voice.is_active())
@@ -304,6 +322,40 @@ fn write_output<T>(
                 *sample = T::from_sample((left + right) * 0.5);
             }
         }
+
+        *sample_clock = sample_clock.saturating_add(1);
+    }
+}
+
+fn drain_note_queue(
+    queue: &ArrayQueue<NoteEvent>,
+    pending_notes: &mut Vec<PendingNote>,
+    current_sample: u64,
+    sample_rate: f32,
+) {
+    while let Some(event) = queue.pop() {
+        let delay_samples = (event.start_delay_ms.max(0.0) / 1000.0 * sample_rate).round() as u64;
+        pending_notes.push(PendingNote {
+            start_sample: current_sample.saturating_add(delay_samples),
+            event,
+        });
+    }
+
+    pending_notes.sort_by_key(|pending| pending.start_sample);
+}
+
+fn trigger_due_notes(
+    voices: &mut [Voice],
+    pending_notes: &mut Vec<PendingNote>,
+    current_sample: u64,
+    sample_rate: f32,
+) {
+    while pending_notes
+        .first()
+        .is_some_and(|pending| pending.start_sample <= current_sample)
+    {
+        let pending = pending_notes.remove(0);
+        trigger_voice(voices, &pending.event, sample_rate);
     }
 }
 

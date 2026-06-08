@@ -12,6 +12,7 @@ pub struct NoteEvent {
     pub note: u8,
     pub velocity: f32,
     pub duration: f32,
+    pub start_delay_ms: f32,
     pub instrument: Instrument,
     pub envelope: EnvelopeConfig,
     pub is_phrase_start: bool,
