@@ -5,6 +5,21 @@ import 'package:flutter/services.dart';
 
 enum BackendState { idle, starting, playing, stopping, unsupported, error }
 
+class PlaybackSnapshot {
+  const PlaybackSnapshot({
+    required this.state,
+    this.presetName,
+    this.elapsedMs,
+  });
+
+  final BackendState state;
+  final String? presetName;
+  final int? elapsedMs;
+
+  bool get isPlaying =>
+      state == BackendState.playing || state == BackendState.starting;
+}
+
 abstract class PlaybackBackend {
   BackendState get state;
   String get status;
@@ -12,7 +27,9 @@ abstract class PlaybackBackend {
 
   Future<void> play(String preset);
   Future<void> pause();
+  Future<void> selectPreset(String preset);
   Future<void> dispose();
+  void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener);
 
   void applyControls({
     required double tempo,
@@ -42,7 +59,15 @@ class BackendPlayer implements PlaybackBackend {
   Future<void> pause() => _backend.pause();
 
   @override
+  Future<void> selectPreset(String preset) => _backend.selectPreset(preset);
+
+  @override
   Future<void> dispose() => _backend.dispose();
+
+  @override
+  void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener) {
+    _backend.setPlaybackListener(listener);
+  }
 
   @override
   void applyControls({
@@ -78,6 +103,7 @@ class DesktopProcessBackend implements PlaybackBackend {
   Process? _process;
   BackendState _state = BackendState.idle;
   String _status = 'Ready';
+  void Function(PlaybackSnapshot snapshot)? _listener;
 
   @override
   BackendState get state => _state;
@@ -113,16 +139,19 @@ class DesktopProcessBackend implements PlaybackBackend {
           if (_state != BackendState.stopping) {
             _state = code == 0 ? BackendState.idle : BackendState.error;
             _status = code == 0 ? 'Stopped' : 'Backend exited: $code';
+            _notify();
           }
         }),
       );
 
       _state = BackendState.playing;
       _status = 'Playing';
+      _notify(preset: preset);
     } catch (_) {
       _state = BackendState.error;
       _status = 'Backend not found';
       _process = null;
+      _notify(preset: preset);
     }
   }
 
@@ -131,6 +160,7 @@ class DesktopProcessBackend implements PlaybackBackend {
     if (_process == null) {
       _state = BackendState.idle;
       _status = 'Paused';
+      _notify();
       return;
     }
 
@@ -147,10 +177,27 @@ class DesktopProcessBackend implements PlaybackBackend {
     );
     _process = null;
     _state = code == 0 || code == -1 ? BackendState.idle : BackendState.error;
+    _notify();
+  }
+
+  @override
+  Future<void> selectPreset(String preset) async {
+    if (isPlaying) {
+      await pause();
+      await play(preset);
+      return;
+    }
+
+    _notify(preset: preset);
   }
 
   @override
   Future<void> dispose() => pause();
+
+  @override
+  void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener) {
+    _listener = listener;
+  }
 
   @override
   void applyControls({
@@ -175,7 +222,12 @@ class DesktopProcessBackend implements PlaybackBackend {
     } catch (_) {
       _state = BackendState.error;
       _status = 'Backend is not responding';
+      _notify();
     }
+  }
+
+  void _notify({String? preset}) {
+    _listener?.call(PlaybackSnapshot(state: _state, presetName: preset));
   }
 
   Future<_LaunchCommand> _resolveLaunch(String preset) async {
@@ -236,6 +288,11 @@ class AndroidAudioBackend implements PlaybackBackend {
 
   BackendState _state = BackendState.idle;
   String _status = 'Ready';
+  void Function(PlaybackSnapshot snapshot)? _listener;
+
+  AndroidAudioBackend() {
+    _channel.setMethodCallHandler(_handleNativeCall);
+  }
 
   @override
   BackendState get state => _state;
@@ -262,9 +319,11 @@ class AndroidAudioBackend implements PlaybackBackend {
       });
       _state = BackendState.playing;
       _status = 'Playing';
+      _notify(presetName: preset);
     } catch (error) {
       _state = BackendState.error;
       _status = _androidErrorStatus(error);
+      _notify(presetName: preset);
     }
   }
 
@@ -272,6 +331,7 @@ class AndroidAudioBackend implements PlaybackBackend {
   Future<void> pause() async {
     if (_state == BackendState.idle) {
       _status = 'Paused';
+      _notify();
       return;
     }
 
@@ -281,14 +341,39 @@ class AndroidAudioBackend implements PlaybackBackend {
     try {
       await _channel.invokeMethod<void>('pause');
       _state = BackendState.idle;
+      _notify();
     } catch (_) {
       _state = BackendState.error;
       _status = 'Android audio is not responding';
+      _notify();
+    }
+  }
+
+  @override
+  Future<void> selectPreset(String preset) async {
+    try {
+      await _channel.invokeMethod<void>('selectPreset', {
+        'presetId': _presetId(preset),
+      });
+      _status = isPlaying ? 'Playing' : 'Paused';
+      _notify(presetName: preset);
+    } catch (error) {
+      _state = BackendState.error;
+      _status = _androidErrorStatus(error);
+      _notify(presetName: preset);
     }
   }
 
   @override
   Future<void> dispose() => pause();
+
+  @override
+  void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener) {
+    _listener = listener;
+    if (listener != null) {
+      unawaited(_syncNativeState());
+    }
+  }
 
   @override
   void applyControls({
@@ -314,6 +399,53 @@ class AndroidAudioBackend implements PlaybackBackend {
       'jazz' => 1,
       _ => 0,
     };
+  }
+
+  Future<void> _handleNativeCall(MethodCall call) async {
+    if (call.method != 'playbackEvent') {
+      return;
+    }
+
+    _applyNativeSnapshot(call.arguments);
+  }
+
+  Future<void> _syncNativeState() async {
+    try {
+      final snapshot = await _channel.invokeMethod<Object?>('state');
+      _applyNativeSnapshot(snapshot);
+    } catch (_) {
+      // The sync request is best-effort; normal play/pause commands still
+      // report their own status.
+    }
+  }
+
+  void _applyNativeSnapshot(Object? value) {
+    if (value is! Map) {
+      return;
+    }
+
+    final isPlaying = value['isPlaying'] == true;
+    final presetName = value['presetName'] as String?;
+    final elapsedValue = value['elapsedMs'];
+    final elapsedMs = elapsedValue is int
+        ? elapsedValue
+        : elapsedValue is num
+            ? elapsedValue.toInt()
+            : null;
+
+    _state = isPlaying ? BackendState.playing : BackendState.idle;
+    _status = isPlaying ? 'Playing' : 'Paused';
+    _notify(presetName: presetName, elapsedMs: elapsedMs);
+  }
+
+  void _notify({String? presetName, int? elapsedMs}) {
+    _listener?.call(
+      PlaybackSnapshot(
+        state: _state,
+        presetName: presetName,
+        elapsedMs: elapsedMs,
+      ),
+    );
   }
 
   String _androidErrorStatus(Object error) {
@@ -357,7 +489,13 @@ class UnsupportedBackend implements PlaybackBackend {
   Future<void> pause() async {}
 
   @override
+  Future<void> selectPreset(String preset) async {}
+
+  @override
   Future<void> dispose() async {}
+
+  @override
+  void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener) {}
 
   @override
   void applyControls({

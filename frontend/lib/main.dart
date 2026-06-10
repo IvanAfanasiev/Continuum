@@ -79,9 +79,41 @@ class _ContinuumHomeState extends State<ContinuumHome> {
   PresetState get _preset => _presets[_presetIndex];
 
   @override
+  void initState() {
+    super.initState();
+    _player.setPlaybackListener(_handlePlaybackSnapshot);
+  }
+
+  @override
   void dispose() {
+    _player.setPlaybackListener(null);
     unawaited(_player.dispose());
     super.dispose();
+  }
+
+  void _handlePlaybackSnapshot(PlaybackSnapshot snapshot) {
+    if (!mounted) {
+      return;
+    }
+
+    final presetName = snapshot.presetName;
+    var changedPreset = false;
+
+    setState(() {
+      if (presetName != null) {
+        final nextIndex = _presets.indexWhere(
+          (preset) => preset.name.toLowerCase() == presetName.toLowerCase(),
+        );
+        if (nextIndex >= 0 && nextIndex != _presetIndex) {
+          _presetIndex = nextIndex;
+          changedPreset = true;
+        }
+      }
+    });
+
+    if (snapshot.isPlaying && changedPreset) {
+      _sendControls(_preset);
+    }
   }
 
   Future<void> _togglePlayback() async {
@@ -98,11 +130,6 @@ class _ContinuumHomeState extends State<ContinuumHome> {
   }
 
   Future<void> _switchPreset(int direction) async {
-    final wasPlaying = _player.isPlaying;
-    if (wasPlaying) {
-      await _player.pause();
-    }
-
     setState(() {
       _presetIndex = (_presetIndex + direction) % _presets.length;
       if (_presetIndex < 0) {
@@ -110,12 +137,10 @@ class _ContinuumHomeState extends State<ContinuumHome> {
       }
     });
 
-    if (wasPlaying) {
-      await _player.play(_preset.name);
-      _sendControls(_preset);
-      if (mounted) {
-        setState(() {});
-      }
+    await _player.selectPreset(_preset.name);
+    _sendControls(_preset);
+    if (mounted) {
+      setState(() {});
     }
   }
 
