@@ -1,0 +1,22 @@
+[package]
+name = "continuum"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "continuum_core"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+default = ["desktop-audio"]
+desktop-audio = ["dep:cpal"]
+
+[dependencies]
+# Audio output
+cpal = { version = "0.15", optional = true }
+
+# Lock-free queue between composer and audio engine
+crossbeam-queue = "0.3"
+
+# Random number generation for Markov chain sampling
+rand = "0.9"

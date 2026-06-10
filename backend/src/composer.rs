@@ -1,14 +1,20 @@
+use crate::controls::RuntimeControls;
 use crate::instruments::Instrument;
 use crate::markov::{get_preset, Chord, LayerConfig, MarkovGenerator, MarkovPreset};
 use crate::NoteEvent;
 use crossbeam_queue::ArrayQueue;
 use rand::prelude::*;
 use std::f32::consts::PI;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const COMPOSER_LOOKAHEAD_MS: u64 = 180;
+
+fn is_ambient_preset(preset: &MarkovPreset) -> bool {
+    preset.name.eq_ignore_ascii_case("ambient")
+}
 
 #[derive(Clone)]
 struct PhrasePlan {
@@ -376,7 +382,7 @@ impl PhrasePlan {
         rng: &mut impl Rng,
     ) -> Self {
         let len = preset.phrase_len.max(1);
-        let ambient = preset.base_step_ms > 700.0;
+        let ambient = is_ambient_preset(preset);
         let motif = if ambient {
             let colors = if section.variation > 0.58 {
                 [2, 9, 11, 7]
@@ -507,7 +513,27 @@ impl PhrasePlan {
             }
         } else {
             for step in 0..len {
-                piano_steps[step] = activity[step] > 0.74;
+                let shifted = (step + section.phrase_index % 4) % len;
+                let pulse = shifted.is_multiple_of(4);
+                let breath = matches!(shifted, 2 | 6 | 10 | 14);
+                let answer = matches!(shifted, 3 | 7 | 11 | 15);
+
+                kick_steps[step] = pulse;
+                bass_steps[step] =
+                    pulse || (breath && section.presence > 0.32) || activity[step] > 0.86;
+                bass_offsets[step] = if pulse {
+                    0
+                } else if breath {
+                    color_offset(chord, 7)
+                } else {
+                    color_offset(chord, [9, 2, 11][step % 3])
+                };
+                piano_steps[step] = (breath && !pulse)
+                    || (answer && section.variation > 0.42)
+                    || (!pulse && activity[step] > 0.72);
+                piano_offsets[step] = color_offset(chord, [2, 7, 9, 11][shifted % 4]);
+                ride_steps[step] = breath && section.presence > 0.48;
+                hihat_steps[step] = answer && section.presence > 0.62;
             }
         }
 
@@ -560,7 +586,8 @@ impl PhrasePlan {
     }
 
     fn is_pad_shift(&self, step: usize) -> bool {
-        self.ambient && step == self.offsets.len() / 2
+        let local = step % self.offsets.len();
+        self.ambient && (local == self.offsets.len() / 2 || local == (self.offsets.len() * 3) / 4)
     }
 
     fn is_bass_step(&self, step: usize) -> bool {
@@ -602,7 +629,7 @@ struct SectionState {
 
 impl SectionState {
     fn new(preset: &MarkovPreset, rng: &mut impl Rng) -> Self {
-        let ambient = preset.base_step_ms > 700.0;
+        let ambient = is_ambient_preset(preset);
         let section_len = if ambient {
             rng.random_range(5..=9)
         } else {
@@ -648,7 +675,6 @@ impl SectionState {
 
     fn layer_presence(&self, instrument: Instrument) -> f32 {
         match instrument {
-            Instrument::Sax if !self.ambient => self.presence,
             Instrument::Kick | Instrument::Ride | Instrument::Hihat if !self.ambient => {
                 (0.18 + self.presence * 0.72).clamp(0.0, 0.92)
             }
@@ -789,7 +815,12 @@ struct VelocityRange {
     max: f32,
 }
 
-pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>, preset_name: &str) {
+pub fn start_composing(
+    queue: Arc<ArrayQueue<NoteEvent>>,
+    preset_name: &str,
+    controls: Arc<RuntimeControls>,
+    stop: Arc<AtomicBool>,
+) {
     thread::sleep(Duration::from_millis(200));
 
     let preset = get_preset(preset_name);
@@ -802,7 +833,7 @@ pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>, preset_name: &str) {
         .map(|layer| MarkovGenerator::new(layer, preset, rng.random::<u64>()))
         .collect();
 
-    let mut global_chord_idx = if preset.base_step_ms > 700.0 {
+    let mut global_chord_idx = if is_ambient_preset(preset) {
         0
     } else {
         rng.random_range(0..preset.chords.len().max(1))
@@ -816,11 +847,17 @@ pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>, preset_name: &str) {
     let lookahead = Duration::from_millis(COMPOSER_LOOKAHEAD_MS);
     let mut phrase_start_at = Instant::now() + lookahead;
 
-    loop {
+    while !stop.load(Ordering::Relaxed) {
         let current_chord = preset.chords[global_chord_idx];
         let step_ms = preset.base_step_ms;
         let phrase_plan = PhrasePlan::new(preset, current_chord, &section, &mut rng);
-        let step_lengths = phrase_step_lengths(step_ms, preset.phrase_len, &phrase_plan, &mut rng);
+        let step_lengths = phrase_step_lengths(
+            step_ms,
+            preset.phrase_len,
+            &phrase_plan,
+            controls.as_ref(),
+            &mut rng,
+        );
         let context = GenerationContext {
             phrase_plan: &phrase_plan,
             section: &section,
@@ -830,6 +867,10 @@ pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>, preset_name: &str) {
         let mut step_start_ms = 0.0f32;
 
         for global_step in 0..preset.phrase_len {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+
             let is_phrase_start = global_step == 0;
             let event_delay_ms = phrase_delay_ms + step_start_ms;
             let mut bass_note_this_step = None;
@@ -928,7 +969,7 @@ pub fn start_composing(queue: Arc<ArrayQueue<NoteEvent>>, preset_name: &str) {
         phrase_start_at += Duration::from_secs_f32(step_start_ms / 1000.0);
         global_chord_idx = (global_chord_idx + 1) % preset.chords.len();
         section.advance(preset, &mut rng);
-        sleep_until_enqueue_window(phrase_start_at, lookahead);
+        sleep_until_enqueue_window(phrase_start_at, lookahead, stop.as_ref());
     }
 }
 
@@ -936,7 +977,7 @@ fn should_trigger(
     instrument: Instrument,
     is_phrase_start: bool,
     global_step: usize,
-    base_step_ms: f32,
+    _base_step_ms: f32,
     _bass_played_this_step: bool,
     context: &GenerationContext<'_>,
     rng: &mut impl Rng,
@@ -948,37 +989,28 @@ fn should_trigger(
         Instrument::Pad => is_phrase_start || phrase_plan.is_pad_shift(global_step),
         Instrument::Bass => {
             if phrase_plan.ambient {
-                let activity = phrase_plan.activity(global_step);
-                activity > 0.92 || rng.random_range(0.0..1.0) < activity * 0.66
+                phrase_plan.is_bass_step(global_step)
             } else {
                 phrase_plan.is_bass_step(global_step)
             }
         }
         Instrument::Piano => {
-            if base_step_ms > 700.0 {
-                phrase_plan.is_echo_step(global_step) && rng.random_range(0.0..1.0) < 0.34
+            if phrase_plan.ambient {
+                phrase_plan.is_piano_step(global_step) && rng.random_range(0.0..1.0) < 0.76
             } else {
                 phrase_plan.is_piano_step(global_step)
             }
         }
-        Instrument::Sax => {
-            if phrase_plan.ambient {
-                return false;
-            }
-
-            let response_step = matches!(global_step % 12, 1 | 4 | 8 | 11);
-            response_step
-                && rng.random_range(0.0..1.0)
-                    < section.layer_presence(instrument) * phrase_plan.activity(global_step) * 0.58
-        }
         Instrument::Triangle => {
-            if !phrase_plan.ambient || !phrase_plan.is_echo_step(global_step) {
+            if !phrase_plan.ambient {
                 return false;
             }
 
-            rng.random_range(0.0..1.0)
-                < section.layer_presence(instrument)
-                    * (0.14 + phrase_plan.accent(global_step) * 0.20)
+            phrase_plan.is_kick_step(global_step)
+                || (phrase_plan.is_echo_step(global_step)
+                    && rng.random_range(0.0..1.0)
+                        < section.layer_presence(instrument)
+                            * (0.18 + phrase_plan.accent(global_step) * 0.24))
         }
         Instrument::Kick => !phrase_plan.ambient && phrase_plan.is_kick_step(global_step),
         Instrument::Ride => {
@@ -995,8 +1027,6 @@ fn should_trigger(
 
             phrase_plan.is_hihat_step(global_step)
         }
-        Instrument::Pluck | Instrument::Sine => is_phrase_start || rng.random_range(0..100) < 48,
-        Instrument::Organ | Instrument::Snare => true,
     }
 }
 
@@ -1032,14 +1062,6 @@ fn align_to_phrase(
         }
         Instrument::Pad if offset == 0 => {
             offset = color_offset(chord, 9);
-        }
-        Instrument::Sax => {
-            offset = match step % 12 {
-                1 | 8 => color_offset(chord, 9),
-                4 => color_offset(chord, 3),
-                11 => color_offset(chord, 2),
-                _ => offset,
-            };
         }
         Instrument::Triangle => {
             offset = color_offset(chord, if step.is_multiple_of(3) { 11 } else { 9 });
@@ -1120,19 +1142,14 @@ fn humanize_velocity(
                 0.72
             }
         }
-        Instrument::Sax => 0.62,
         Instrument::Triangle => 0.50,
         Instrument::Kick => 0.28,
         Instrument::Ride => 0.38,
         Instrument::Hihat => 0.22,
-        Instrument::Snare => 0.48,
-        _ => 0.85,
     };
     let section_gain = match layer.instrument {
-        Instrument::Sax | Instrument::Triangle => {
-            0.20 + section.layer_presence(layer.instrument) * 0.80
-        }
-        Instrument::Kick | Instrument::Ride | Instrument::Hihat | Instrument::Snare => {
+        Instrument::Triangle => 0.20 + section.layer_presence(layer.instrument) * 0.80,
+        Instrument::Kick | Instrument::Ride | Instrument::Hihat => {
             0.92 + section.layer_presence(layer.instrument) * 0.08
         }
         _ => 1.0,
@@ -1143,9 +1160,7 @@ fn humanize_velocity(
         match layer.instrument {
             Instrument::Bass if phrase_plan.is_kick_step(step) => 1.02,
             Instrument::Bass => 0.86,
-            Instrument::Kick | Instrument::Ride | Instrument::Hihat | Instrument::Snare => {
-                0.92 + accent * 0.08
-            }
+            Instrument::Kick | Instrument::Ride | Instrument::Hihat => 0.92 + accent * 0.08,
             _ => 0.88 + accent * 0.12,
         }
     };
@@ -1276,16 +1291,6 @@ fn humanize_duration(
                 event.duration = (step_ms * modifier).clamp(step_ms * 0.36, step_ms * 2.1);
             }
         }
-        Instrument::Sax => {
-            let modifier = if event.is_phrase_end {
-                rng.random_range(1.6..2.5)
-            } else if phrase_plan.accent(step) > 0.85 {
-                rng.random_range(1.05..1.85)
-            } else {
-                rng.random_range(0.72..1.28)
-            };
-            event.duration = (step_ms * modifier).clamp(step_ms * 0.55, step_ms * 2.7);
-        }
         Instrument::Triangle => {
             event.duration = step_ms * rng.random_range(0.65..1.8);
         }
@@ -1298,16 +1303,6 @@ fn humanize_duration(
         Instrument::Hihat => {
             event.duration = step_ms * rng.random_range(0.06..0.12);
         }
-        Instrument::Snare => {
-            event.duration = step_ms * 0.16;
-        }
-        Instrument::Pluck | Instrument::Sine => {
-            event.duration = (event.duration * rng.random_range(0.86..1.10))
-                .clamp(step_ms * 0.35, step_ms * 1.8);
-        }
-        _ => {
-            event.duration = event.duration.min(step_ms);
-        }
     }
 }
 
@@ -1315,10 +1310,11 @@ fn phrase_step_lengths(
     base_step_ms: f32,
     phrase_len: usize,
     phrase_plan: &PhrasePlan,
+    controls: &RuntimeControls,
     rng: &mut impl Rng,
 ) -> Vec<f32> {
     (0..phrase_len)
-        .map(|step| step_sleep_ms(base_step_ms, step, phrase_plan, rng))
+        .map(|step| step_sleep_ms(base_step_ms, step, phrase_plan, controls, rng))
         .collect()
 }
 
@@ -1329,12 +1325,16 @@ fn delay_until_ms(deadline: Instant, now: Instant) -> f32 {
         .unwrap_or(0.0)
 }
 
-fn sleep_until_enqueue_window(next_phrase_start: Instant, lookahead: Duration) {
+fn sleep_until_enqueue_window(next_phrase_start: Instant, lookahead: Duration, stop: &AtomicBool) {
     let enqueue_deadline = next_phrase_start
         .checked_sub(lookahead)
         .unwrap_or_else(Instant::now);
 
     while let Some(remaining) = enqueue_deadline.checked_duration_since(Instant::now()) {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
         if remaining <= Duration::from_millis(2) {
             break;
         }
@@ -1347,22 +1347,29 @@ fn step_sleep_ms(
     base_step_ms: f32,
     global_step: usize,
     phrase_plan: &PhrasePlan,
+    controls: &RuntimeControls,
     rng: &mut impl Rng,
 ) -> f32 {
+    let swing_amount = controls.swing().clamp(0.0, 1.0);
     let swing = if phrase_plan.ambient {
-        1.0
+        if global_step.is_multiple_of(2) {
+            1.0 + 0.08 * swing_amount
+        } else {
+            1.0 - 0.08 * swing_amount
+        }
     } else if global_step.is_multiple_of(2) {
-        1.18
+        1.0 + 0.28 * swing_amount
     } else {
-        0.82
+        1.0 - 0.28 * swing_amount
     };
+    let tempo = controls.tempo().clamp(0.25, 3.0);
     let jitter = if phrase_plan.ambient {
-        rng.random_range(-14.0..18.0)
+        rng.random_range(-7.0..9.0)
     } else {
         0.0
     };
 
-    (base_step_ms * swing + jitter).max(20.0)
+    (base_step_ms * swing / tempo + jitter).max(20.0)
 }
 
 fn complement_bass_with_piano(
@@ -1609,10 +1616,8 @@ fn preferred_center(
         Instrument::Pad => 0.64,
         Instrument::Piano if phrase_plan.ambient => 0.78,
         Instrument::Piano => 0.50 + 0.18 * contour,
-        Instrument::Sax => 0.46 + 0.22 * contour,
         Instrument::Triangle => 0.78,
-        Instrument::Kick | Instrument::Ride | Instrument::Hihat | Instrument::Snare => 0.50,
-        _ => 0.50,
+        Instrument::Kick | Instrument::Ride | Instrument::Hihat => 0.50,
     };
 
     (low + span * position).round() as u8

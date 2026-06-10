@@ -39,21 +39,70 @@ impl EnvelopeConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Instrument {
     #[default]
-    Sine,
     Piano,
-    Pluck,
     Pad,
     Bass,
-    Organ,
-    Sax,
     Triangle,
     Kick,
     Ride,
     Hihat,
-    Snare,
 }
 
+pub const INSTRUMENT_COUNT: usize = 7;
+
+pub const ALL_INSTRUMENTS: [Instrument; INSTRUMENT_COUNT] = [
+    Instrument::Piano,
+    Instrument::Pad,
+    Instrument::Bass,
+    Instrument::Triangle,
+    Instrument::Kick,
+    Instrument::Ride,
+    Instrument::Hihat,
+];
+
 impl Instrument {
+    pub fn control_index(self) -> usize {
+        match self {
+            Self::Piano => 0,
+            Self::Pad => 1,
+            Self::Bass => 2,
+            Self::Triangle => 3,
+            Self::Kick => 4,
+            Self::Ride => 5,
+            Self::Hihat => 6,
+        }
+    }
+
+    pub fn from_control_index(index: usize) -> Option<Self> {
+        ALL_INSTRUMENTS.get(index).copied()
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Piano => "Piano",
+            Self::Pad => "Pad",
+            Self::Bass => "Bass",
+            Self::Triangle => "Triangle",
+            Self::Kick => "Kick",
+            Self::Ride => "Ride",
+            Self::Hihat => "Hihat",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        let normalized = name.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "piano" => Some(Self::Piano),
+            "pad" => Some(Self::Pad),
+            "bass" => Some(Self::Bass),
+            "triangle" => Some(Self::Triangle),
+            "kick" => Some(Self::Kick),
+            "ride" => Some(Self::Ride),
+            "hihat" | "hi-hat" | "hat" => Some(Self::Hihat),
+            _ => None,
+        }
+    }
+
     // Default ADSR for this instrument.
     // These reflect the natural acoustic behaviour and sound good
     // without any LayerConfig override.
@@ -61,10 +110,6 @@ impl Instrument {
         match self {
             // Piano: quick hammer attack, natural decay, gentle release tail.
             Self::Piano => EnvelopeConfig::new(9.0, 820.0, 0.18, 1100.0),
-
-            // Pluck: instant attack, fast decay (string damps naturally),
-            // low sustain (most energy in transient), short release.
-            Self::Pluck => EnvelopeConfig::new(1.0, 300.0, 0.15, 80.0),
 
             // Pad: very slow attack (the defining pad character),
             // no decay, full sustain, slow fade-out.
@@ -74,18 +119,8 @@ impl Instrument {
             // medium sustain, clean release.
             Self::Bass => EnvelopeConfig::new(12.0, 80.0, 0.80, 200.0),
 
-            // Organ: fast attack (key = air valve), no decay,
-            // full sustain, very fast cut-off (organ stops abruptly).
-            Self::Organ => EnvelopeConfig::new(15.0, 0.0, 1.0, 25.0),
-
-            // Sax: slower reed-like attack, rounded sustain, soft release.
-            Self::Sax => EnvelopeConfig::new(85.0, 260.0, 0.58, 520.0),
-
             // Triangle: instant tap with a long, quiet metallic tail.
             Self::Triangle => EnvelopeConfig::new(1.0, 1700.0, 0.0, 2600.0),
-
-            // Sine: smooth attack, no decay, full sustain, medium release.
-            Self::Sine => EnvelopeConfig::new(20.0, 0.0, 1.0, 2500.0),
 
             // Kick: instant attack, fast decay (all in the transient),
             // zero sustain, very short release.
@@ -97,18 +132,11 @@ impl Instrument {
             // Hihat: instant attack, very fast decay (cymbal shimmer),
             // zero sustain.
             Self::Hihat => EnvelopeConfig::new(1.0, 60.0, 0.0, 20.0),
-
-            // Snare: instant attack, medium decay (body + rattle),
-            // zero sustain.
-            Self::Snare => EnvelopeConfig::new(1.0, 120.0, 0.0, 25.0),
         }
     }
 
     pub fn is_percussion(self) -> bool {
-        matches!(
-            self,
-            Self::Kick | Self::Ride | Self::Hihat | Self::Snare | Self::Triangle
-        )
+        matches!(self, Self::Kick | Self::Ride | Self::Hihat | Self::Triangle)
     }
 }
 
@@ -157,14 +185,6 @@ impl InstrumentState {
         self.hp_prev_in = 0.0;
         self.hp_prev_out = 0.0;
         match instrument {
-            Instrument::Pluck => {
-                let len = (sample_rate / freq.max(1.0)).round() as usize;
-                self.ks_len = len.clamp(2, 2047);
-                self.ks_pos = 0;
-                for i in 0..self.ks_len {
-                    self.ks_buf[i] = self.white_noise() * 0.9;
-                }
-            }
             Instrument::Kick => {
                 self.phase = 0.0;
                 self.kick_freq = freq * 3.5;
@@ -190,23 +210,16 @@ impl InstrumentState {
             Instrument::Pad => {
                 self.flutter_phase = 0.0;
             }
-            Instrument::Sax => {
-                self.phase = 0.0;
-                self.phase2 = 0.191;
-                self.phase3 = 0.337;
-                self.flutter_phase = 0.0;
-            }
             Instrument::Triangle => {
                 self.phase = 0.0;
                 self.phase2 = 0.293;
                 self.phase3 = 0.617;
             }
-            Instrument::Ride | Instrument::Hihat | Instrument::Snare => {
+            Instrument::Ride | Instrument::Hihat => {
                 self.phase = 0.0;
                 self.phase2 = 0.0;
                 self.phase3 = 0.0;
             }
-            _ => {}
         }
     }
 
@@ -219,18 +232,13 @@ impl InstrumentState {
     ) -> f32 {
         self.t += 1.0 / sample_rate;
         let raw = match instrument {
-            Instrument::Sine => self.synth_sine(freq, sample_rate),
             Instrument::Piano => self.synth_piano(freq, sample_rate),
-            Instrument::Pluck => self.synth_pluck(),
             Instrument::Pad => self.synth_pad(freq, sample_rate),
             Instrument::Bass => self.synth_bass(freq, sample_rate),
-            Instrument::Organ => self.synth_organ(freq, sample_rate),
-            Instrument::Sax => self.synth_sax(freq, sample_rate),
             Instrument::Triangle => self.synth_triangle(freq, sample_rate),
             Instrument::Kick => self.synth_kick(freq, sample_rate),
             Instrument::Ride => self.synth_ride(sample_rate),
             Instrument::Hihat => self.synth_hihat(),
-            Instrument::Snare => self.synth_snare(freq, sample_rate),
         };
         raw * amplitude
     }
@@ -256,11 +264,6 @@ impl InstrumentState {
         self.hp_prev_in = input;
         self.hp_prev_out = out;
         out
-    }
-
-    fn synth_sine(&mut self, freq: f32, sr: f32) -> f32 {
-        self.phase = (self.phase + freq / sr) % 1.0;
-        (self.phase * 2.0 * PI).sin()
     }
 
     fn synth_piano(&mut self, freq: f32, sr: f32) -> f32 {
@@ -327,17 +330,6 @@ impl InstrumentState {
         self.high_pass(warm, 34.0, sr) * 0.86
     }
 
-    fn synth_pluck(&mut self) -> f32 {
-        if self.ks_len == 0 {
-            return 0.0;
-        }
-        let out = self.ks_buf[self.ks_pos];
-        let next = (self.ks_pos + 1) % self.ks_len;
-        self.ks_buf[self.ks_pos] = 0.997 * (out * 0.4985 + self.ks_buf[next] * 0.5015);
-        self.ks_pos = next;
-        out
-    }
-
     fn synth_pad(&mut self, freq: f32, sr: f32) -> f32 {
         const DET: f32 = 0.00045;
         self.phase = (self.phase + freq / sr) % 1.0;
@@ -396,37 +388,6 @@ impl InstrumentState {
             (out * 0.46 + self.ks_buf[next] * 0.46 + self.ks_buf[next2] * 0.08) * damping;
         self.ks_pos = next;
         out
-    }
-
-    fn synth_organ(&mut self, freq: f32, sr: f32) -> f32 {
-        self.phase = (self.phase + freq / sr) % 1.0;
-        const DB: [(f32, f32); 4] = [(0.5, 0.9), (1.0, 1.0), (1.5, 0.8), (2.0, 0.5)];
-        let mut out = 0.0f32;
-        let mut total = 0.0f32;
-        for &(h, amp) in &DB {
-            out += amp * (self.phase * h * 2.0 * PI).sin();
-            total += amp;
-        }
-        (out / total * 1.2).tanh() * 0.85
-    }
-
-    fn synth_sax(&mut self, freq: f32, sr: f32) -> f32 {
-        self.flutter_phase = (self.flutter_phase + 5.0 / sr) % 1.0;
-        let vibrato = 1.0 + 0.0045 * (self.flutter_phase * 2.0 * PI).sin();
-        let active_freq = freq * vibrato;
-
-        self.phase = (self.phase + active_freq / sr) % 1.0;
-        self.phase2 = (self.phase2 + active_freq * 2.0 / sr) % 1.0;
-        self.phase3 = (self.phase3 + active_freq * 3.0 / sr) % 1.0;
-
-        let fundamental = (self.phase * 2.0 * PI).sin() * 0.78;
-        let second = (self.phase2 * 2.0 * PI).sin() * 0.18;
-        let third = (self.phase3 * 2.0 * PI).sin() * 0.07;
-        let breath = self.white_noise() * 0.010 * (1.0 - (-14.0 * self.t).exp());
-
-        let shaped = (fundamental + second + third + breath).tanh() * 0.62;
-        let mellow = self.low_pass(shaped, 1850.0, sr);
-        self.high_pass(mellow, 155.0, sr) * 0.74
     }
 
     fn synth_triangle(&mut self, freq: f32, sr: f32) -> f32 {
@@ -498,13 +459,5 @@ impl InstrumentState {
         self.phase2 = hp;
 
         hp * (-36.0 * self.t).exp()
-    }
-
-    fn synth_snare(&mut self, freq: f32, sr: f32) -> f32 {
-        let body = (freq * 0.8).clamp(180.0, 280.0);
-        self.phase = (self.phase + body / sr) % 1.0;
-        let tone = (self.phase * 2.0 * PI).sin() * (-24.0 * self.t).exp();
-        let noise = self.white_noise() * (-18.0 * self.t).exp();
-        tone * 0.35 + noise * 0.65
     }
 }

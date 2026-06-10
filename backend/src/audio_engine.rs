@@ -1,7 +1,11 @@
+use crate::controls::RuntimeControls;
+use crate::instruments::INSTRUMENT_COUNT;
 use crate::instruments::{EnvelopeConfig, Instrument, InstrumentState};
 use crate::midi_to_freq;
 use crate::NoteEvent;
+#[cfg(feature = "desktop-audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(feature = "desktop-audio")]
 use cpal::{FromSample, Sample, SampleFormat, SizedSample};
 use crossbeam_queue::ArrayQueue;
 use std::cmp::Ordering;
@@ -10,6 +14,7 @@ use std::sync::Arc;
 const MAX_VOICES: usize = 32;
 const MASTER_GAIN: f32 = 0.72;
 
+#[cfg(feature = "desktop-audio")]
 pub struct AudioEngine {
     _stream: cpal::Stream,
 }
@@ -45,6 +50,90 @@ struct PendingNote {
     event: NoteEvent,
 }
 
+pub struct AudioRenderer {
+    queue: Arc<ArrayQueue<NoteEvent>>,
+    voices: Vec<Voice>,
+    pending_notes: Vec<PendingNote>,
+    sample_clock: u64,
+    sample_rate: f32,
+    num_channels: usize,
+    controls: Arc<RuntimeControls>,
+    mix: MixSmoother,
+}
+
+struct MixSmoother {
+    instruments: [f32; INSTRUMENT_COUNT],
+}
+
+impl AudioRenderer {
+    pub fn new(
+        queue: Arc<ArrayQueue<NoteEvent>>,
+        controls: Arc<RuntimeControls>,
+        sample_rate: f32,
+        num_channels: usize,
+    ) -> Self {
+        Self {
+            queue,
+            voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
+            pending_notes: Vec::new(),
+            sample_clock: 0,
+            sample_rate,
+            num_channels: num_channels.max(1),
+            controls,
+            mix: MixSmoother::new(),
+        }
+    }
+
+    pub fn render_interleaved_f32(&mut self, output: &mut [f32]) {
+        drain_note_queue(
+            self.queue.as_ref(),
+            &mut self.pending_notes,
+            self.sample_clock,
+            self.sample_rate,
+        );
+
+        for frame in output.chunks_mut(self.num_channels) {
+            let (left, right) = render_next_frame(
+                &mut self.voices,
+                &mut self.pending_notes,
+                &mut self.sample_clock,
+                self.sample_rate,
+                self.controls.as_ref(),
+                &mut self.mix,
+            );
+
+            write_frame(frame, left, right);
+        }
+    }
+
+    pub fn controls(&self) -> Arc<RuntimeControls> {
+        self.controls.clone()
+    }
+}
+
+impl MixSmoother {
+    fn new() -> Self {
+        Self {
+            instruments: [1.0; INSTRUMENT_COUNT],
+        }
+    }
+
+    fn update(&mut self, controls: &RuntimeControls) {
+        const FOLLOW: f32 = 0.0025;
+
+        for (index, value) in self.instruments.iter_mut().enumerate() {
+            let Some(instrument) = Instrument::from_control_index(index) else {
+                continue;
+            };
+            *value += (controls.instrument_volume(instrument) - *value) * FOLLOW;
+        }
+    }
+
+    fn instrument(&self, instrument: Instrument) -> f32 {
+        self.instruments[instrument.control_index()]
+    }
+}
+
 impl Voice {
     fn new() -> Self {
         Self {
@@ -59,7 +148,7 @@ impl Voice {
             release_dec: 0.0,
             release_samples: 1.0,
             pan: 0.0,
-            instrument: Instrument::Sine,
+            instrument: Instrument::Piano,
             istate: InstrumentState::new(),
         }
     }
@@ -185,7 +274,11 @@ impl Voice {
     }
 }
 
-pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) -> Result<AudioEngine, String> {
+#[cfg(feature = "desktop-audio")]
+pub fn start_engine(
+    queue: Arc<ArrayQueue<NoteEvent>>,
+    controls: Arc<RuntimeControls>,
+) -> Result<AudioEngine, String> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -204,31 +297,35 @@ pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) -> Result<AudioEngine, St
     }
 
     let stream = match sample_format {
-        SampleFormat::I8 => build_stream::<i8>(&device, &config, queue, sample_rate, num_channels),
+        SampleFormat::I8 => {
+            build_stream::<i8>(&device, &config, queue, controls, sample_rate, num_channels)
+        }
         SampleFormat::I16 => {
-            build_stream::<i16>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<i16>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         SampleFormat::I32 => {
-            build_stream::<i32>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<i32>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         SampleFormat::I64 => {
-            build_stream::<i64>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<i64>(&device, &config, queue, controls, sample_rate, num_channels)
         }
-        SampleFormat::U8 => build_stream::<u8>(&device, &config, queue, sample_rate, num_channels),
+        SampleFormat::U8 => {
+            build_stream::<u8>(&device, &config, queue, controls, sample_rate, num_channels)
+        }
         SampleFormat::U16 => {
-            build_stream::<u16>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<u16>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         SampleFormat::U32 => {
-            build_stream::<u32>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<u32>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         SampleFormat::U64 => {
-            build_stream::<u64>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<u64>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         SampleFormat::F32 => {
-            build_stream::<f32>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<f32>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         SampleFormat::F64 => {
-            build_stream::<f64>(&device, &config, queue, sample_rate, num_channels)
+            build_stream::<f64>(&device, &config, queue, controls, sample_rate, num_channels)
         }
         other => Err(format!("unsupported sample format: {other}")),
     }?;
@@ -245,10 +342,12 @@ pub fn start_engine(queue: Arc<ArrayQueue<NoteEvent>>) -> Result<AudioEngine, St
     Ok(AudioEngine { _stream: stream })
 }
 
+#[cfg(feature = "desktop-audio")]
 fn build_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     queue: Arc<ArrayQueue<NoteEvent>>,
+    controls: Arc<RuntimeControls>,
     sample_rate: f32,
     num_channels: usize,
 ) -> Result<cpal::Stream, String>
@@ -258,6 +357,7 @@ where
     let mut voices: Vec<Voice> = (0..MAX_VOICES).map(|_| Voice::new()).collect();
     let mut pending_notes: Vec<PendingNote> = Vec::new();
     let mut sample_clock = 0u64;
+    let mut mix = MixSmoother::new();
 
     device
         .build_output_stream(
@@ -271,6 +371,8 @@ where
                     &mut voices,
                     &mut pending_notes,
                     &mut sample_clock,
+                    controls.as_ref(),
+                    &mut mix,
                 );
             },
             |err| eprintln!("[audio] stream error: {err}"),
@@ -279,6 +381,7 @@ where
         .map_err(|err| format!("failed to build output stream: {err}"))
 }
 
+#[cfg(feature = "desktop-audio")]
 fn write_output<T>(
     output: &mut [T],
     num_channels: usize,
@@ -287,43 +390,95 @@ fn write_output<T>(
     voices: &mut [Voice],
     pending_notes: &mut Vec<PendingNote>,
     sample_clock: &mut u64,
+    controls: &RuntimeControls,
+    mix: &mut MixSmoother,
 ) where
     T: Sample + FromSample<f32>,
 {
     drain_note_queue(queue, pending_notes, *sample_clock, sample_rate);
 
     for frame in output.chunks_mut(num_channels) {
-        trigger_due_notes(voices, pending_notes, *sample_clock, sample_rate);
+        let (left, right) = render_next_frame(
+            voices,
+            pending_notes,
+            sample_clock,
+            sample_rate,
+            controls,
+            mix,
+        );
+        write_frame_t(frame, left, right);
+    }
+}
 
-        let active_count = voices
-            .iter()
-            .filter(|voice| voice.is_active())
-            .count()
-            .max(1) as f32;
-        let voice_gain = MASTER_GAIN / (1.0 + (active_count - 1.0) * 0.08);
-        let mut left = 0.0f32;
-        let mut right = 0.0f32;
+fn render_next_frame(
+    voices: &mut [Voice],
+    pending_notes: &mut Vec<PendingNote>,
+    sample_clock: &mut u64,
+    sample_rate: f32,
+    controls: &RuntimeControls,
+    mix: &mut MixSmoother,
+) -> (f32, f32) {
+    trigger_due_notes(voices, pending_notes, *sample_clock, sample_rate);
+    mix.update(controls);
 
-        for voice in voices.iter_mut() {
-            let (voice_left, voice_right) = voice.next_frame(sample_rate);
-            left += voice_left;
-            right += voice_right;
-        }
+    let active_count = voices
+        .iter()
+        .filter(|voice| voice.is_active())
+        .count()
+        .max(1) as f32;
+    let voice_gain = MASTER_GAIN / (1.0 + (active_count - 1.0) * 0.08);
+    let mut left = 0.0f32;
+    let mut right = 0.0f32;
 
-        left = soft_limit(left * voice_gain);
-        right = soft_limit(right * voice_gain);
+    for voice in voices.iter_mut() {
+        let gain = mix.instrument(voice.instrument);
+        let (voice_left, voice_right) = voice.next_frame(sample_rate);
+        left += voice_left * gain;
+        right += voice_right * gain;
+    }
 
-        if num_channels == 1 {
-            frame[0] = T::from_sample((left + right) * 0.5);
-        } else {
-            frame[0] = T::from_sample(left);
-            frame[1] = T::from_sample(right);
-            for sample in frame.iter_mut().skip(2) {
-                *sample = T::from_sample((left + right) * 0.5);
-            }
-        }
+    left = soft_limit(left * voice_gain);
+    right = soft_limit(right * voice_gain);
+    *sample_clock = sample_clock.saturating_add(1);
 
-        *sample_clock = sample_clock.saturating_add(1);
+    (left, right)
+}
+
+fn write_frame(frame: &mut [f32], left: f32, right: f32) {
+    if frame.is_empty() {
+        return;
+    }
+
+    if frame.len() == 1 {
+        frame[0] = (left + right) * 0.5;
+        return;
+    }
+
+    frame[0] = left;
+    frame[1] = right;
+    for sample in frame.iter_mut().skip(2) {
+        *sample = (left + right) * 0.5;
+    }
+}
+
+#[cfg(feature = "desktop-audio")]
+fn write_frame_t<T>(frame: &mut [T], left: f32, right: f32)
+where
+    T: Sample + FromSample<f32>,
+{
+    if frame.is_empty() {
+        return;
+    }
+
+    if frame.len() == 1 {
+        frame[0] = T::from_sample((left + right) * 0.5);
+        return;
+    }
+
+    frame[0] = T::from_sample(left);
+    frame[1] = T::from_sample(right);
+    for sample in frame.iter_mut().skip(2) {
+        *sample = T::from_sample((left + right) * 0.5);
     }
 }
 
@@ -376,7 +531,7 @@ fn trigger_voice(voices: &mut [Voice], event: &NoteEvent, sample_rate: f32) {
 
 fn pan_for(instrument: Instrument, note: u8) -> f32 {
     match instrument {
-        Instrument::Bass | Instrument::Kick | Instrument::Snare => 0.0,
+        Instrument::Bass | Instrument::Kick => 0.0,
         Instrument::Pad => {
             if note.is_multiple_of(2) {
                 -0.35
@@ -385,9 +540,6 @@ fn pan_for(instrument: Instrument, note: u8) -> f32 {
             }
         }
         Instrument::Piano => ((note as f32 - 66.0) / 36.0).clamp(-0.35, 0.35),
-        Instrument::Pluck | Instrument::Sine => ((note as f32 - 64.0) / 40.0).clamp(-0.45, 0.45),
-        Instrument::Organ => -0.15,
-        Instrument::Sax => -0.22,
         Instrument::Triangle => 0.38,
         Instrument::Ride => 0.26,
         Instrument::Hihat => 0.28,

@@ -1,17 +1,6 @@
-[package]
-name = "continuum"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-# Audio output
-cpal = "0.15"
-
-# Lock-free queue between composer and audio engine
-crossbeam-queue = "0.3"
-
-# Random number generation for Markov chain sampling
-rand = "0.9"
+[workspace]
+members = ["backend"]
+resolver = "2"
 
 [profile.release]
 opt-level = 3
