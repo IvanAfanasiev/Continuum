@@ -820,6 +820,7 @@ pub fn start_composing(
     preset_name: &str,
     controls: Arc<RuntimeControls>,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 ) {
     thread::sleep(Duration::from_millis(200));
 
@@ -848,6 +849,11 @@ pub fn start_composing(
     let mut phrase_start_at = Instant::now() + lookahead;
 
     while !stop.load(Ordering::Relaxed) {
+        wait_while_paused(&mut phrase_start_at, paused.as_ref(), stop.as_ref());
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
         let current_chord = preset.chords[global_chord_idx];
         let step_ms = preset.base_step_ms;
         let phrase_plan = PhrasePlan::new(preset, current_chord, &section, &mut rng);
@@ -969,7 +975,12 @@ pub fn start_composing(
         phrase_start_at += Duration::from_secs_f32(step_start_ms / 1000.0);
         global_chord_idx = (global_chord_idx + 1) % preset.chords.len();
         section.advance(preset, &mut rng);
-        sleep_until_enqueue_window(phrase_start_at, lookahead, stop.as_ref());
+        sleep_until_enqueue_window(
+            &mut phrase_start_at,
+            lookahead,
+            stop.as_ref(),
+            paused.as_ref(),
+        );
     }
 }
 
@@ -1325,15 +1336,37 @@ fn delay_until_ms(deadline: Instant, now: Instant) -> f32 {
         .unwrap_or(0.0)
 }
 
-fn sleep_until_enqueue_window(next_phrase_start: Instant, lookahead: Duration, stop: &AtomicBool) {
-    let enqueue_deadline = next_phrase_start
-        .checked_sub(lookahead)
-        .unwrap_or_else(Instant::now);
+fn wait_while_paused(timeline_anchor: &mut Instant, paused: &AtomicBool, stop: &AtomicBool) {
+    if !paused.load(Ordering::Relaxed) {
+        return;
+    }
 
-    while let Some(remaining) = enqueue_deadline.checked_duration_since(Instant::now()) {
+    let pause_started = Instant::now();
+    while paused.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(20));
+    }
+    *timeline_anchor += pause_started.elapsed();
+}
+
+fn sleep_until_enqueue_window(
+    next_phrase_start: &mut Instant,
+    lookahead: Duration,
+    stop: &AtomicBool,
+    paused: &AtomicBool,
+) {
+    loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
+
+        wait_while_paused(next_phrase_start, paused, stop);
+
+        let enqueue_deadline = next_phrase_start
+            .checked_sub(lookahead)
+            .unwrap_or_else(Instant::now);
+        let Some(remaining) = enqueue_deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
 
         if remaining <= Duration::from_millis(2) {
             break;

@@ -84,6 +84,16 @@ pub unsafe extern "C" fn continuum_mobile_render(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn continuum_mobile_set_paused(
+    runtime: *mut ContinuumMobileRuntime,
+    paused: bool,
+) {
+    if let Some(runtime) = runtime.as_ref() {
+        runtime.core.set_paused(paused);
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn continuum_mobile_set_tempo(
     runtime: *mut ContinuumMobileRuntime,
     value: c_float,

@@ -14,6 +14,7 @@ uint32_t continuum_mobile_render(
     ContinuumMobileRuntime *runtime,
     float *output,
     uint32_t frames);
+void continuum_mobile_set_paused(ContinuumMobileRuntime *runtime, bool paused);
 void continuum_mobile_set_tempo(ContinuumMobileRuntime *runtime, float value);
 void continuum_mobile_set_swing(ContinuumMobileRuntime *runtime, float value);
 bool continuum_mobile_set_instrument_volume(
@@ -71,6 +72,15 @@ Java_com_continuum_app_ContinuumNative_render(
         static_cast<uint32_t>(frames));
     env->ReleaseFloatArrayElements(output, samples, 0);
     return static_cast<jint>(rendered);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_continuum_app_ContinuumNative_setPaused(
+    JNIEnv *,
+    jobject,
+    jlong runtime,
+    jboolean paused) {
+    continuum_mobile_set_paused(from_handle(runtime), paused == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL

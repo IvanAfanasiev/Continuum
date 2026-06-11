@@ -22,7 +22,7 @@ fn main() {
     println!("[main] Layers: {}", preset.layers.len());
     println!("[main] Chords: {}", preset.chords.len());
     println!("[main] Base step: {:.0}ms", preset.base_step_ms);
-    println!("[main] Controls: tempo/swing/instrument/stop");
+    println!("[main] Controls: play/pause/tempo/swing/instrument/stop");
     println!();
 
     let mut runtime = match DesktopRuntime::start(preset_name) {
@@ -42,6 +42,8 @@ fn main() {
 
         match apply_control_line(controls.as_ref(), &line) {
             ControlCommand::Applied => {}
+            ControlCommand::Pause => runtime.set_paused(true),
+            ControlCommand::Resume => runtime.set_paused(false),
             ControlCommand::Stop => break,
             ControlCommand::Unknown => eprintln!("[controls] unknown command: {line}"),
         }

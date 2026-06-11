@@ -101,6 +101,7 @@ PlaybackBackend _createBackend() {
 
 class DesktopProcessBackend implements PlaybackBackend {
   Process? _process;
+  String? _processPreset;
   BackendState _state = BackendState.idle;
   String _status = 'Ready';
   void Function(PlaybackSnapshot snapshot)? _listener;
@@ -121,6 +122,20 @@ class DesktopProcessBackend implements PlaybackBackend {
       return;
     }
 
+    if (_process != null) {
+      if (_processPreset != null &&
+          _processPreset!.toLowerCase() != preset.toLowerCase()) {
+        await _stopProcess(notify: false);
+      } else {
+        _state = BackendState.playing;
+        _status = 'Playing';
+        _sendLine('resume');
+        await _process!.stdin.flush().catchError((_) {});
+        _notify(preset: _processPreset ?? preset);
+        return;
+      }
+    }
+
     _state = BackendState.starting;
     _status = 'Starting';
 
@@ -137,6 +152,8 @@ class DesktopProcessBackend implements PlaybackBackend {
       unawaited(
         _process!.exitCode.then((code) {
           if (_state != BackendState.stopping) {
+            _process = null;
+            _processPreset = null;
             _state = code == 0 ? BackendState.idle : BackendState.error;
             _status = code == 0 ? 'Stopped' : 'Backend exited: $code';
             _notify();
@@ -146,11 +163,13 @@ class DesktopProcessBackend implements PlaybackBackend {
 
       _state = BackendState.playing;
       _status = 'Playing';
+      _processPreset = preset;
       _notify(preset: preset);
     } catch (_) {
       _state = BackendState.error;
       _status = 'Backend not found';
       _process = null;
+      _processPreset = null;
       _notify(preset: preset);
     }
   }
@@ -166,24 +185,27 @@ class DesktopProcessBackend implements PlaybackBackend {
 
     _state = BackendState.stopping;
     _status = 'Paused';
-    _sendLine('stop');
+    _sendLine('pause');
     await _process!.stdin.flush().catchError((_) {});
-    final code = await _process!.exitCode.timeout(
-      const Duration(seconds: 2),
-      onTimeout: () {
-        _process!.kill();
-        return -1;
-      },
-    );
-    _process = null;
-    _state = code == 0 || code == -1 ? BackendState.idle : BackendState.error;
-    _notify();
+    _state = BackendState.idle;
+    _notify(preset: _processPreset);
   }
 
   @override
   Future<void> selectPreset(String preset) async {
-    if (isPlaying) {
-      await pause();
+    final samePreset = _processPreset != null &&
+        _processPreset!.toLowerCase() == preset.toLowerCase();
+    if (_process != null && samePreset) {
+      _notify(preset: preset);
+      return;
+    }
+
+    final wasPlaying = isPlaying;
+    if (_process != null) {
+      await _stopProcess(notify: false);
+    }
+
+    if (wasPlaying) {
       await play(preset);
       return;
     }
@@ -192,7 +214,7 @@ class DesktopProcessBackend implements PlaybackBackend {
   }
 
   @override
-  Future<void> dispose() => pause();
+  Future<void> dispose() => _stopProcess(notify: true);
 
   @override
   void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener) {
@@ -228,6 +250,35 @@ class DesktopProcessBackend implements PlaybackBackend {
 
   void _notify({String? preset}) {
     _listener?.call(PlaybackSnapshot(state: _state, presetName: preset));
+  }
+
+  Future<void> _stopProcess({required bool notify}) async {
+    if (_process == null) {
+      _state = BackendState.idle;
+      _status = 'Stopped';
+      if (notify) {
+        _notify();
+      }
+      return;
+    }
+
+    _state = BackendState.stopping;
+    _status = 'Stopped';
+    _sendLine('stop');
+    await _process!.stdin.flush().catchError((_) {});
+    final code = await _process!.exitCode.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () {
+        _process!.kill();
+        return -1;
+      },
+    );
+    _process = null;
+    _processPreset = null;
+    _state = code == 0 || code == -1 ? BackendState.idle : BackendState.error;
+    if (notify) {
+      _notify();
+    }
   }
 
   Future<_LaunchCommand> _resolveLaunch(String preset) async {

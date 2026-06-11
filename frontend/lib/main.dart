@@ -150,7 +150,10 @@ class _ContinuumHomeState extends State<ContinuumHome> {
 
     if (_player.isPlaying) {
       await _player.pause();
-      await _player.selectPreset(_preset.name);
+      if (_committedPresetName == null ||
+          !_samePresetName(_committedPresetName!, _preset.name)) {
+        await _player.selectPreset(_preset.name);
+      }
       _committedPresetName = _preset.name;
     } else {
       await _player.play(_preset.name);

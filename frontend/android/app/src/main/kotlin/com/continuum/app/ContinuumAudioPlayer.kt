@@ -51,6 +51,7 @@ class ContinuumAudioPlayer(
 ) {
     private val lock = Any()
     private val running = AtomicBoolean(false)
+    private val renderLoopRunning = AtomicBoolean(false)
     private var renderThread: Thread? = null
     private var runtimeHandle = 0L
     private var nativeBridge: ContinuumNative? = null
@@ -131,10 +132,16 @@ class ContinuumAudioPlayer(
     }
 
     fun play(presetId: Int) {
+        val nextPresetId = presetId.floorPreset()
+        if (renderThread != null && runtimeHandle != 0L && currentPresetId == nextPresetId) {
+            resumePlayback()
+            return
+        }
+
         if (running.get() || renderThread != null || runtimeHandle != 0L || notificationVisible) {
             stopPlayback(showPausedNotification = true, emitEvent = false)
         }
-        currentPresetId = presetId.floorPreset()
+        currentPresetId = nextPresetId
 
         if (!requestMusicFocus()) {
             throw IllegalStateException("Audio focus was not granted")
@@ -166,9 +173,11 @@ class ContinuumAudioPlayer(
         synchronized(lock) {
             runtimeHandle = handle
             ducked = false
+            native.setPaused(handle, false)
             applyControlsLocked(native, handle)
         }
 
+        renderLoopRunning.set(true)
         running.set(true)
         playStartElapsedMs = SystemClock.elapsedRealtime()
         updateMediaMetadata(currentPresetId)
@@ -179,10 +188,25 @@ class ContinuumAudioPlayer(
         renderThread = thread(name = "ContinuumAudio", isDaemon = true) {
             try {
                 val buffer = FloatArray(FramesPerBuffer * ChannelCount)
+                var audioTrackPlaying = false
                 audioTrack.setVolume(1.0f)
-                audioTrack.play()
 
-                while (running.get()) {
+                while (renderLoopRunning.get()) {
+                    if (!running.get()) {
+                        if (audioTrackPlaying) {
+                            runCatching { audioTrack.pause() }
+                            runCatching { audioTrack.flush() }
+                            audioTrackPlaying = false
+                        }
+                        Thread.sleep(16)
+                        continue
+                    }
+
+                    if (!audioTrackPlaying) {
+                        audioTrack.play()
+                        audioTrackPlaying = true
+                    }
+
                     val frames = native.render(handle, buffer, FramesPerBuffer)
                     if (frames <= 0) {
                         buffer.fill(0.0f)
@@ -199,6 +223,7 @@ class ContinuumAudioPlayer(
                 }
             } catch (_: Throwable) {
                 running.set(false)
+                renderLoopRunning.set(false)
             } finally {
                 runCatching { audioTrack.pause() }
                 runCatching { audioTrack.flush() }
@@ -231,6 +256,37 @@ class ContinuumAudioPlayer(
         }
     }
 
+    private fun resumePlayback() {
+        if (running.get()) {
+            emitPlaybackEvent(isPlaying = true)
+            return
+        }
+
+        if (!requestMusicFocus()) {
+            throw IllegalStateException("Audio focus was not granted")
+        }
+
+        synchronized(lock) {
+            ducked = false
+            val handle = runtimeHandle
+            val native = nativeBridge
+            if (handle != 0L && native != null) {
+                native.setPaused(handle, false)
+                applyControlsLocked(native, handle)
+            }
+        }
+
+        running.set(true)
+        if (playStartElapsedMs == 0L) {
+            playStartElapsedMs = SystemClock.elapsedRealtime()
+        }
+        updateMediaMetadata(currentPresetId)
+        updateMediaSession(isPlaying = true)
+        showPlaybackNotification(isPlaying = true)
+        startNotificationTicker()
+        emitPlaybackEvent(isPlaying = true)
+    }
+
     fun selectPreset(presetId: Int) {
         val nextPresetId = presetId.floorPreset()
         if (nextPresetId == currentPresetId) {
@@ -246,6 +302,10 @@ class ContinuumAudioPlayer(
         if (running.get()) {
             play(nextPresetId)
             return
+        }
+
+        if (renderThread != null || runtimeHandle != 0L) {
+            stopPlayback(showPausedNotification = notificationVisible, emitEvent = false)
         }
 
         currentPresetId = nextPresetId
@@ -288,20 +348,34 @@ class ContinuumAudioPlayer(
 
     private fun switchPreset(direction: Int) {
         val next = Math.floorMod(currentPresetId + direction, PresetCount)
-        if (running.get()) {
-            play(next)
-            return
-        }
-
-        currentPresetId = next
-        updateMediaMetadata(next)
-        updateMediaSession(isPlaying = false)
-        showPlaybackNotification(isPlaying = false)
-        emitPlaybackEvent(isPlaying = false)
+        selectPreset(next)
     }
 
     fun pause() {
-        stopPlayback(showPausedNotification = true, emitEvent = true)
+        if (!running.get()) {
+            updateMediaSession(isPlaying = false)
+            if (notificationVisible) {
+                showPlaybackNotification(isPlaying = false)
+            }
+            emitPlaybackEvent(isPlaying = false)
+            return
+        }
+
+        synchronized(lock) {
+            val handle = runtimeHandle
+            val native = nativeBridge
+            if (handle != 0L && native != null) {
+                native.setPaused(handle, true)
+            }
+        }
+
+        running.set(false)
+        captureElapsedPlayback()
+        updateMediaSession(isPlaying = false)
+        stopNotificationTicker()
+        showPlaybackNotification(isPlaying = false)
+        abandonMusicFocus()
+        emitPlaybackEvent(isPlaying = false)
     }
 
     private fun stopPlayback(showPausedNotification: Boolean, emitEvent: Boolean) {
@@ -311,6 +385,7 @@ class ContinuumAudioPlayer(
             }
         }
         running.set(false)
+        renderLoopRunning.set(false)
         val thread = renderThread
         if (thread != null && thread != Thread.currentThread()) {
             thread.join(900)
@@ -757,6 +832,7 @@ class ContinuumNative {
     external fun createPreset(presetId: Int, sampleRate: Float, channels: Int): Long
     external fun destroy(runtime: Long)
     external fun render(runtime: Long, output: FloatArray, frames: Int): Int
+    external fun setPaused(runtime: Long, paused: Boolean)
     external fun setTempo(runtime: Long, value: Float)
     external fun setSwing(runtime: Long, value: Float)
     external fun setInstrumentVolume(runtime: Long, instrumentId: Int, value: Float): Boolean
