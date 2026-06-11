@@ -232,12 +232,23 @@ class ContinuumAudioPlayer(
     }
 
     fun selectPreset(presetId: Int) {
-        if (running.get()) {
-            play(presetId)
+        val nextPresetId = presetId.floorPreset()
+        if (nextPresetId == currentPresetId) {
+            updateMediaMetadata(currentPresetId)
+            updateMediaSession(isPlaying = running.get())
+            if (notificationVisible) {
+                showPlaybackNotification(isPlaying = running.get())
+            }
+            emitPlaybackEvent(isPlaying = running.get())
             return
         }
 
-        currentPresetId = presetId.floorPreset()
+        if (running.get()) {
+            play(nextPresetId)
+            return
+        }
+
+        currentPresetId = nextPresetId
         updateMediaMetadata(currentPresetId)
         updateMediaSession(isPlaying = false)
         if (notificationVisible) {

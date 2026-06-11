@@ -54,6 +54,8 @@ class ContinuumHome extends StatefulWidget {
 }
 
 class _ContinuumHomeState extends State<ContinuumHome> {
+  static const Duration _presetCommitDelay = Duration(milliseconds: 200);
+
   final BackendPlayer _player = BackendPlayer();
   final List<PresetState> _presets = [
     PresetState(
@@ -75,6 +77,12 @@ class _ContinuumHomeState extends State<ContinuumHome> {
   ];
 
   int _presetIndex = 1;
+  Timer? _presetCommitTimer;
+  bool _presetCommitRunning = false;
+  String? _pendingPresetName;
+  String? _localPresetIntentName;
+  String? _committedPresetName;
+  DateTime? _lastPresetIntentAt;
 
   PresetState get _preset => _presets[_presetIndex];
 
@@ -86,6 +94,7 @@ class _ContinuumHomeState extends State<ContinuumHome> {
 
   @override
   void dispose() {
+    _presetCommitTimer?.cancel();
     _player.setPlaybackListener(null);
     unawaited(_player.dispose());
     super.dispose();
@@ -98,6 +107,17 @@ class _ContinuumHomeState extends State<ContinuumHome> {
 
     final presetName = snapshot.presetName;
     var changedPreset = false;
+    final localIntent = _localPresetIntentName;
+
+    if (presetName != null &&
+        localIntent != null &&
+        !_samePresetName(presetName, localIntent)) {
+      return;
+    }
+
+    if (presetName != null) {
+      _committedPresetName = presetName;
+    }
 
     setState(() {
       if (presetName != null) {
@@ -111,25 +131,40 @@ class _ContinuumHomeState extends State<ContinuumHome> {
       }
     });
 
+    if (presetName != null &&
+        localIntent != null &&
+        _samePresetName(presetName, localIntent) &&
+        _pendingPresetName == null &&
+        !_presetCommitRunning) {
+      _localPresetIntentName = null;
+    }
+
     if (snapshot.isPlaying && changedPreset) {
       _sendControls(_preset);
     }
   }
 
   Future<void> _togglePlayback() async {
+    _cancelPendingPresetCommit();
+    _localPresetIntentName = _preset.name;
+
     if (_player.isPlaying) {
       await _player.pause();
+      await _player.selectPreset(_preset.name);
+      _committedPresetName = _preset.name;
     } else {
       await _player.play(_preset.name);
+      _committedPresetName = _preset.name;
       _sendControls(_preset);
     }
 
+    _localPresetIntentName = null;
     if (mounted) {
       setState(() {});
     }
   }
 
-  Future<void> _switchPreset(int direction) async {
+  Future<void> _switchPreset(int direction) {
     setState(() {
       _presetIndex = (_presetIndex + direction) % _presets.length;
       if (_presetIndex < 0) {
@@ -137,11 +172,106 @@ class _ContinuumHomeState extends State<ContinuumHome> {
       }
     });
 
-    await _player.selectPreset(_preset.name);
-    _sendControls(_preset);
-    if (mounted) {
-      setState(() {});
+    _queuePresetCommit(_preset.name);
+    return Future.value();
+  }
+
+  void _queuePresetCommit(String presetName) {
+    _pendingPresetName = presetName;
+    _localPresetIntentName = presetName;
+    _lastPresetIntentAt = DateTime.now();
+    _schedulePresetCommit();
+  }
+
+  void _schedulePresetCommit() {
+    _presetCommitTimer?.cancel();
+    if (_presetCommitRunning || _pendingPresetName == null) {
+      return;
     }
+
+    final lastIntentAt = _lastPresetIntentAt;
+    final elapsed = lastIntentAt == null
+        ? _presetCommitDelay
+        : DateTime.now().difference(lastIntentAt);
+    final wait = elapsed >= _presetCommitDelay
+        ? Duration.zero
+        : _presetCommitDelay - elapsed;
+
+    _presetCommitTimer = Timer(wait, _startPresetCommit);
+  }
+
+  void _startPresetCommit() {
+    _presetCommitTimer = null;
+    if (_presetCommitRunning) {
+      return;
+    }
+
+    final presetName = _pendingPresetName;
+    if (presetName == null) {
+      return;
+    }
+
+    final lastIntentAt = _lastPresetIntentAt;
+    if (lastIntentAt != null) {
+      final elapsed = DateTime.now().difference(lastIntentAt);
+      if (elapsed < _presetCommitDelay) {
+        _schedulePresetCommit();
+        return;
+      }
+    }
+
+    _pendingPresetName = null;
+    _presetCommitRunning = true;
+    unawaited(_commitPresetSelection(presetName));
+  }
+
+  Future<void> _commitPresetSelection(String presetName) async {
+    try {
+      if (_committedPresetName != null &&
+          _samePresetName(_committedPresetName!, presetName)) {
+        if (_samePresetName(_preset.name, presetName)) {
+          _sendControls(_preset);
+          _localPresetIntentName = null;
+        }
+        if (mounted) {
+          setState(() {});
+        }
+        return;
+      }
+
+      await _player.selectPreset(presetName);
+      if (!mounted) {
+        return;
+      }
+
+      _committedPresetName = presetName;
+      if (_samePresetName(_preset.name, presetName)) {
+        _sendControls(_preset);
+        _localPresetIntentName = null;
+      }
+
+      setState(() {});
+    } catch (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    } finally {
+      _presetCommitRunning = false;
+      if (mounted && _pendingPresetName != null) {
+        _schedulePresetCommit();
+      }
+    }
+  }
+
+  void _cancelPendingPresetCommit() {
+    _presetCommitTimer?.cancel();
+    _presetCommitTimer = null;
+    _pendingPresetName = null;
+    _lastPresetIntentAt = null;
+  }
+
+  bool _samePresetName(String first, String second) {
+    return first.toLowerCase() == second.toLowerCase();
   }
 
   void _updatePreset(PresetState next) {
