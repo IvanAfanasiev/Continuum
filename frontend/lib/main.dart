@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'backend_player.dart';
+import 'player_controller.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,357 +54,80 @@ class ContinuumHome extends StatefulWidget {
 }
 
 class _ContinuumHomeState extends State<ContinuumHome> {
-  static const Duration _presetCommitDelay = Duration(milliseconds: 200);
-
-  final BackendPlayer _player = BackendPlayer();
-  final List<PresetState> _presets = [
-    PresetState(
-      name: 'Ambient',
-      color: const Color(0xff7dd3fc),
-      instruments: const ['Pad', 'Piano', 'Bass', 'Triangle'],
-      tempo: 1.0,
-      swing: 0.5,
-      backgroundAsset: 'assets/backgrounds/Ambient.jfif',
-    ),
-    PresetState(
-      name: 'Jazz',
-      color: const Color(0xffffc86b),
-      instruments: const ['Piano', 'Bass', 'Kick', 'Ride', 'Hihat'],
-      tempo: 1.0,
-      swing: 0.5,
-      backgroundAsset: 'assets/backgrounds/Jazz.png',
-    ),
-  ];
-
-  int _presetIndex = 1;
-  Timer? _presetCommitTimer;
-  bool _presetCommitRunning = false;
-  String? _pendingPresetName;
-  String? _localPresetIntentName;
-  String? _committedPresetName;
-  DateTime? _lastPresetIntentAt;
-
-  PresetState get _preset => _presets[_presetIndex];
-
-  @override
-  void initState() {
-    super.initState();
-    _player.setPlaybackListener(_handlePlaybackSnapshot);
-  }
+  final ContinuumPlayerController _controller = ContinuumPlayerController();
 
   @override
   void dispose() {
-    _presetCommitTimer?.cancel();
-    _player.setPlaybackListener(null);
-    unawaited(_player.dispose());
+    _controller.dispose();
     super.dispose();
-  }
-
-  void _handlePlaybackSnapshot(PlaybackSnapshot snapshot) {
-    if (!mounted) {
-      return;
-    }
-
-    final presetName = snapshot.presetName;
-    var changedPreset = false;
-    final localIntent = _localPresetIntentName;
-
-    if (presetName != null &&
-        localIntent != null &&
-        !_samePresetName(presetName, localIntent)) {
-      return;
-    }
-
-    if (presetName != null) {
-      _committedPresetName = presetName;
-    }
-
-    setState(() {
-      if (presetName != null) {
-        final nextIndex = _presets.indexWhere(
-          (preset) => preset.name.toLowerCase() == presetName.toLowerCase(),
-        );
-        if (nextIndex >= 0 && nextIndex != _presetIndex) {
-          _presetIndex = nextIndex;
-          changedPreset = true;
-        }
-      }
-    });
-
-    if (presetName != null &&
-        localIntent != null &&
-        _samePresetName(presetName, localIntent) &&
-        _pendingPresetName == null &&
-        !_presetCommitRunning) {
-      _localPresetIntentName = null;
-    }
-
-    if (snapshot.isPlaying && changedPreset) {
-      _sendControls(_preset);
-    }
-  }
-
-  Future<void> _togglePlayback() async {
-    _cancelPendingPresetCommit();
-    _localPresetIntentName = _preset.name;
-
-    if (_player.isPlaying) {
-      await _player.pause();
-      if (_committedPresetName == null ||
-          !_samePresetName(_committedPresetName!, _preset.name)) {
-        await _player.selectPreset(_preset.name);
-      }
-      _committedPresetName = _preset.name;
-    } else {
-      await _player.play(_preset.name);
-      _committedPresetName = _preset.name;
-      _sendControls(_preset);
-    }
-
-    _localPresetIntentName = null;
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  Future<void> _switchPreset(int direction) {
-    setState(() {
-      _presetIndex = (_presetIndex + direction) % _presets.length;
-      if (_presetIndex < 0) {
-        _presetIndex = _presets.length - 1;
-      }
-    });
-
-    _queuePresetCommit(_preset.name);
-    return Future.value();
-  }
-
-  void _queuePresetCommit(String presetName) {
-    _pendingPresetName = presetName;
-    _localPresetIntentName = presetName;
-    _lastPresetIntentAt = DateTime.now();
-    _schedulePresetCommit();
-  }
-
-  void _schedulePresetCommit() {
-    _presetCommitTimer?.cancel();
-    if (_presetCommitRunning || _pendingPresetName == null) {
-      return;
-    }
-
-    final lastIntentAt = _lastPresetIntentAt;
-    final elapsed = lastIntentAt == null
-        ? _presetCommitDelay
-        : DateTime.now().difference(lastIntentAt);
-    final wait = elapsed >= _presetCommitDelay
-        ? Duration.zero
-        : _presetCommitDelay - elapsed;
-
-    _presetCommitTimer = Timer(wait, _startPresetCommit);
-  }
-
-  void _startPresetCommit() {
-    _presetCommitTimer = null;
-    if (_presetCommitRunning) {
-      return;
-    }
-
-    final presetName = _pendingPresetName;
-    if (presetName == null) {
-      return;
-    }
-
-    final lastIntentAt = _lastPresetIntentAt;
-    if (lastIntentAt != null) {
-      final elapsed = DateTime.now().difference(lastIntentAt);
-      if (elapsed < _presetCommitDelay) {
-        _schedulePresetCommit();
-        return;
-      }
-    }
-
-    _pendingPresetName = null;
-    _presetCommitRunning = true;
-    unawaited(_commitPresetSelection(presetName));
-  }
-
-  Future<void> _commitPresetSelection(String presetName) async {
-    try {
-      if (_committedPresetName != null &&
-          _samePresetName(_committedPresetName!, presetName)) {
-        if (_samePresetName(_preset.name, presetName)) {
-          _sendControls(_preset);
-          _localPresetIntentName = null;
-        }
-        if (mounted) {
-          setState(() {});
-        }
-        return;
-      }
-
-      await _player.selectPreset(presetName);
-      if (!mounted) {
-        return;
-      }
-
-      _committedPresetName = presetName;
-      if (_samePresetName(_preset.name, presetName)) {
-        _sendControls(_preset);
-        _localPresetIntentName = null;
-      }
-
-      setState(() {});
-    } catch (_) {
-      if (mounted) {
-        setState(() {});
-      }
-    } finally {
-      _presetCommitRunning = false;
-      if (mounted && _pendingPresetName != null) {
-        _schedulePresetCommit();
-      }
-    }
-  }
-
-  void _cancelPendingPresetCommit() {
-    _presetCommitTimer?.cancel();
-    _presetCommitTimer = null;
-    _pendingPresetName = null;
-    _lastPresetIntentAt = null;
-  }
-
-  bool _samePresetName(String first, String second) {
-    return first.toLowerCase() == second.toLowerCase();
-  }
-
-  void _updatePreset(PresetState next) {
-    setState(() {
-      _presets[_presetIndex] = next;
-    });
-    _sendControls(next);
-  }
-
-  void _sendControls(PresetState preset) {
-    _player.applyControls(
-      tempo: preset.tempo,
-      swing: preset.swing,
-      volumes: preset.volumes.map(
-        (instrument, value) => MapEntry(
-          instrument,
-          _instrumentVolumeToBackend(value),
-        ),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: _Backdrop(
-              color: _preset.color,
-              asset: _preset.backgroundAsset,
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              child: Column(
-                children: [
-                  const _TopBar(),
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        Positioned.fill(child: _PresetDeck(preset: _preset)),
-                        Positioned.fill(
-                          child: _InteractionLayer(
-                            preset: _preset,
-                            isPlaying: _player.isPlaying,
-                            onPlayPressed: _togglePlayback,
-                            onPreviousPressed: () => _switchPreset(-1),
-                            onNextPressed: () => _switchPreset(1),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 88),
-                ],
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final preset = _controller.preset;
+
+        return Scaffold(
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: _Backdrop(
+                  color: preset.color,
+                  asset: preset.backgroundAsset,
+                ),
               ),
-            ),
+              SafeArea(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  child: Column(
+                    children: [
+                      const _TopBar(),
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            Positioned.fill(child: _PresetDeck(preset: preset)),
+                            Positioned.fill(
+                              child: _InteractionLayer(
+                                preset: preset,
+                                isPlaying: _controller.isPlaying,
+                                onPlayPressed: _controller.togglePlayback,
+                                onPreviousPressed: () =>
+                                    _controller.switchPreset(-1),
+                                onNextPressed: () =>
+                                    _controller.switchPreset(1),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 88),
+                    ],
+                  ),
+                ),
+              ),
+              DraggableScrollableSheet(
+                initialChildSize: 0.16,
+                minChildSize: 0.14,
+                maxChildSize: 0.70,
+                snap: true,
+                snapSizes: const [0.16, 0.70],
+                builder: (context, scrollController) {
+                  return ControlSheet(
+                    preset: preset,
+                    controller: scrollController,
+                    onChanged: _controller.updatePreset,
+                  );
+                },
+              ),
+            ],
           ),
-          DraggableScrollableSheet(
-            initialChildSize: 0.16,
-            minChildSize: 0.14,
-            maxChildSize: 0.70,
-            snap: true,
-            snapSizes: const [0.16, 0.70],
-            builder: (context, scrollController) {
-              return ControlSheet(
-                preset: _preset,
-                controller: scrollController,
-                onChanged: _updatePreset,
-              );
-            },
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
-}
-
-class PresetState {
-  PresetState({
-    required this.name,
-    required this.color,
-    required this.instruments,
-    required this.tempo,
-    required this.swing,
-    required this.backgroundAsset,
-    Map<String, double>? volumes,
-  }) : volumes = volumes ??
-            {
-              for (final instrument in instruments)
-                instrument: _defaultVolume(),
-            };
-
-  final String name;
-  final Color color;
-  final List<String> instruments;
-  final double tempo;
-  final double swing;
-  final String? backgroundAsset;
-  final Map<String, double> volumes;
-
-  PresetState copyWith({
-    double? tempo,
-    double? swing,
-    Map<String, double>? volumes,
-  }) {
-    return PresetState(
-      name: name,
-      color: color,
-      instruments: instruments,
-      tempo: tempo ?? this.tempo,
-      swing: swing ?? this.swing,
-      backgroundAsset: backgroundAsset,
-      volumes: volumes ?? Map<String, double>.from(this.volumes),
-    );
-  }
-}
-
-double _defaultVolume() {
-  return 0.5;
-}
-
-double _instrumentVolumeToBackend(double value) {
-  final normalized = value.clamp(0.0, 1.0).toDouble();
-  if (normalized <= 0.5) {
-    return normalized * 2.0;
-  }
-  return 1.0 + (normalized - 0.5);
 }
 
 class _Backdrop extends StatelessWidget {
