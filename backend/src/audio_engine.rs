@@ -85,6 +85,11 @@ impl AudioRenderer {
     }
 
     pub fn render_interleaved_f32(&mut self, output: &mut [f32]) {
+        if self.controls.paused() {
+            output.fill(0.0);
+            return;
+        }
+
         drain_note_queue(
             self.queue.as_ref(),
             &mut self.pending_notes,

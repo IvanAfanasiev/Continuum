@@ -1,17 +1,37 @@
 package com.continuum.app
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
+private const val NotificationPermissionRequest = 7001
+
 class MainActivity : FlutterActivity() {
-    private val audioPlayer by lazy { ContinuumAudioPlayer(this) }
+    private var audioChannel: MethodChannel? = null
+    private val audioPlayer by lazy {
+        ContinuumAudioPlayer(this) { event ->
+            runOnUiThread {
+                audioChannel?.invokeMethod("playbackEvent", event)
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
+        handleMediaAction(intent)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "continuum/audio")
-            .setMethodCallHandler { call, result ->
+        audioChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "continuum/audio")
+        audioChannel?.setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
                         "play" -> {
@@ -23,6 +43,16 @@ class MainActivity : FlutterActivity() {
                         "pause" -> {
                             audioPlayer.pause()
                             result.success(null)
+                        }
+
+                        "selectPreset" -> {
+                            val presetId = call.argument<Int>("presetId") ?: 0
+                            audioPlayer.selectPreset(presetId)
+                            result.success(null)
+                        }
+
+                        "state" -> {
+                            result.success(audioPlayer.currentState())
                         }
 
                         "controls" -> {
@@ -44,10 +74,38 @@ class MainActivity : FlutterActivity() {
                     )
                 }
             }
+        audioPlayer.emitCurrentState()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleMediaAction(intent)
     }
 
     override fun onDestroy() {
         audioPlayer.release()
         super.onDestroy()
+    }
+
+    private fun handleMediaAction(intent: Intent?) {
+        audioPlayer.handleMediaAction(intent?.action)
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return
+        }
+
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        requestPermissions(
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            NotificationPermissionRequest,
+        )
     }
 }

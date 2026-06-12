@@ -1,7 +1,8 @@
 use crate::instruments::{Instrument, INSTRUMENT_COUNT};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub struct RuntimeControls {
+    paused: AtomicBool,
     tempo: AtomicU32,
     swing: AtomicU32,
     instrument_volumes: [AtomicU32; INSTRUMENT_COUNT],
@@ -10,6 +11,8 @@ pub struct RuntimeControls {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlCommand {
     Applied,
+    Pause,
+    Resume,
     Stop,
     Unknown,
 }
@@ -23,10 +26,19 @@ impl Default for RuntimeControls {
 impl RuntimeControls {
     pub fn new() -> Self {
         Self {
+            paused: AtomicBool::new(false),
             tempo: atomic_f32(1.0),
             swing: atomic_f32(0.5),
             instrument_volumes: std::array::from_fn(|_| atomic_f32(1.0)),
         }
+    }
+
+    pub fn paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
     }
 
     pub fn tempo(&self) -> f32 {
@@ -81,6 +93,8 @@ pub fn apply_control_line(controls: &RuntimeControls, line: &str) -> ControlComm
 
     match command.as_str() {
         "quit" | "stop" | "exit" => ControlCommand::Stop,
+        "pause" => ControlCommand::Pause,
+        "play" | "resume" => ControlCommand::Resume,
         "tempo" => {
             let Some(value) = parse_value(parts.next()) else {
                 return ControlCommand::Unknown;

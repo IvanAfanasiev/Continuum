@@ -12,6 +12,7 @@ pub struct CoreRuntime {
     queue: Arc<ArrayQueue<NoteEvent>>,
     controls: Arc<RuntimeControls>,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     composer_thread: Option<JoinHandle<()>>,
 }
 
@@ -32,6 +33,8 @@ impl CoreRuntime {
         let composer_queue = queue.clone();
         let composer_controls = controls.clone();
         let composer_stop = stop.clone();
+        let paused = Arc::new(AtomicBool::new(false));
+        let composer_paused = paused.clone();
         let preset_name = preset_name.to_string();
         let composer_thread = thread::spawn(move || {
             composer::start_composing(
@@ -39,6 +42,7 @@ impl CoreRuntime {
                 &preset_name,
                 composer_controls,
                 composer_stop,
+                composer_paused,
             );
         });
 
@@ -46,6 +50,7 @@ impl CoreRuntime {
             queue,
             controls,
             stop,
+            paused,
             composer_thread: Some(composer_thread),
         }
     }
@@ -60,9 +65,15 @@ impl CoreRuntime {
 
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
         if let Some(thread) = self.composer_thread.take() {
             let _ = thread.join();
         }
+    }
+
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+        self.controls.set_paused(paused);
     }
 }
 
@@ -99,5 +110,9 @@ impl DesktopRuntime {
 
     pub fn stop(&mut self) {
         self.core.stop();
+    }
+
+    pub fn set_paused(&self, paused: bool) {
+        self.core.set_paused(paused);
     }
 }
