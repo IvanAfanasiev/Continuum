@@ -23,7 +23,9 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.SystemClock
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.max
@@ -61,6 +63,7 @@ class ContinuumAudioPlayer(
     private var accumulatedPlayMs = 0L
     private var playStartElapsedMs = 0L
     private val notificationTickerRunning = AtomicBoolean(false)
+    private val notificationTickerGeneration = AtomicInteger(0)
     private var expectedStopHandle = 0L
     private var notificationTickerThread: Thread? = null
     private var notificationVisible = false
@@ -88,25 +91,35 @@ class ContinuumAudioPlayer(
         setCallback(
             object : MediaSession.Callback() {
                 override fun onPlay() {
-                    if (!running.get()) {
-                        this@ContinuumAudioPlayer.playLast()
+                    ContinuumAudioSession.execute {
+                        if (!running.get()) {
+                            this@ContinuumAudioPlayer.playLast()
+                        }
                     }
                 }
 
                 override fun onPause() {
-                    this@ContinuumAudioPlayer.pause()
+                    ContinuumAudioSession.execute {
+                        this@ContinuumAudioPlayer.pause()
+                    }
                 }
 
                 override fun onStop() {
-                    this@ContinuumAudioPlayer.pause()
+                    ContinuumAudioSession.execute {
+                        this@ContinuumAudioPlayer.pause()
+                    }
                 }
 
                 override fun onSkipToPrevious() {
-                    this@ContinuumAudioPlayer.previousPreset()
+                    ContinuumAudioSession.execute {
+                        this@ContinuumAudioPlayer.previousPreset()
+                    }
                 }
 
                 override fun onSkipToNext() {
-                    this@ContinuumAudioPlayer.nextPreset()
+                    ContinuumAudioSession.execute {
+                        this@ContinuumAudioPlayer.nextPreset()
+                    }
                 }
             },
         )
@@ -122,7 +135,9 @@ class ContinuumAudioPlayer(
             }
 
             AudioManager.AUDIOFOCUS_LOSS,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pause()
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> ContinuumAudioSession.execute {
+                pause()
+            }
         }
     }
 
@@ -627,10 +642,18 @@ class ContinuumAudioPlayer(
             return
         }
 
+        val generation = notificationTickerGeneration.incrementAndGet()
         notificationTickerThread = thread(name = "ContinuumNotification", isDaemon = true) {
-            while (notificationTickerRunning.get()) {
+            while (
+                notificationTickerRunning.get() &&
+                notificationTickerGeneration.get() == generation
+            ) {
                 Thread.sleep(NotificationTickMs)
-                if (notificationTickerRunning.get() && running.get()) {
+                if (
+                    notificationTickerRunning.get() &&
+                    notificationTickerGeneration.get() == generation &&
+                    running.get()
+                ) {
                     updateMediaSession(isPlaying = true)
                     showPlaybackNotification(isPlaying = true)
                 }
@@ -640,10 +663,7 @@ class ContinuumAudioPlayer(
 
     private fun stopNotificationTicker() {
         notificationTickerRunning.set(false)
-        val thread = notificationTickerThread
-        if (thread != null && thread != Thread.currentThread()) {
-            thread.join(250)
-        }
+        notificationTickerGeneration.incrementAndGet()
         notificationTickerThread = null
     }
 
@@ -839,12 +859,26 @@ class ContinuumNative {
 }
 
 internal object ContinuumAudioSession {
+    private val controlExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ContinuumControl").apply {
+            isDaemon = true
+        }
+    }
+
+    @Volatile
     var player: ContinuumAudioPlayer? = null
+
+    fun execute(command: () -> Unit) {
+        controlExecutor.execute(command)
+    }
 }
 
 class ContinuumMediaActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        ContinuumAudioSession.player?.handleMediaAction(intent?.action)
+        val action = intent?.action
+        ContinuumAudioSession.execute {
+            ContinuumAudioSession.player?.handleMediaAction(action)
+        }
     }
 }
 

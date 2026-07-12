@@ -138,6 +138,7 @@ class DesktopProcessBackend implements PlaybackBackend {
 
     _state = BackendState.starting;
     _status = 'Starting';
+    _notify(preset: preset);
 
     try {
       final launch = await _resolveLaunch(preset);
@@ -185,6 +186,7 @@ class DesktopProcessBackend implements PlaybackBackend {
 
     _state = BackendState.stopping;
     _status = 'Paused';
+    _notify(preset: _processPreset);
     _sendLine('pause');
     await _process!.stdin.flush().catchError((_) {});
     _state = BackendState.idle;
@@ -363,6 +365,7 @@ class AndroidAudioBackend implements PlaybackBackend {
 
     _state = BackendState.starting;
     _status = 'Starting';
+    _notify(presetName: preset);
 
     try {
       await _channel.invokeMethod<void>('play', {
@@ -388,6 +391,7 @@ class AndroidAudioBackend implements PlaybackBackend {
 
     _state = BackendState.stopping;
     _status = 'Paused';
+    _notify();
 
     try {
       await _channel.invokeMethod<void>('pause');
@@ -402,6 +406,9 @@ class AndroidAudioBackend implements PlaybackBackend {
 
   @override
   Future<void> selectPreset(String preset) async {
+    _status = isPlaying ? 'Playing' : 'Paused';
+    _notify(presetName: preset);
+
     try {
       await _channel.invokeMethod<void>('selectPreset', {
         'presetId': _presetId(preset),
@@ -546,7 +553,8 @@ class UnsupportedBackend implements PlaybackBackend {
   Future<void> dispose() async {}
 
   @override
-  void setPlaybackListener(void Function(PlaybackSnapshot snapshot)? listener) {}
+  void setPlaybackListener(
+      void Function(PlaybackSnapshot snapshot)? listener) {}
 
   @override
   void applyControls({

@@ -69,63 +69,179 @@ class _ContinuumHomeState extends State<ContinuumHome> {
       builder: (context, _) {
         final preset = _controller.preset;
 
-        return Scaffold(
-          body: Stack(
-            children: [
-              Positioned.fill(
-                child: _Backdrop(
-                  color: preset.color,
-                  asset: preset.backgroundAsset,
-                ),
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final useDesktopLayout = constraints.maxWidth >= 900 &&
+                constraints.maxWidth >= constraints.maxHeight;
+
+            if (useDesktopLayout) {
+              return _DesktopHomeLayout(
+                preset: preset,
+                isPlaying: _controller.isPlaying,
+                onPlayPressed: _controller.togglePlayback,
+                onPreviousPressed: () => _controller.switchPreset(-1),
+                onNextPressed: () => _controller.switchPreset(1),
+                onChanged: _controller.updatePreset,
+              );
+            }
+
+            return _MobileHomeLayout(
+              preset: preset,
+              isPlaying: _controller.isPlaying,
+              onPlayPressed: _controller.togglePlayback,
+              onPreviousPressed: () => _controller.switchPreset(-1),
+              onNextPressed: () => _controller.switchPreset(1),
+              onChanged: _controller.updatePreset,
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _MobileHomeLayout extends StatelessWidget {
+  const _MobileHomeLayout({
+    required this.preset,
+    required this.isPlaying,
+    required this.onPlayPressed,
+    required this.onPreviousPressed,
+    required this.onNextPressed,
+    required this.onChanged,
+  });
+
+  final PresetState preset;
+  final bool isPlaying;
+  final Future<void> Function() onPlayPressed;
+  final Future<void> Function() onPreviousPressed;
+  final Future<void> Function() onNextPressed;
+  final ValueChanged<PresetState> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: _Backdrop(
+              color: preset.color,
+              asset: preset.backgroundAsset,
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              child: Column(
+                children: [
+                  const _TopBar(),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Positioned.fill(child: _PresetDeck(preset: preset)),
+                        Positioned.fill(
+                          child: _InteractionLayer(
+                            preset: preset,
+                            isPlaying: isPlaying,
+                            onPlayPressed: onPlayPressed,
+                            onPreviousPressed: onPreviousPressed,
+                            onNextPressed: onNextPressed,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 88),
+                ],
               ),
-              SafeArea(
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                  child: Column(
+            ),
+          ),
+          DraggableScrollableSheet(
+            initialChildSize: 0.16,
+            minChildSize: 0.14,
+            maxChildSize: 0.70,
+            snap: true,
+            snapSizes: const [0.16, 0.70],
+            builder: (context, scrollController) {
+              return ControlSheet(
+                preset: preset,
+                controller: scrollController,
+                onChanged: onChanged,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopHomeLayout extends StatelessWidget {
+  const _DesktopHomeLayout({
+    required this.preset,
+    required this.isPlaying,
+    required this.onPlayPressed,
+    required this.onPreviousPressed,
+    required this.onNextPressed,
+    required this.onChanged,
+  });
+
+  final PresetState preset;
+  final bool isPlaying;
+  final Future<void> Function() onPlayPressed;
+  final Future<void> Function() onPreviousPressed;
+  final Future<void> Function() onNextPressed;
+  final ValueChanged<PresetState> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: _Backdrop(
+              color: preset.color,
+              asset: preset.backgroundAsset,
+            ),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: SafeArea(
+                  right: false,
+                  child: Stack(
                     children: [
-                      const _TopBar(),
-                      Expanded(
-                        child: Stack(
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(30, 24, 28, 30),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Positioned.fill(child: _PresetDeck(preset: preset)),
-                            Positioned.fill(
-                              child: _InteractionLayer(
-                                preset: preset,
-                                isPlaying: _controller.isPlaying,
-                                onPlayPressed: _controller.togglePlayback,
-                                onPreviousPressed: () =>
-                                    _controller.switchPreset(-1),
-                                onNextPressed: () =>
-                                    _controller.switchPreset(1),
-                              ),
-                            ),
+                            const _TopBar(),
+                            const Spacer(),
+                            _DesktopPresetDeck(preset: preset),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 88),
+                      Positioned.fill(
+                        child: _InteractionLayer(
+                          preset: preset,
+                          isPlaying: isPlaying,
+                          onPlayPressed: onPlayPressed,
+                          onPreviousPressed: onPreviousPressed,
+                          onNextPressed: onNextPressed,
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
-              DraggableScrollableSheet(
-                initialChildSize: 0.16,
-                minChildSize: 0.14,
-                maxChildSize: 0.70,
-                snap: true,
-                snapSizes: const [0.16, 0.70],
-                builder: (context, scrollController) {
-                  return ControlSheet(
-                    preset: preset,
-                    controller: scrollController,
-                    onChanged: _controller.updatePreset,
-                  );
-                },
+              _DesktopControlPanel(
+                preset: preset,
+                onChanged: onChanged,
               ),
             ],
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 }
@@ -157,13 +273,16 @@ class _Backdrop extends StatelessWidget {
               end: Alignment.bottomRight,
               colors: [
                 Color.alphaBlend(
-                  color.withOpacity(asset == null ? 0.14 : 0.22),
-                  const Color(0xff0d0f12).withOpacity(asset == null ? 1.0 : 0.70),
+                  color.withValues(alpha: asset == null ? 0.14 : 0.22),
+                  const Color(0xff0d0f12)
+                      .withValues(alpha: asset == null ? 1.0 : 0.70),
                 ),
-                const Color(0xff111318).withOpacity(asset == null ? 1.0 : 0.78),
+                const Color(0xff111318)
+                    .withValues(alpha: asset == null ? 1.0 : 0.78),
                 Color.alphaBlend(
-                  const Color(0xffffc86b).withOpacity(0.08),
-                  const Color(0xff0d0f12).withOpacity(asset == null ? 1.0 : 0.76),
+                  const Color(0xffffc86b).withValues(alpha: 0.08),
+                  const Color(0xff0d0f12)
+                      .withValues(alpha: asset == null ? 1.0 : 0.76),
                 ),
               ],
             ),
@@ -238,6 +357,45 @@ class _PresetDeck extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _DesktopPresetDeck extends StatelessWidget {
+  const _DesktopPresetDeck({required this.preset});
+
+  final PresetState preset;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 680),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            preset.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.displayLarge?.copyWith(
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0,
+              height: 0.96,
+            ),
+          ),
+          const SizedBox(height: 22),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final instrument in preset.instruments)
+                _InstrumentChip(label: instrument, color: preset.color),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -319,11 +477,15 @@ class _TransparentAction extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          splashColor: color.withOpacity(0.08),
-          highlightColor: color.withOpacity(0.04),
+          splashColor: color.withValues(alpha: 0.08),
+          highlightColor: color.withValues(alpha: 0.04),
           onTap: () => unawaited(onPressed()),
           child: Center(
-            child: Icon(icon, size: iconSize, color: color.withOpacity(0.92)),
+            child: Icon(
+              icon,
+              size: iconSize,
+              color: color.withValues(alpha: 0.92),
+            ),
           ),
         ),
       ),
@@ -342,15 +504,48 @@ class _InstrumentChip extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Color.alphaBlend(
-          color.withOpacity(0.16),
+          color.withValues(alpha: 0.16),
           const Color(0xff17191d),
         ),
-        border: Border.all(color: color.withOpacity(0.32)),
+        border: Border.all(color: color.withValues(alpha: 0.32)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         child: Text(label, style: Theme.of(context).textTheme.labelMedium),
+      ),
+    );
+  }
+}
+
+class _DesktopControlPanel extends StatelessWidget {
+  const _DesktopControlPanel({
+    required this.preset,
+    required this.onChanged,
+  });
+
+  final PresetState preset;
+  final ValueChanged<PresetState> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      left: false,
+      child: SizedBox(
+        width: 380,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xff17191d).withValues(alpha: 0.94),
+            border: Border(
+              left: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+          ),
+          child: _ControlPanelContent(
+            preset: preset,
+            onChanged: onChanged,
+            padding: const EdgeInsets.fromLTRB(22, 24, 22, 28),
+          ),
+        ),
       ),
     );
   }
@@ -370,13 +565,14 @@ class ControlSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xff17191d),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
         boxShadow: const [
           BoxShadow(
             color: Colors.black54,
@@ -385,10 +581,40 @@ class ControlSheet extends StatelessWidget {
           ),
         ],
       ),
-      child: ListView(
+      child: _ControlPanelContent(
+        preset: preset,
         controller: controller,
+        onChanged: onChanged,
+        showHandle: true,
         padding: EdgeInsets.fromLTRB(18, 10, 18, 28 + bottomInset),
-        children: [
+      ),
+    );
+  }
+}
+
+class _ControlPanelContent extends StatelessWidget {
+  const _ControlPanelContent({
+    required this.preset,
+    required this.onChanged,
+    required this.padding,
+    this.controller,
+    this.showHandle = false,
+  });
+
+  final PresetState preset;
+  final ValueChanged<PresetState> onChanged;
+  final EdgeInsets padding;
+  final ScrollController? controller;
+  final bool showHandle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListView(
+      controller: controller,
+      padding: padding,
+      children: [
+        if (showHandle) ...[
           Center(
             child: Container(
               width: 46,
@@ -400,70 +626,70 @@ class ControlSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Icon(Icons.tune, color: theme.colorScheme.primary),
-              const SizedBox(width: 10),
-              Text(
-                'Settings',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+        ],
+        Row(
+          children: [
+            Icon(Icons.tune, color: theme.colorScheme.primary),
+            const SizedBox(width: 10),
+            Text(
+              'Settings',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
               ),
-              const Spacer(),
-              Text(
-                preset.name,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: Colors.white60,
-                ),
+            ),
+            const Spacer(),
+            Text(
+              preset.name,
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: Colors.white60,
               ),
-            ],
-          ),
-          const SizedBox(height: 18),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        _ControlSlider(
+          icon: Icons.speed,
+          label: 'Tempo',
+          value: preset.tempo,
+          min: 0.65,
+          max: 1.35,
+          defaultValue: 1.0,
+          valueLabel: '${(preset.tempo * 100).round()}%',
+          onChanged: (value) => onChanged(preset.copyWith(tempo: value)),
+        ),
+        _ControlSlider(
+          icon: Icons.shuffle,
+          label: 'Swing',
+          value: preset.swing,
+          min: 0.0,
+          max: 1.0,
+          defaultValue: 0.5,
+          valueLabel: '${(preset.swing * 100).round()}%',
+          onChanged: (value) => onChanged(preset.copyWith(swing: value)),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Instruments',
+          style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70),
+        ),
+        const SizedBox(height: 8),
+        for (final instrument in preset.instruments)
           _ControlSlider(
-            icon: Icons.speed,
-            label: 'Tempo',
-            value: preset.tempo,
-            min: 0.65,
-            max: 1.35,
-            defaultValue: 1.0,
-            valueLabel: '${(preset.tempo * 100).round()}%',
-            onChanged: (value) => onChanged(preset.copyWith(tempo: value)),
-          ),
-          _ControlSlider(
-            icon: Icons.shuffle,
-            label: 'Swing',
-            value: preset.swing,
+            icon: _instrumentIcon(instrument),
+            label: instrument,
+            value: preset.volumes[instrument] ?? 0.5,
             min: 0.0,
             max: 1.0,
             defaultValue: 0.5,
-            valueLabel: '${(preset.swing * 100).round()}%',
-            onChanged: (value) => onChanged(preset.copyWith(swing: value)),
+            valueLabel:
+                '${((preset.volumes[instrument] ?? 0.5) * 100).round()}%',
+            onChanged: (value) {
+              final volumes = Map<String, double>.from(preset.volumes);
+              volumes[instrument] = value;
+              onChanged(preset.copyWith(volumes: volumes));
+            },
           ),
-          const SizedBox(height: 10),
-          Text(
-            'Instruments',
-            style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: 8),
-          for (final instrument in preset.instruments)
-            _ControlSlider(
-              icon: _instrumentIcon(instrument),
-              label: instrument,
-              value: preset.volumes[instrument] ?? 0.5,
-              min: 0.0,
-              max: 1.0,
-              defaultValue: 0.5,
-              valueLabel:
-                  '${((preset.volumes[instrument] ?? 0.5) * 100).round()}%',
-              onChanged: (value) {
-                final volumes = Map<String, double>.from(preset.volumes);
-                volumes[instrument] = value;
-                onChanged(preset.copyWith(volumes: volumes));
-              },
-            ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -550,7 +776,7 @@ class _SliderDefaultPainter extends CustomPainter {
     final x = size.width * percent;
     final centerY = size.height * 0.5;
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.34)
+      ..color = Colors.white.withValues(alpha: 0.34)
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round;
     canvas.drawLine(
@@ -567,15 +793,15 @@ class _SliderDefaultPainter extends CustomPainter {
 }
 
 class _ContinuumMark extends StatelessWidget {
-  const _ContinuumMark({required this.color, this.size = 28});
+  const _ContinuumMark({required this.color});
 
   final Color color;
-  final double size;
+  static const double _size = 28;
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      size: Size.square(size),
+      size: const Size.square(_size),
       painter: _ContinuumMarkPainter(color: color),
     );
   }
@@ -597,12 +823,12 @@ class _ContinuumMarkPainter extends CustomPainter {
 
     canvas.drawPath(
       diamond,
-      Paint()..color = const Color(0xff17191d).withOpacity(0.94),
+      Paint()..color = const Color(0xff17191d).withValues(alpha: 0.94),
     );
     canvas.drawPath(
       diamond,
       Paint()
-        ..color = color.withOpacity(0.42)
+        ..color = color.withValues(alpha: 0.42)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.4,
     );

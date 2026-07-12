@@ -34,7 +34,10 @@ class ContinuumPlayerController extends ChangeNotifier {
   int _presetIndex = 1;
   Timer? _presetCommitTimer;
   bool _presetCommitRunning = false;
+  bool _playbackCommitRunning = false;
   bool _disposed = false;
+  bool? _optimisticIsPlaying;
+  bool? _pendingPlaybackState;
   String? _pendingPresetName;
   String? _localPresetIntentName;
   String? _committedPresetName;
@@ -42,29 +45,18 @@ class ContinuumPlayerController extends ChangeNotifier {
 
   PresetState get preset => _presets[_presetIndex];
   List<PresetState> get presets => List.unmodifiable(_presets);
-  bool get isPlaying => _player.isPlaying;
+  bool get isPlaying => _optimisticIsPlaying ?? _player.isPlaying;
   String get status => _player.status;
   BackendState get state => _player.state;
 
-  Future<void> togglePlayback() async {
+  Future<void> togglePlayback() {
     _cancelPendingPresetCommit();
+    _pendingPlaybackState = !isPlaying;
+    _optimisticIsPlaying = _pendingPlaybackState;
     _localPresetIntentName = preset.name;
-
-    if (_player.isPlaying) {
-      await _player.pause();
-      if (_committedPresetName == null ||
-          !_samePresetName(_committedPresetName!, preset.name)) {
-        await _player.selectPreset(preset.name);
-      }
-      _committedPresetName = preset.name;
-    } else {
-      await _player.play(preset.name);
-      _committedPresetName = preset.name;
-      _sendControls(preset);
-    }
-
-    _localPresetIntentName = null;
+    _startPlaybackCommit();
     _notify();
+    return Future.value();
   }
 
   Future<void> switchPreset(int direction) {
@@ -182,6 +174,56 @@ class ContinuumPlayerController extends ChangeNotifier {
     unawaited(_commitPresetSelection(presetName));
   }
 
+  void _startPlaybackCommit() {
+    if (_playbackCommitRunning) {
+      return;
+    }
+
+    final shouldPlay = _pendingPlaybackState;
+    if (shouldPlay == null) {
+      return;
+    }
+
+    _pendingPlaybackState = null;
+    _playbackCommitRunning = true;
+    unawaited(_commitPlaybackState(shouldPlay, preset.name));
+  }
+
+  Future<void> _commitPlaybackState(bool shouldPlay, String presetName) async {
+    try {
+      if (shouldPlay) {
+        await _player.play(presetName);
+        _committedPresetName = presetName;
+        if (_samePresetName(preset.name, presetName)) {
+          _sendControls(preset);
+        }
+      } else {
+        await _player.pause();
+        if (_committedPresetName == null ||
+            !_samePresetName(_committedPresetName!, presetName)) {
+          await _player.selectPreset(presetName);
+        }
+        _committedPresetName = presetName;
+      }
+    } catch (_) {
+      _notify();
+    } finally {
+      _playbackCommitRunning = false;
+      if (_disposed) {
+        return;
+      }
+
+      if (_pendingPlaybackState != null) {
+        _startPlaybackCommit();
+        return;
+      }
+
+      _optimisticIsPlaying = null;
+      _localPresetIntentName = null;
+      _notify();
+    }
+  }
+
   Future<void> _commitPresetSelection(String presetName) async {
     try {
       if (_committedPresetName != null &&
@@ -258,7 +300,8 @@ class PresetState {
     Map<String, double>? volumes,
   }) : volumes = volumes ??
             {
-              for (final instrument in instruments) instrument: _defaultVolume(),
+              for (final instrument in instruments)
+                instrument: _defaultVolume(),
             };
 
   final String name;

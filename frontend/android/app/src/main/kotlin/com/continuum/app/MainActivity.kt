@@ -32,48 +32,50 @@ class MainActivity : FlutterActivity() {
 
         audioChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "continuum/audio")
         audioChannel?.setMethodCallHandler { call, result ->
-                try {
-                    when (call.method) {
-                        "play" -> {
-                            val presetId = call.argument<Int>("presetId") ?: 0
-                            audioPlayer.play(presetId)
-                            result.success(null)
-                        }
-
-                        "pause" -> {
-                            audioPlayer.pause()
-                            result.success(null)
-                        }
-
-                        "selectPreset" -> {
-                            val presetId = call.argument<Int>("presetId") ?: 0
-                            audioPlayer.selectPreset(presetId)
-                            result.success(null)
-                        }
-
-                        "state" -> {
-                            result.success(audioPlayer.currentState())
-                        }
-
-                        "controls" -> {
-                            audioPlayer.updateControls(
-                                tempo = call.argument<Double>("tempo"),
-                                swing = call.argument<Double>("swing"),
-                                volumes = call.argument<Map<*, *>>("volumes"),
-                            )
-                            result.success(null)
-                        }
-
-                        else -> result.notImplemented()
+            when (call.method) {
+                "play" -> {
+                    runAudioCommand(result) {
+                        val presetId = call.argument<Int>("presetId") ?: 0
+                        audioPlayer.play(presetId)
+                        null
                     }
-                } catch (error: Throwable) {
-                    result.error(
-                        "continuum_audio",
-                        "${error.javaClass.simpleName}: ${error.message}",
-                        null,
-                    )
                 }
+
+                "pause" -> {
+                    runAudioCommand(result) {
+                        audioPlayer.pause()
+                        null
+                    }
+                }
+
+                "selectPreset" -> {
+                    runAudioCommand(result) {
+                        val presetId = call.argument<Int>("presetId") ?: 0
+                        audioPlayer.selectPreset(presetId)
+                        null
+                    }
+                }
+
+                "state" -> {
+                    runAudioCommand(result) {
+                        audioPlayer.currentState()
+                    }
+                }
+
+                "controls" -> {
+                    runAudioCommand(result) {
+                        audioPlayer.updateControls(
+                            tempo = call.argument<Double>("tempo"),
+                            swing = call.argument<Double>("swing"),
+                            volumes = call.argument<Map<*, *>>("volumes"),
+                        )
+                        null
+                    }
+                }
+
+                else -> result.notImplemented()
             }
+        }
         audioPlayer.emitCurrentState()
     }
 
@@ -84,12 +86,35 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        audioPlayer.release()
+        ContinuumAudioSession.execute {
+            audioPlayer.release()
+        }
         super.onDestroy()
     }
 
+    private fun runAudioCommand(result: MethodChannel.Result, command: () -> Any?) {
+        ContinuumAudioSession.execute {
+            try {
+                val value = command()
+                runOnUiThread {
+                    result.success(value)
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    result.error(
+                        "continuum_audio",
+                        "${error.javaClass.simpleName}: ${error.message}",
+                        null,
+                    )
+                }
+            }
+        }
+    }
+
     private fun handleMediaAction(intent: Intent?) {
-        audioPlayer.handleMediaAction(intent?.action)
+        ContinuumAudioSession.execute {
+            audioPlayer.handleMediaAction(intent?.action)
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
