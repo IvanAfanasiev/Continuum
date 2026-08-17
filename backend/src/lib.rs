@@ -6,6 +6,11 @@ pub mod instruments;
 pub mod markov;
 pub mod runtime;
 
+pub mod phrase;
+pub mod section;
+pub mod step;
+pub mod theory;
+
 pub use controls::RuntimeControls;
 pub use instruments::{EnvelopeConfig, Instrument};
 
