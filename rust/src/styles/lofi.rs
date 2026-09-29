@@ -43,12 +43,23 @@ const GUITAR_W: &[f32] = &[
 const KICK_ALT_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.35, 0.0, 0.2, 0.0, 0.0, 0.0,
 ];
+// Синкопированный фанк-кик (ref: Redbone — без прямой бочки).
+const KICK_SYNCOP_W: &[f32] = &[
+    0.5, 0.9, 0.9, 0.6, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.8, 0.0, 0.4, 0.0,
+];
+const KICK_POLES: &[&[f32]] = &[KICK_W, KICK_ALT_W, KICK_SYNCOP_W];
 const BASS_ALT_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
 const HAT_ALT_W: &[f32] = &[
     0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45,
 ];
+// Разреженные оффбиты (ref: Snowman, Redbone — только слабые доли,
+// никаких шестнадцатых тиков).
+const HAT_SPARSE_W: &[f32] = &[
+    0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.4,
+];
+const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_ALT_W, HAT_SPARSE_W];
 const PLUCK_ALT_W: &[f32] = &[
     0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0,
 ];
@@ -88,7 +99,7 @@ impl Style for LofiStyle {
     }
 
     fn swing_ratio(&self) -> f32 {
-        1.35
+        1.45
     }
 
     fn scale(&self) -> &'static [u8] {
@@ -168,6 +179,7 @@ impl Style for LofiStyle {
             vel_base: 0.9,
             vel_jitter: 0.1,
             alt: Some(KICK_ALT_W),
+            poles: Some(KICK_POLES),
             ..RoleGuide::kit(KICK_W, 36, 0.9)
         };
         let pad = RoleGuide {
@@ -193,6 +205,7 @@ impl Style for LofiStyle {
             vel_energy: 0.15,
             vel_jitter: 0.08,
             alt: Some(HAT_ALT_W),
+            poles: Some(HAT_POLES),
             ..RoleGuide::kit(HAT_W, 42, 0.45)
         };
         // Нарезки гитары: редкие щипки по мотиву сида поверх Rhodes.
