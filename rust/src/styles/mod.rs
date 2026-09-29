@@ -694,6 +694,12 @@ mod tests {
                 if let Some(alt) = guide.alt {
                     assert_eq!(alt.len(), spm, "{name} slot {i}: alt len");
                 }
+                if let Some(poles) = guide.poles {
+                    assert!(!poles.is_empty(), "{name} slot {i}: empty poles");
+                    for (j, pole) in poles.iter().enumerate() {
+                        assert_eq!(pole.len(), spm, "{name} slot {i} pole {j}: len");
+                    }
+                }
             }
         }
     }

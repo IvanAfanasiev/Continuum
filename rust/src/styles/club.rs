@@ -40,12 +40,27 @@ const VOCAL_W: &[f32] = &[
 const KICK_ALT_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.6, 0.0,
 ];
+// Полюса кика (выбор — сидом на весь трек):
+// строгая четверка, синкопа с толчками (ref: Bad Angel),
+// драйв восьмыми (ref: Hysteria).
+const KICK_SYNCOP_W: &[f32] = &[
+    1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 1.0, 0.0, 0.6, 0.0,
+];
+const KICK_DRIVE8_W: &[f32] = &[
+    1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.8, 0.6,
+];
+const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W];
 const BASS_ALT_W: &[f32] = &[
     0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0,
 ];
 const HAT_ALT_W: &[f32] = &[
     0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55,
 ];
+// Плотные шестнадцатые (ref: все три трека держат хэт почти весь такт).
+const HAT_BUSY16_W: &[f32] = &[
+    0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.4, 0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.5,
+];
+const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_ALT_W, HAT_BUSY16_W];
 const LASER_ALT_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0,
 ];
@@ -145,6 +160,7 @@ impl Style for ClubStyle {
             vel_base: 0.95,
             vel_energy: 0.05,
             alt: Some(KICK_ALT_W),
+            poles: Some(KICK_POLES),
             ..RoleGuide::kit(FOUR_FLOOR, 36, 0.95)
         };
         let pad = RoleGuide {
@@ -168,6 +184,7 @@ impl Style for ClubStyle {
             vel_energy: 0.3,
             vel_jitter: 0.1,
             alt: Some(HAT_ALT_W),
+            poles: Some(HAT_POLES),
             ..RoleGuide::kit(HAT_W, 42, 0.4)
         };
         let pluck = RoleGuide {
