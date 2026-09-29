@@ -1,0 +1,20 @@
+[package]
+name = "rust_lib_cont"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.13.0"
+cpal = "0.15"
+rand = "0.8"
+crossbeam = "0.8"
+
+# Только Android: JavaVM для ndk-context (cpal/Oboe без него падают).
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "0.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

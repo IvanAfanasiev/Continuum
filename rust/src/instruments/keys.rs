@@ -1,0 +1,128 @@
+use std::f32::consts::TAU;
+
+use super::{dsp::release_fade, dsp::Svf, sane_sample_rate, NoteEvent, Voice};
+use crate::core::midi_to_freq;
+
+const INDEX_FLOOR: f32 = 0.15;
+const INDEX_DECAY: f32 = 6.0;
+const TINE_RATIO: f32 = 3.98;
+const TINE_DECAY: f32 = 45.0;
+const TREMOLO_HZ: f32 = 4.5;
+const TREMOLO_DEPTH: f32 = 0.22;
+const ATTACK_SECS: f32 = 0.003;
+const AMP_DECAY_RATE: f32 = 3.5;
+const SUSTAIN_LEVEL: f32 = 0.55;
+const FADE_SECS: f32 = 0.08;
+const VOICE_GAIN: f32 = 0.65;
+/// Полирующий lowpass: срезает цифровой блеск FM-боковых на самом верху.
+const POLISH_HZ: f32 = 9500.0;
+const POLISH_Q: f32 = 0.7;
+
+/// Голос электро-пиано в духе Rhodes: FM-корпус с затухающим индексом
+/// (атака «кусается», сустейн — чистый синус) + металлический «tine»
+/// на 3.98× частоте + мягкое тремоло.
+#[derive(Clone, Default)]
+pub struct KeysVoice {
+    sample_rate: f32,
+    car_phase: f32,
+    mod_phase: f32,
+    tine_phase: f32,
+    trem_phase: f32,
+    polish: Svf,
+    frequency: f32,
+    gain: f32,
+    /// Стартовая FM-глубина и звон молоточка от силы удара:
+    /// тихая нота — чистый тон, громкая — лающий атакующий звон.
+    /// Так ведет себя настоящий Rhodes.
+    index_start: f32,
+    tine_gain: f32,
+    t: f32,
+    samples_left: usize,
+}
+
+impl Voice for KeysVoice {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sane_sample_rate(sample_rate);
+    }
+
+    fn trigger(&mut self, note: &NoteEvent) {
+        self.frequency = midi_to_freq(note.midi_pitch);
+        self.samples_left = (note.duration_secs * self.sample_rate).max(1.0) as usize;
+        self.gain = note.velocity;
+        self.index_start = 1.2 + 3.0 * note.velocity;
+        self.tine_gain = 0.12 + 0.45 * note.velocity;
+        self.t = 0.0;
+        self.car_phase = 0.0;
+        self.mod_phase = 0.0;
+        self.tine_phase = 0.0;
+        self.polish.scrub_denormals();
+        // trem_phase сохраняется: тремоло общее на инструмент, как LFO педали.
+    }
+
+    fn next_sample(&mut self) -> f32 {
+        if self.samples_left == 0 {
+            return 0.0;
+        }
+        self.samples_left -= 1;
+
+        let sample_rate = self.sample_rate;
+        let attack_raw = (self.t / ATTACK_SECS).min(1.0);
+        let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
+        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-AMP_DECAY_RATE * self.t).exp();
+        let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
+
+        // FM 1:1 с падающим индексом: колокол в атаке, синус в сустейне.
+        let index = INDEX_FLOOR + (self.index_start - INDEX_FLOOR) * (-INDEX_DECAY * self.t).exp();
+        self.mod_phase = (self.mod_phase + self.frequency / sample_rate) % 1.0;
+        self.car_phase = (self.car_phase + self.frequency / sample_rate) % 1.0;
+        let body = (self.car_phase * TAU + index * (self.mod_phase * TAU).sin()).sin();
+
+        // Металлический «tine» молоточка.
+        self.tine_phase = (self.tine_phase + (self.frequency * TINE_RATIO) / sample_rate) % 1.0;
+        let tine = (self.tine_phase * TAU).sin() * (-TINE_DECAY * self.t).exp() * self.tine_gain;
+
+        self.trem_phase = (self.trem_phase + TREMOLO_HZ / sample_rate) % 1.0;
+        let tremolo = 1.0 + TREMOLO_DEPTH * (self.trem_phase * TAU).sin();
+
+        self.t += 1.0 / sample_rate;
+        let raw = (body * 0.75 + tine) * self.gain * amp * attack * fade * tremolo;
+        let (polished, _, _) = self.polish.process(raw, POLISH_HZ, POLISH_Q, sample_rate);
+        polished * VOICE_GAIN
+    }
+
+    fn is_active(&self) -> bool {
+        self.samples_left > 0
+    }
+
+    fn reset(&mut self) {
+        self.samples_left = 0;
+        self.t = 0.0;
+        self.gain = 0.0;
+        self.polish.reset();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Instrument, VoicePool};
+    use super::*;
+
+    #[test]
+    fn keys_ring_with_tine_and_tremolo() {
+        let sr = 44_100.0;
+        let mut keys = VoicePool::keys(7, 8);
+        keys.set_sample_rate(sr);
+        // Джазовый аккорд: тоника + септима.
+        for pitch in [48, 55, 58, 62] {
+            keys.trigger(&NoteEvent::new(7, pitch, 0.7, 1.5));
+        }
+        let mut peak: f32 = 0.0;
+        for _ in 0..(sr as usize) {
+            let s = keys.next_sample();
+            assert!(s.is_finite());
+            peak = peak.max(s.abs());
+        }
+        assert!(peak > 0.2, "keys too quiet: {peak}");
+        assert!(keys.is_active(), "long chord cut too early");
+    }
+}

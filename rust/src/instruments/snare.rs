@@ -1,0 +1,146 @@
+use std::f32::consts::TAU;
+
+use super::{
+    dsp::{note_seed, release_fade, Noise, Svf},
+    sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
+};
+
+/// Электро-снейр в духе 808: тональное тело + шум через резонансную
+/// полосу SVF (вместо грубой HP+LP связки — панч точнее, шипения меньше)
+/// + «snap» в первую миллисекунду.
+const SNARE_LEN_SECS: f32 = 0.22;
+const BODY_START_HZ: f32 = 190.0;
+const BODY_END_HZ: f32 = 120.0;
+const BODY_SWEEP: f32 = 30.0;
+const BODY_DECAY: f32 = 38.0;
+const NOISE_CENTER_HZ: f32 = 2200.0;
+const NOISE_Q: f32 = 0.9;
+const NOISE_DECAY: f32 = 22.0;
+const NOISE_GAIN: f32 = 0.8;
+const SNAP_DECAY: f32 = 300.0;
+const SNAP_GAIN: f32 = 0.8;
+const ATTACK_SECS: f32 = 0.0005;
+const FADE_SECS: f32 = 0.008;
+
+#[derive(Clone, Default)]
+struct SnareVoice {
+    sample_rate: f32,
+    t: f32,
+    phase: f32,
+    gain: f32,
+    samples_left: usize,
+    noise: Noise,
+    bp: Svf,
+}
+
+impl Voice for SnareVoice {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sane_sample_rate(sample_rate);
+    }
+
+    fn trigger(&mut self, note: &NoteEvent) {
+        self.samples_left = (SNARE_LEN_SECS * self.sample_rate) as usize;
+        self.gain = note.velocity;
+        self.t = 0.0;
+        self.phase = 0.0;
+        self.bp.reset();
+        self.noise = Noise::new(note_seed(note, 0x5A4E));
+    }
+
+    fn next_sample(&mut self) -> f32 {
+        if self.samples_left == 0 {
+            return 0.0;
+        }
+        self.samples_left -= 1;
+
+        let sample_rate = self.sample_rate;
+        let freq = BODY_END_HZ + (BODY_START_HZ - BODY_END_HZ) * (-BODY_SWEEP * self.t).exp();
+        self.phase = (self.phase + freq / sample_rate) % 1.0;
+        let body = (self.phase * TAU).sin() + 0.3 * (self.phase * TAU * 2.0).sin();
+        let body = body * (-BODY_DECAY * self.t).exp() * 0.7;
+
+        let raw_noise = self.noise.sample();
+        let snap = raw_noise * (-SNAP_DECAY * self.t).exp() * SNAP_GAIN;
+        let (_, hiss, _) = self
+            .bp
+            .process(raw_noise, NOISE_CENTER_HZ, NOISE_Q, sample_rate);
+        let hiss = hiss * (-NOISE_DECAY * self.t).exp() * NOISE_GAIN;
+
+        let attack_raw = (self.t / ATTACK_SECS).min(1.0);
+        let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
+        let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
+
+        self.t += 1.0 / sample_rate;
+        ((body + hiss + snap) * 1.4).tanh() * 0.85 * self.gain * attack * fade
+    }
+
+    fn reset(&mut self) {
+        self.samples_left = 0;
+        self.t = 0.0;
+        self.gain = 0.0;
+    }
+
+    fn is_active(&self) -> bool {
+        self.samples_left > 0
+    }
+}
+
+/// Публичный инструмент: моно-голос с кроссфейдом хвоста.
+pub struct SnareDrum(Mono<SnareVoice>);
+
+impl SnareDrum {
+    pub fn new(id: usize) -> Self {
+        Self(Mono::new(id, InstrumentRole::Snare))
+    }
+}
+
+impl Instrument for SnareDrum {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.0.set_sample_rate(sample_rate);
+    }
+
+    fn trigger(&mut self, note: &NoteEvent) {
+        self.0.trigger(note);
+    }
+
+    fn next_sample(&mut self) -> f32 {
+        self.0.next_sample()
+    }
+
+    fn id(&self) -> usize {
+        self.0.id()
+    }
+
+    fn role(&self) -> InstrumentRole {
+        self.0.role()
+    }
+
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+
+    fn is_active(&self) -> bool {
+        self.0.is_active()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snare_rings_finite_and_loud() {
+        let sr = 44_100.0;
+        let mut snare = SnareDrum::new(4);
+        snare.set_sample_rate(sr);
+        snare.trigger(&NoteEvent::new(4, 38, 1.0, 0.1));
+        let mut peak: f32 = 0.0;
+        for _ in 0..((SNARE_LEN_SECS * sr) as usize) {
+            let s = snare.next_sample();
+            assert!(s.is_finite());
+            peak = peak.max(s.abs());
+        }
+        assert!(peak > 0.3, "snare too quiet: {peak}");
+        assert!(!snare.is_active());
+    }
+}

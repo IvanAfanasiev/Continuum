@@ -1,0 +1,1312 @@
+//! Контроллер воспроизведения для Flutter и CLI.
+//!
+//! Владение потоками: движок и композер живут внутри контроллера.
+//! Все управляющие вызовы (пауза, темп, стиль, сид, громкости слотов)
+//! меняют только флаги и shared-объекты — главная петля и потоки
+//! бэкенда при этом НЕ завершаются и НЕ пересоздаются.
+//!
+//! Семантика присутствия: **громкость слота > 0 = используется**.
+//! Нулевой слот исключается из генерации (композер) и не грузит DSP,
+//! когда его голос затих (движок). Отдельного флага on/off нет.
+
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex, RwLock,
+};
+use std::thread::JoinHandle;
+
+use crossbeam::queue::ArrayQueue;
+
+use crate::composer::{Composer, LiveTempo};
+use crate::core::{snapshot, DEFAULT_SEED, NOTE_QUEUE_CAPACITY};
+use crate::engine::{AudioEngine, MasterFx, SharedFx};
+use crate::instruments::{
+    Acid, BassGuitar, Crash, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Slot,
+    SnareDrum, Vinyl, VoicePool,
+};
+use crate::mixer::MixerState;
+use crate::styles::{self, Style};
+
+pub const BASS_ID: usize = 1;
+pub const KICK_ID: usize = 2;
+pub const PAD_ID: usize = 3;
+pub const SNARE_ID: usize = 4;
+pub const HAT_ID: usize = 5;
+pub const PLUCK_ID: usize = 6;
+pub const KEYS_ID: usize = 7;
+pub const KICK808_ID: usize = 8;
+pub const LASER_ID: usize = 9;
+pub const VINYL_ID: usize = 10;
+pub const VOCAL_ID: usize = 11;
+pub const FLUTE_ID: usize = 12;
+pub const FESTIVAL_ID: usize = 13;
+pub const CRASH_ID: usize = 14;
+pub const GUITAR_ID: usize = 15;
+pub const RAIN_ID: usize = 16;
+pub const FUZZ_ID: usize = 17;
+pub const ACID_ID: usize = 18;
+
+/// Все id ансамбля — для валидации `set_track` из Flutter.
+pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
+    BASS_ID,
+    KICK_ID,
+    PAD_ID,
+    SNARE_ID,
+    HAT_ID,
+    PLUCK_ID,
+    KEYS_ID,
+    KICK808_ID,
+    LASER_ID,
+    VINYL_ID,
+    VOCAL_ID,
+    FLUTE_ID,
+    FESTIVAL_ID,
+    CRASH_ID,
+    GUITAR_ID,
+    RAIN_ID,
+    FUZZ_ID,
+    ACID_ID,
+];
+
+/// Границы ручки темпа фронта, BPM.
+pub const MIN_TEMPO_BPM: f32 = 50.0;
+pub const MAX_TEMPO_BPM: f32 = 180.0;
+
+/// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.
+#[derive(Debug, Clone)]
+pub struct PlaybackStatus {
+    pub running: bool,
+    pub paused: bool,
+    pub style_name: String,
+    pub seed: u64,
+    /// Канонический код сида `XXX-XXX`: фронт показывает и вводит его.
+    pub seed_code: String,
+    /// Эффективный темп: ручка фронта или дефолт стиля.
+    pub tempo_bpm: f32,
+    /// Ручка intensity фронта («температура» генерации).
+    pub intensity: f32,
+    pub engine_error: Option<String>,
+}
+
+impl Default for PlaybackStatus {
+    fn default() -> Self {
+        Self {
+            running: false,
+            paused: false,
+            style_name: "club".to_string(),
+            seed: DEFAULT_SEED,
+            seed_code: crate::seed::format_seed_code(DEFAULT_SEED),
+            tempo_bpm: 126.0,
+            intensity: 1.0,
+            engine_error: None,
+        }
+    }
+}
+
+/// Один слот микшера для UI: id, имена и живая громкость.
+/// `volume` — эффективная (слот × группа), то есть слышимая.
+/// `base_volume` — канонический уровень стиля (100% ползунка слота).
+/// `group` — имя макро-фейдера слота для фронта.
+#[derive(Debug, Clone)]
+pub struct TrackInfo {
+    pub id: u64,
+    pub name: String,
+    pub role: String,
+    pub group: String,
+    pub volume: f32,
+    pub base_volume: f32,
+}
+
+/// Один макро-фейдер для UI: имя группы и ее множитель.
+#[derive(Debug, Clone)]
+pub struct GroupInfo {
+    pub name: String,
+    pub volume: f32,
+}
+
+/// Стиль каталога для UI: имя и полка (`club`/`rock`/`chill`).
+#[derive(Debug, Clone)]
+pub struct StyleMeta {
+    pub name: String,
+    pub group: String,
+}
+
+pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
+    Slot::ALL
+        .iter()
+        .map(|slot| -> Box<dyn Instrument> {
+            match slot {
+                Slot::Bass => Box::new(BassGuitar::new(slot.id())),
+                Slot::Kick => Box::new(Kick::new(slot.id())),
+                Slot::Pad => Box::new(VoicePool::pads(slot.id(), 6)),
+                Slot::Snare => Box::new(SnareDrum::new(slot.id())),
+                Slot::Hat => Box::new(HiHat::new(slot.id())),
+                Slot::Pluck => Box::new(VoicePool::plucks(slot.id(), 6)),
+                Slot::Keys => Box::new(VoicePool::keys(slot.id(), 8)),
+                Slot::Kick808 => Box::new(Kick808::new(slot.id())),
+                Slot::Laser => Box::new(VoicePool::lasers(slot.id(), 5)),
+                Slot::Vinyl => Box::new(Vinyl::new(slot.id())),
+                Slot::Vocal => Box::new(VoicePool::vocals(slot.id(), 4)),
+                Slot::Flute => Box::new(VoicePool::flutes(slot.id(), 4)),
+                Slot::Festival => Box::new(VoicePool::festivals(slot.id(), 6)),
+                Slot::Crash => Box::new(Crash::new(slot.id())),
+                Slot::Guitar => Box::new(VoicePool::guitars(slot.id(), 6)),
+                Slot::Rain => Box::new(Rain::new(slot.id())),
+                Slot::Fuzz => Box::new(VoicePool::fuzzes(slot.id(), 4)),
+                Slot::Acid => Box::new(Acid::new(slot.id())),
+            }
+        })
+        .collect()
+}
+
+/// Счетчики живого тракта (shared между потоками).
+/// frames — кадры, отданные аудиоустройству; pushed — ноты от генератора;
+/// consumed — ноты, разобранные движком из очереди;
+/// restarts — пересоздания потока (смена маршрута, обрыв колбэков).
+/// Публичен ради конструктора движка; снаружи интересен только EngineStats.
+#[derive(Debug, Clone, Default)]
+pub struct EngineCounters {
+    pub frames: Arc<AtomicU64>,
+    pub pushed: Arc<AtomicU64>,
+    pub consumed: Arc<AtomicU64>,
+    pub restarts: Arc<AtomicU64>,
+}
+
+/// Диагностика живого тракта для фронта. Нули без сессии.
+/// Позволяет отличить «поток не стартует» от «генератор молчит»
+/// от «все работает, смотри громкость телефона».
+#[derive(Debug, Clone, Default)]
+pub struct EngineStats {
+    pub frames: u64,
+    pub pushed: u64,
+    pub consumed: u64,
+    pub queued: u64,
+    /// Выбранный выход (`48000 Гц, F32, 2ch`): видно в баннере,
+    /// какой конфиг взял движок на этом телефоне.
+    pub audio_config: String,
+    /// Сколько раз поток пересоздавался наживую (смена маршрута,
+    /// обрыв колбэков). Видно в баннере при затыке.
+    pub restarts: u64,
+}
+
+/// Запуск фонового потока со страховкой от немой смерти: паника раньше
+/// убивала петлю без следа (frames=0 без engine_error). Теперь паника
+/// превращается в текст — красный баннер вместо гадания.
+fn spawn_guarded(
+    name: &'static str,
+    sink: &Arc<Mutex<Option<String>>>,
+    f: impl FnOnce() + Send + 'static,
+) -> JoinHandle<()> {
+    let sink = Arc::clone(sink);
+    std::thread::spawn(move || {
+        if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            *sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{name}: {msg}"));
+        }
+    })
+}
+
+/// Дефолтный набор инструментов стиля: канонические громкости слотов
+/// из вайтлиста, остальное — в ноль. Общий для контроллера и CLI.
+/// Слоты вне вайтлиста НЕ запрещены: пользователь может поднять любой
+/// вручную, смена стиля просто снова расставит дефолты.
+pub fn apply_style_mix(style: &dyn Style, mixer: &mut MixerState) {
+    let ensemble = style.ensemble();
+    for slot in Slot::ALL {
+        let vol = if ensemble.contains(&slot) {
+            slot.base_volume()
+        } else {
+            0.0
+        };
+        mixer.set_track(slot.id(), vol);
+    }
+}
+
+/// Кламп ручки темпа. Неположительное значение = сброс к дефолту стиля.
+pub fn normalize_tempo(bpm: f32) -> Option<f32> {
+    if bpm <= 0.0 {
+        None
+    } else {
+        Some(bpm.clamp(MIN_TEMPO_BPM, MAX_TEMPO_BPM))
+    }
+}
+
+/// Мастер-эффекты стиля в shared-владении для движка.
+fn fx_for_style(style: &dyn Style) -> MasterFx {
+    MasterFx {
+        reverb_wet: style.reverb_wet(),
+        reverb_size: style.reverb_size(),
+        treble_hz: style.treble_cutoff(),
+        sidechain: style.sidechain_depth().clamp(0.0, 2.0),
+    }
+}
+
+struct RunningSession {
+    queue: Arc<ArrayQueue<NoteEvent>>,
+    style: Arc<RwLock<Box<dyn Style>>>,
+    seed: Arc<RwLock<u64>>,
+    tempo: LiveTempo,
+    intensity: Arc<RwLock<f32>>,
+    fx: SharedFx,
+    live_bpm: Arc<RwLock<f32>>,
+    filter_open: Arc<RwLock<f32>>,
+    mixer: Arc<RwLock<MixerState>>,
+    paused: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    composer_handle: Option<JoinHandle<()>>,
+    engine_handle: Option<JoinHandle<()>>,
+    engine_error: Arc<Mutex<Option<String>>>,
+    counters: EngineCounters,
+    audio_config: Arc<RwLock<String>>,
+}
+
+impl RunningSession {
+    fn launch(style_name: &str, seed: u64, with_audio: bool) -> Self {
+        let style_box = styles::make_style(style_name)
+            .unwrap_or_else(|| styles::make_style("club").expect("builtin style"));
+        let bpm_init = style_box.bpm();
+        let fx_init = fx_for_style(&*style_box);
+        let style: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style_box));
+        let seed_lock = Arc::new(RwLock::new(seed));
+        let tempo_lock: LiveTempo = Arc::new(RwLock::new(None));
+        let intensity_lock = Arc::new(RwLock::new(1.0f32));
+        let fx_lock: SharedFx = Arc::new(RwLock::new(fx_init));
+        let bpm_lock = Arc::new(RwLock::new(bpm_init));
+        let filter_open = Arc::new(RwLock::new(0.4f32));
+        let mixer = Arc::new(RwLock::new(MixerState::new()));
+        let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
+        let paused = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let engine_error = Arc::new(Mutex::new(None));
+        let counters = EngineCounters::default();
+        let audio_config: Arc<RwLock<String>> = Arc::new(RwLock::new(String::new()));
+
+        let instruments = build_instruments();
+        {
+            let style_guard = style.read().unwrap_or_else(|e| e.into_inner());
+            let mut mix_guard = mixer.write().unwrap_or_else(|e| e.into_inner());
+            apply_style_mix(&**style_guard, &mut mix_guard);
+        }
+
+        let composer = Composer::new_shared(
+            Arc::clone(&queue),
+            Arc::clone(&style),
+            Arc::clone(&mixer),
+            Arc::clone(&stop),
+            Arc::clone(&paused),
+            Arc::clone(&seed_lock),
+            Arc::clone(&tempo_lock),
+            Arc::clone(&intensity_lock),
+            Arc::clone(&bpm_lock),
+            Arc::clone(&filter_open),
+            Arc::clone(&counters.pushed),
+        );
+        let composer_handle = spawn_guarded("composer", &engine_error, || composer.run());
+
+        // Замыкание захватывает инструменты всегда; если аудио не нужно,
+        // оно просто дропается вместе с ними — поток не создается.
+        let engine_handle = with_audio.then(|| {
+            let engine = AudioEngine::new(
+                Arc::clone(&queue),
+                instruments,
+                Arc::clone(&mixer),
+                Arc::clone(&stop),
+                Arc::clone(&paused),
+                Arc::clone(&fx_lock),
+                Arc::clone(&bpm_lock),
+                counters.clone(),
+                Arc::clone(&audio_config),
+                Arc::clone(&filter_open),
+            );
+            let sink = Arc::clone(&engine_error);
+            spawn_guarded("engine", &engine_error, move || {
+                if let Err(e) = engine.run() {
+                    *sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                }
+            })
+        });
+
+        Self {
+            queue,
+            style,
+            seed: seed_lock,
+            tempo: tempo_lock,
+            intensity: intensity_lock,
+            fx: fx_lock,
+            live_bpm: bpm_lock,
+            filter_open,
+            mixer,
+            paused,
+            stop,
+            composer_handle: Some(composer_handle),
+            engine_handle,
+            engine_error,
+            counters,
+            audio_config,
+        }
+    }
+
+    fn set_style_live(&self, name: &str) -> bool {
+        match styles::make_style(name) {
+            Some(next) => {
+                if let Ok(mut guard) = self.style.write() {
+                    // Новый стиль приносит свой дефолтный набор инструментов,
+                    // свою комнату/верх и чистые группы: применяется целиком,
+                    // петля живет. Ручки прошлого стиля не переживают переход.
+                    let fx_next = fx_for_style(&*next);
+                    *guard = next;
+                    if let Ok(mut mixer) = self.mixer.write() {
+                        mixer.reset_groups();
+                        apply_style_mix(&**guard, &mut mixer);
+                    }
+                    if let Ok(mut fx) = self.fx.write() {
+                        *fx = fx_next;
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// Чтение микшера без паники на отравленном lock.
+    fn with_mixer<T>(&self, f: impl FnOnce(&MixerState) -> T) -> T {
+        match self.mixer.read() {
+            Ok(g) => f(&g),
+            Err(poisoned) => f(&poisoned.into_inner()),
+        }
+    }
+
+    /// Правка микса с защитой последнего слышимого слота:
+    /// изменение, глушащее всё, молча отклоняется.
+    fn update_mix(&self, apply: impl FnOnce(&mut MixerState)) {
+        if let Ok(mut mixer) = self.mixer.write() {
+            let mut probe = mixer.clone();
+            apply(&mut probe);
+            if probe.has_audible() {
+                *mixer = probe;
+            }
+        }
+    }
+
+    fn effective_tempo(&self) -> f32 {
+        let override_bpm = snapshot(&self.tempo)
+            .filter(|bpm| bpm.is_finite() && *bpm > 0.0);
+        match override_bpm {
+            Some(bpm) => bpm,
+            None => self
+                .style
+                .read()
+                .map(|g| g.bpm())
+                .unwrap_or_else(|e| e.into_inner().bpm()),
+        }
+    }
+
+    fn read_intensity(&self) -> f32 {
+        snapshot(&self.intensity).clamp(0.0, 2.0)
+    }
+
+    fn status(&self) -> PlaybackStatus {
+        let style_name = self
+            .style
+            .read()
+            .map(|g| g.name().to_string())
+            .unwrap_or_else(|e| e.into_inner().name().to_string());
+        let seed = snapshot(&self.seed);
+        PlaybackStatus {
+            running: true,
+            paused: self.paused.load(Ordering::Relaxed),
+            style_name,
+            seed,
+            seed_code: crate::seed::format_seed_code(seed),
+            tempo_bpm: self.effective_tempo(),
+            intensity: self.read_intensity(),
+            engine_error: self
+                .engine_error
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_else(|e| e.into_inner().clone()),
+        }
+    }
+
+    fn tracks(&self) -> Vec<TrackInfo> {
+        self.with_mixer(|mixer| {
+            Slot::ALL
+                .iter()
+                .map(|slot| TrackInfo {
+                    id: slot.id() as u64,
+                    name: slot.name().to_string(),
+                    role: slot.role().name().to_string(),
+                    group: slot.group().name().to_string(),
+                    volume: mixer.volume_for(slot.id()),
+                    base_volume: slot.base_volume(),
+                })
+                .collect()
+        })
+    }
+
+    fn groups(&self) -> Vec<GroupInfo> {
+        self.with_mixer(|mixer| {
+            Group::ALL
+                .iter()
+                .map(|gr| GroupInfo {
+                    name: gr.name().to_string(),
+                    volume: mixer.group_volume(*gr),
+                })
+                .collect()
+        })
+    }
+}
+
+pub struct PlaybackController {
+    session: Mutex<Option<RunningSession>>,
+}
+
+impl PlaybackController {
+    pub fn new() -> Self {
+        Self {
+            session: Mutex::new(None),
+        }
+    }
+
+    /// Запуск бэкенда. Идемпотентен: если петля уже работает —
+    /// только применяет стиль/сид наживую, потоки не пересоздаются.
+    pub fn start(&self, style_name: &str, seed: u64, with_audio: bool) -> PlaybackStatus {
+        let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(session) = guard.as_mut() {
+            session.set_style_live(style_name);
+            if let Ok(mut s) = session.seed.write() {
+                *s = seed;
+            }
+            if with_audio && session.engine_handle.is_none() {
+                let engine = AudioEngine::new(
+                    Arc::clone(&session.queue),
+                    build_instruments(),
+                    Arc::clone(&session.mixer),
+                    Arc::clone(&session.stop),
+                    Arc::clone(&session.paused),
+                    Arc::clone(&session.fx),
+                    Arc::clone(&session.live_bpm),
+                    session.counters.clone(),
+                    Arc::clone(&session.audio_config),
+                    Arc::clone(&session.filter_open),
+                );
+                let sink = Arc::clone(&session.engine_error);
+                session.engine_handle = Some(spawn_guarded("engine", &session.engine_error, move || {
+                    if let Err(e) = engine.run() {
+                        *sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                    }
+                }));
+            }
+            return session.status();
+        }
+        let session = RunningSession::launch(style_name, seed, with_audio);
+        let status = session.status();
+        *guard = Some(session);
+        status
+    }
+
+    /// Останов: поднимает stop-флаг и джойнит потоки.
+    /// Единственная функция, завершающая петлю, — по явному запросу.
+    pub fn stop(&self) -> PlaybackStatus {
+        let session = self
+            .session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        match session {
+            None => PlaybackStatus::default(),
+            Some(mut s) => {
+                let mut status = s.status();
+                s.stop.store(true, Ordering::Relaxed);
+                if let Some(h) = s.composer_handle.take() {
+                    let _ = h.join();
+                }
+                if let Some(h) = s.engine_handle.take() {
+                    let _ = h.join();
+                }
+                status.running = false;
+                status
+            }
+        }
+    }
+
+    pub fn set_paused(&self, paused: bool) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                s.paused.store(paused, Ordering::Relaxed);
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Горячая смена стиля: подменяет объект за RwLock и применяет его
+    /// дефолтный набор инструментов. Петля продолжает работу.
+    /// Неизвестное имя игнорируется — статус вернет фактический стиль.
+    pub fn set_style(&self, name: &str) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                s.set_style_live(name);
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Горячая смена сида: композер подхватит его на следующем шаге.
+    pub fn set_seed(&self, seed: u64) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                if let Ok(mut g) = s.seed.write() {
+                    *g = seed;
+                }
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Сид кодом `XXX-XXX` для фронта: мусор санитизируется, короткий
+    /// ввод отклоняется (статус вернет прежний код — фронт откатит поле).
+    pub fn set_seed_code(&self, code: &str) -> PlaybackStatus {
+        match crate::seed::parse_seed_code(code) {
+            Some(seed) => self.set_seed(seed),
+            None => self.status(),
+        }
+    }
+
+    /// Случайный сид для кнопки «кубик»: новый код в статусе.
+    pub fn random_seed(&self) -> PlaybackStatus {
+        use rand::Rng;
+        let seed: u64 = rand::thread_rng().gen::<u64>() % crate::seed::CODE_SPACE;
+        self.set_seed(seed)
+    }
+
+    /// Живой темп в BPM. Неположительный = сброс к дефолту стиля.
+    /// Применяется со следующего шага, петля не перезапускается.
+    pub fn set_tempo_bpm(&self, bpm: f32) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                if let Ok(mut g) = s.tempo.write() {
+                    *g = normalize_tempo(bpm);
+                }
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Живая intensity 0..2 («температура» генерации): выше — плотнее
+    /// и ярче, ниже — разреженнее и тише. Дефолт 1.0 = характер стиля.
+    /// Применяется со следующего шага, петля не перезапускается.
+    pub fn set_intensity(&self, intensity: f32) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                if let Ok(mut g) = s.intensity.write() {
+                    *g = intensity.clamp(0.0, 2.0);
+                }
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Громкость слота наживую. Ноль = слот исключен из генерации и DSP.
+    /// Неизвестный id игнорируется. Выключение последнего слышимого
+    /// слота отклоняется (тишины быть не должно — фронт откатит ползунок).
+    pub fn set_track(&self, instrument_id: u64, volume: f32) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                let id = instrument_id as usize;
+                if ENSEMBLE_IDS.contains(&id) {
+                    s.update_mix(|mixer| mixer.set_track(id, volume));
+                }
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Макро-фейдер группы наживую («kick», «lead», …). Множитель поверх
+    /// слотов: ноль глушит всю группу целиком (исключает из генерации).
+    /// Неизвестное имя игнорируется. Переживает смену стиля.
+    pub fn set_group_volume(&self, group_name: &str, volume: f32) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                if let Some(group) = Group::from_name(group_name) {
+                    s.update_mix(|mixer| mixer.set_group(group, volume));
+                }
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Живой микс для UI: слоты с именами, ролями и громкостями.
+    pub fn tracks(&self) -> Vec<TrackInfo> {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => s.tracks(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Макро-фейдеры для UI: имя группы и ее множитель.
+    pub fn groups(&self) -> Vec<GroupInfo> {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => s.groups(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Диагностика живого тракта для UI-баннера. Без сессии — нули.
+    pub fn engine_stats(&self) -> EngineStats {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => EngineStats {
+                frames: s.counters.frames.load(Ordering::Relaxed),
+                pushed: s.counters.pushed.load(Ordering::Relaxed),
+                consumed: s.counters.consumed.load(Ordering::Relaxed),
+                queued: s.queue.len() as u64,
+                audio_config: snapshot(&s.audio_config),
+                restarts: s.counters.restarts.load(Ordering::Relaxed),
+            },
+            None => EngineStats::default(),
+        }
+    }
+
+    pub fn status(&self) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => s.status(),
+            None => PlaybackStatus::default(),
+        }
+    }
+}
+
+impl Default for PlaybackController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Офлайн-рендер: генерация без аудиоустройства. Используется флагом
+// `--render N` в CLI для проверки, что стиль/сид реально влияют на музыку.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct RenderedNote {
+    pub step: usize,
+    pub instrument_id: usize,
+    pub pitch: u8,
+    pub velocity: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderReport {
+    pub style_name: String,
+    pub bpm: f32,
+    pub seed: u64,
+    pub steps: usize,
+    pub notes_total: usize,
+    /// (instrument_id, note_count), отсортировано по id.
+    pub notes_per_instrument: Vec<(usize, usize)>,
+    pub first_notes: Vec<RenderedNote>,
+}
+
+pub fn render_offline(style_name: &str, seed: u64, steps: usize) -> Option<RenderReport> {
+    let style = styles::make_style(style_name)?;
+    let style_name_out = style.name().to_string();
+    let bpm = style.bpm();
+    let mixer = Arc::new(RwLock::new(MixerState::new()));
+    {
+        let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
+        apply_style_mix(&*style, &mut m);
+    }
+    let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
+    let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
+    let stop = Arc::new(AtomicBool::new(false));
+    let paused = Arc::new(AtomicBool::new(false));
+    let mut composer = Composer::new(
+        queue,
+        Arc::clone(&style_shared),
+        Arc::clone(&mixer),
+        stop,
+        paused,
+        seed,
+    );
+
+    let mut notes: Vec<RenderedNote> = Vec::new();
+    for step in 0..steps {
+        let (step_notes, _duration) = composer.next_step();
+        for n in step_notes {
+            notes.push(RenderedNote {
+                step,
+                instrument_id: n.instrument_id,
+                pitch: n.midi_pitch,
+                velocity: n.velocity,
+            });
+        }
+    }
+
+    let mut per_instrument: Vec<(usize, usize)> = ENSEMBLE_IDS
+        .iter()
+        .map(|&id| (id, notes.iter().filter(|n| n.instrument_id == id).count()))
+        .collect();
+    per_instrument.sort_unstable();
+
+    Some(RenderReport {
+        style_name: style_name_out,
+        bpm,
+        seed,
+        steps,
+        notes_total: notes.len(),
+        notes_per_instrument: per_instrument,
+        first_notes: notes.into_iter().take(12).collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Soak-прогон: генерация + весь DSP-тракт офлайн на N секунд.
+// Доказательство бесконечной стабильности: вся память фиксирована
+// (массивы, кольцевые буферы, bounded-очередь), потоки не плодятся,
+// счетчики не переполняются за время жизни вселенной. Гоняет тот же
+// RenderState и тот же Composer::next_step, что и живой тракт.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct SoakReport {
+    pub style_name: String,
+    pub seed: u64,
+    pub seconds: f32,
+    pub samples: u64,
+    pub notes: usize,
+    pub peak: f32,
+    pub rms: f32,
+    pub non_finite: u64,
+}
+
+pub fn soak_render(
+    style_name: &str,
+    seed: u64,
+    seconds: f32,
+    sample_rate: f32,
+) -> Option<SoakReport> {
+    use crate::core::MAX_ACTIVE_TRACKS;
+    use crate::engine::RenderState;
+
+    let style = styles::make_style(style_name)?;
+    let style_name_out = style.name().to_string();
+    let sr = if sample_rate.is_finite() && sample_rate > 0.0 {
+        sample_rate
+    } else {
+        44_100.0
+    };
+    let wet = style.reverb_wet();
+    let size = style.reverb_size();
+    let treble = style.treble_cutoff();
+    let echo_secs = 60.0 / style.bpm() * 0.75;
+
+    let mixer = Arc::new(RwLock::new(MixerState::new()));
+    {
+        let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
+        apply_style_mix(&*style, &mut m);
+    }
+    let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
+    let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
+    let mut composer = Composer::new(
+        Arc::clone(&queue),
+        Arc::clone(&style_shared),
+        Arc::clone(&mixer),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+        seed,
+    );
+
+    let mut render = RenderState::new(build_instruments(), sr);
+    render.set_room(wet, size);
+    render.set_echo_time(echo_secs);
+
+    let target = (seconds.max(0.0) * sr) as u64;
+    let mut done = 0u64;
+    let mut note_count = 0usize;
+    let mut peak: f32 = 0.0;
+    let mut sum_sq = 0.0;
+    let mut non_finite = 0u64;
+
+    while done < target {
+        let (step_notes, duration) = composer.next_step();
+        for note in &step_notes {
+            render.push_note(note);
+        }
+        note_count += step_notes.len();
+
+        let mut vols = [(0usize, 0.0f32); MAX_ACTIVE_TRACKS];
+        let vlen = {
+            let m = mixer.read().unwrap_or_else(|e| e.into_inner());
+            let mut buf = [0usize; MAX_ACTIVE_TRACKS];
+            let n = m.active_ids(&mut buf);
+            for (i, id) in buf[..n].iter().enumerate() {
+                vols[i] = (*id, m.volume_for(*id));
+            }
+            n
+        };
+
+        let mut step_samples = ((duration * sr) as u64).max(1);
+        while step_samples > 0 && done < target {
+            let (l, r) = render.render_sample(&vols[..vlen], treble);
+            if l.is_finite() && r.is_finite() {
+                peak = peak.max(l.abs().max(r.abs()));
+                sum_sq += l * l + r * r;
+            } else {
+                non_finite += 1;
+            }
+            done += 1;
+            step_samples -= 1;
+        }
+    }
+
+    let rms = if done > 0 {
+        (sum_sq / (2 * done) as f32).sqrt()
+    } else {
+        0.0
+    };
+    Some(SoakReport {
+        style_name: style_name_out,
+        seed,
+        seconds: done as f32 / sr,
+        samples: done,
+        notes: note_count,
+        peak,
+        rms,
+        non_finite,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arranger::Arranger;
+    use crate::styles::{render_style, StepContext};
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::time::{Duration, Instant};
+
+    fn wait_for_notes(c: &PlaybackController, timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            let guard = c.session.lock().unwrap_or_else(|e| e.into_inner());
+            let ready = guard.as_ref().map(|s| !s.queue.is_empty()).unwrap_or(false);
+            drop(guard);
+            if ready {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[test]
+    fn headless_lifecycle_keeps_loop_alive() {
+        let c = PlaybackController::new();
+
+        // Старт без аудио (без аудиоустройства в CI).
+        let s = c.start("club", 42, false);
+        assert!(s.running);
+        assert_eq!(s.style_name, "club");
+        assert_eq!(s.seed, 42);
+        assert_eq!(s.tempo_bpm, 126.0);
+
+        // Дефолтный набор club — битмейкер: панч + 808 слоем, саб,
+        // снейр, хэты и виниловый фон. Остальное выключено.
+        let tracks = c.tracks();
+        assert_eq!(tracks.len(), 18);
+        let vol = |id: usize| {
+            tracks
+                .iter()
+                .find(|t| t.id == id as u64)
+                .map(|t| t.volume)
+                .unwrap_or(-1.0)
+        };
+        assert!(vol(KICK808_ID) > 0.0);
+        assert!(vol(KICK_ID) > 0.0);
+        assert!(vol(SNARE_ID) > 0.0);
+        assert!(vol(HAT_ID) > 0.0);
+        assert!(vol(VINYL_ID) > 0.0);
+        assert_eq!(vol(KEYS_ID), 0.0);
+        assert_eq!(vol(VOCAL_ID), 0.0);
+        assert_eq!(vol(LASER_ID), 0.0);
+        assert_eq!(vol(PLUCK_ID), 0.0);
+
+        // Петля реально генерирует ноты.
+        assert!(wait_for_notes(&c, Duration::from_secs(3)));
+
+        // Группы: 8 макро-фейдеров вместо 12 слотов; один Kick на два кика.
+        assert_eq!(c.groups().len(), 8);
+        let s = c.set_group_volume("kick", 0.5);
+        assert!(s.running);
+        let kick808 = c
+            .tracks()
+            .iter()
+            .find(|t| t.id == KICK808_ID as u64)
+            .unwrap()
+            .clone();
+        assert_eq!(kick808.group, "kick");
+        assert_eq!(kick808.volume, 0.5); // 1.0 слота × 0.5 группы
+        assert!(c.set_group_volume("nope", 0.5).running); // чужое имя игнор
+        assert!(c.status().running);
+
+        // Повторный старт — не плодит потоки, только применяет параметры.
+        let s = c.start("club", 42, false);
+        assert!(s.running);
+
+        // Пауза/плей не останавливают петлю.
+        assert!(c.set_paused(true).paused);
+        assert!(!c.set_paused(false).paused);
+        assert!(c.status().running);
+
+        // Живой темп: кламп и сброс к дефолту, петля жива.
+        assert_eq!(c.set_tempo_bpm(100.0).tempo_bpm, 100.0);
+        assert_eq!(c.set_tempo_bpm(1000.0).tempo_bpm, MAX_TEMPO_BPM);
+        assert_eq!(c.set_tempo_bpm(0.0).tempo_bpm, 126.0);
+        // Intensity: кламп 0..2, дефолт 1.0.
+        assert_eq!(c.set_intensity(1.5).intensity, 1.5);
+        assert_eq!(c.set_intensity(99.0).intensity, 2.0);
+        assert_eq!(c.set_intensity(-1.0).intensity, 0.0);
+        assert!(c.status().running);
+
+        // Горячая смена стиля и сида: lofi гасит 808 и лазер, включает
+        // винил; группы при этом сбрасываются на дефолт (был 0.5 → 1.0).
+        let s = c.set_style("lofi");
+        assert_eq!(s.style_name, "lofi");
+        let tracks = c.tracks();
+        let kick808 = tracks
+            .iter()
+            .find(|t| t.id == KICK808_ID as u64)
+            .unwrap();
+        assert_eq!(kick808.volume, 0.0);
+        let vinyl = tracks.iter().find(|t| t.id == VINYL_ID as u64).unwrap();
+        assert!(vinyl.volume > 0.0);
+        assert_eq!(
+            c.groups().iter().find(|g| g.name == "kick").unwrap().volume,
+            1.0
+        );
+        assert!(c.status().running);
+        // Неизвестный стиль игнорируется.
+        assert_eq!(c.set_style("nope").style_name, "lofi");
+        assert_eq!(c.set_seed(7).seed, 7);
+
+        // Громкость 0 исключает слот; неизвестный id игнорируется.
+        let s = c.set_track(BASS_ID as u64, 0.0);
+        assert!(s.running);
+        assert_eq!(
+            c.tracks()
+                .iter()
+                .find(|t| t.id == BASS_ID as u64)
+                .unwrap()
+                .volume,
+            0.0
+        );
+        let s = c.set_track(999, 1.0);
+        assert!(s.running);
+        // Последний слышимый слот выключить нельзя: возвращаем бас,
+        // глушим все группы, кроме басовой, затем пробуем и ее —
+        // отклонено, звук остался.
+        c.set_track(BASS_ID as u64, 0.9);
+        for g in c.groups() {
+            if g.name != "bass" {
+                c.set_group_volume(&g.name, 0.0);
+            }
+        }
+        let before = c
+            .tracks()
+            .iter()
+            .find(|t| t.id == BASS_ID as u64)
+            .unwrap()
+            .volume;
+        assert!(before > 0.0);
+        c.set_group_volume("bass", 0.0);
+        let after = c
+            .tracks()
+            .iter()
+            .find(|t| t.id == BASS_ID as u64)
+            .unwrap()
+            .volume;
+        assert_eq!(after, before, "last audible must stay");
+        let _ = c.set_group_volume("bass", 1.0);
+
+        // Стоп — единственная точка завершения петли.
+        let s = c.stop();
+        assert!(!s.running);
+        assert!(!c.status().running);
+    }
+
+    #[test]
+    fn render_differs_per_style() {
+        let club = render_offline("club", 11, 64).expect("club renders");
+        let lofi = render_offline("lofi", 11, 64).expect("lofi renders");
+        assert_ne!(club.bpm, lofi.bpm);
+        let club_pitches: Vec<u8> = club.first_notes.iter().map(|n| n.pitch).collect();
+        let lofi_pitches: Vec<u8> = lofi.first_notes.iter().map(|n| n.pitch).collect();
+        assert_ne!(club_pitches, lofi_pitches);
+    }
+
+    #[test]
+    fn render_rejects_unknown_style() {
+        assert!(render_offline("nope", 1, 8).is_none());
+    }
+
+    #[test]
+    fn seeds_123_and_321_differ_from_first_bar() {
+        // Жалоба пользователя: первые такты сидов 123 и 321 звучали
+        // одинаково. Якоря грува (оффбит-хэты, даунбит лида) + ротация
+        // лада обязаны дать разную музыку с первого такта.
+        fn signature(seed: u64) -> Vec<(usize, usize, u8)> {
+            let style = styles::make_style("club").expect("club");
+            let ensemble = style.ensemble();
+            let active: Vec<usize> = Slot::ALL
+                .iter()
+                .filter(|s| ensemble.contains(s))
+                .map(|s| s.id())
+                .collect();
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut arranger = Arranger::new(seed);
+            let song = arranger.advance_measure();
+            let mut out = Vec::new();
+            for step in 0..16 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for note in render_style(&*style, &mut sctx) {
+                    out.push((step, note.instrument_id, note.midi_pitch));
+                }
+            }
+            out.sort_unstable();
+            out
+        }
+        let a = signature(123);
+        let b = signature(321);
+        assert!(!a.is_empty() && !b.is_empty());
+        assert_ne!(a, b, "seeds 123 and 321 open identically");
+    }
+
+    #[test]
+    fn different_seeds_give_different_music() {
+        // «Бесконечные» вариации: ротация лада, модальный вариант,
+        // плотность и RNG-поток — все от сида. Два сида одного стиля
+        // обязаны дать заметно разную музыку.
+        let a = render_offline("club", 11, 64).expect("renders");
+        let b = render_offline("club", 12, 64).expect("renders");
+        let pitches_a: Vec<u8> = a.first_notes.iter().map(|n| n.pitch).collect();
+        let pitches_b: Vec<u8> = b.first_notes.iter().map(|n| n.pitch).collect();
+        assert_ne!(pitches_a, pitches_b, "seeds 11 and 12 sound identical");
+        assert_ne!(a.notes_total, b.notes_total);
+    }
+
+    #[test]
+    fn alt_grooves_engage_on_some_seeds() {
+        // 808-й в club: база — чистая four-floor (шага 14 нет),
+        // альтернатива — с пушем на 14-м шаге. Обе ветки обязаны
+        // встречаться: иначе alt-данные мертвы.
+        fn full_has_push(seed: u64) -> bool {
+            let style = styles::make_style("club").expect("club");
+            let ensemble = style.ensemble();
+            let active: Vec<usize> = Slot::ALL
+                .iter()
+                .filter(|s| ensemble.contains(s))
+                .map(|s| s.id())
+                .collect();
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut arranger = Arranger::new(seed);
+            let mut song = arranger.advance_measure();
+            for step in 0..400 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for note in render_style(&*style, &mut sctx) {
+                    if note.instrument_id == KICK808_ID && sim == 14 {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        let mut with_push = 0;
+        for seed in 0..40 {
+            if full_has_push(seed) {
+                with_push += 1;
+            }
+        }
+        assert!(with_push > 0, "alt branch never engages");
+    }
+
+    #[test]
+    fn all_styles_keep_bass_in_bass_octave() {
+        // Регрессия «в басу нет басов»: басовые ноты любого стиля обязаны
+        // лежать в 28..=52 (A0..E3 ≈ 41..165 Гц), а не в нижней середине.
+        // Верхняя граница включительна: октавные скачки — тоже бас.
+        for name in styles::style_names() {
+            let style = styles::make_style(name).expect("known style");
+            let mut rng = StdRng::seed_from_u64(424242);
+            let active: Vec<usize> = ENSEMBLE_IDS.into_iter().collect();
+            let mut arranger = Arranger::new(424242);
+            let mut song = arranger.advance_measure();
+            let mut bass_count = 0;
+            for step in 0..64 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for note in render_style(&*style, &mut sctx) {
+                    if note.instrument_id == BASS_ID {
+                        assert!(
+                            (28..=52).contains(&note.midi_pitch),
+                            "{name}: bass pitch {} out of bass octave",
+                            note.midi_pitch
+                        );
+                        bass_count += 1;
+                    }
+                }
+            }
+            assert!(bass_count > 0, "{name}: no bass notes at all");
+        }
+    }
+
+    #[test]
+    fn render_is_deterministic() {
+        let a = render_offline("club", 5, 32).expect("renders");
+        let b = render_offline("club", 5, 32).expect("renders");
+        assert_eq!(a.notes_total, b.notes_total);
+        assert_eq!(a.notes_per_instrument, b.notes_per_instrument);
+    }
+
+    #[test]
+    fn soak_proves_long_run_stability() {
+        // Весь тракт (генерация + DSP) 6 секунд на пониженной частоте:
+        // конечность, уровень, генерация не глохнет. Окно почти целиком
+        // в интро (там тихо по построению), поэтому порог нот низкий —
+        // это детектор ступора, а не счетчик плотности. Часы/сутки —
+        // флагом --soak в CLI, код тот же самый.
+        let report = soak_render("club", 11, 6.0, 22050.0).expect("soaks");
+        assert_eq!(report.non_finite, 0);
+        assert_eq!(report.samples, 132300);
+        assert!(report.notes > 10, "generation stalled: {}", report.notes);
+        assert!(
+            report.peak > 0.05 && report.peak <= 1.0,
+            "peak out of range: {}",
+            report.peak
+        );
+        assert!(report.rms > 0.005, "mix too quiet: {}", report.rms);
+    }
+
+    #[test]
+    fn style_ensembles_match_character() {
+        // Характер дефолтных наборов из референсов пользователя:
+        // club — панч+808+лазер+вокал+крэш, без винила;
+        // lofi — винил, Rhodes, флейта, гитара и дождь, без лазера и 808.
+        let ensemble_of = |style: &str| styles::make_style(style).unwrap().ensemble().to_vec();
+        use Slot::*;
+
+        let club = ensemble_of("club");
+        for s in [Bass, Kick, Snare, Hat, Kick808, Vinyl, Acid] {
+            assert!(club.contains(&s), "club: {s:?} missing");
+        }
+        for s in [
+            Pad, Keys, Pluck, Laser, Vocal, Flute, Guitar, Rain, Festival, Crash, Fuzz,
+        ] {
+            assert!(!club.contains(&s), "club: {s:?} should be off");
+        }
+
+        let lofi = ensemble_of("lofi");
+        for s in [
+            Bass, Kick, Pad, Snare, Hat, Pluck, Keys, Vinyl, Flute, Guitar, Rain,
+        ] {
+            assert!(lofi.contains(&s), "lofi: {s:?} missing");
+        }
+        for s in [Kick808, Laser, Vocal, Festival, Crash] {
+            assert!(!lofi.contains(&s), "lofi: {s:?} should be off");
+        }
+
+        // Все стили: непустой вайтлист из известных слотов.
+        for name in styles::style_names() {
+            let ensemble = ensemble_of(name);
+            assert!(!ensemble.is_empty(), "{name}: empty ensemble");
+            for s in &ensemble {
+                assert!(Slot::ALL.contains(s), "{name}: unknown slot {s:?}");
+            }
+        }
+
+        // Rock: механика без переборов — рев фазза вместо гитары.
+        let rock = ensemble_of("rock");
+        for s in [Bass, Kick, Snare, Hat, Fuzz, Crash] {
+            assert!(rock.contains(&s), "rock: {s:?} missing");
+        }
+        for s in [Guitar, Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck] {
+            assert!(!rock.contains(&s), "rock: {s:?} should be off");
+        }
+    }
+
+    #[test]
+    fn mixes_match_whitelists_with_base_volumes() {
+        // Микс = вайтлист × канонические громкости, без цифр в пресете.
+        for name in styles::style_names() {
+            let style = styles::make_style(name).expect("known style");
+            let mut mixer = MixerState::new();
+            apply_style_mix(&*style, &mut mixer);
+            for slot in Slot::ALL {
+                let vol = mixer.volume_for(slot.id());
+                if style.ensemble().contains(&slot) {
+                    assert_eq!(vol, slot.base_volume(), "{name}: {slot:?} volume");
+                } else {
+                    assert_eq!(vol, 0.0, "{name}: {slot:?} should be muted");
+                }
+            }
+        }
+    }
+}

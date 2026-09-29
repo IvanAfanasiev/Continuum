@@ -1,0 +1,31 @@
+# Build outputs (regenerable, heavy)
+/build/
+/android/build/
+/android/app/build/
+/windows/out/
+rust/target/
+build_tool_runner.dill
+
+# Dart/Flutter tooling
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+flutter_*.log
+
+# Rust
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
+
+# Local env
+local.properties
