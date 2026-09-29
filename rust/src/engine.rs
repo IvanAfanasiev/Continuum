@@ -892,10 +892,10 @@ mod tests {
         // Мини-микс всего ансамбля через тот же RenderState, что и live:
         // конечность + вменяемый уровень.
         use crate::instruments::{
-            BassGuitar, Crash, HiHat, Kick, Kick808, NoteEvent, Rain, SnareDrum, Vinyl, VoicePool,
+            Acid, BassGuitar, HiHat, Kick, Kick808, NoteEvent, Rain, SnareDrum, Vinyl, VoicePool,
         };
         use crate::playback::{
-            BASS_ID, CRASH_ID, FESTIVAL_ID, FLUTE_ID, FUZZ_ID, GUITAR_ID, HAT_ID, KEYS_ID,
+            ACID_ID, BASS_ID, FESTIVAL_ID, FLUTE_ID, FUZZ_ID, GUITAR_ID, HAT_ID, KEYS_ID,
             KICK808_ID, KICK_ID, LASER_ID, PAD_ID, PLUCK_ID, RAIN_ID, SNARE_ID, VINYL_ID, VOCAL_ID,
         };
         let sr = 44_100.0;
@@ -913,10 +913,10 @@ mod tests {
             Box::new(VoicePool::vocals(VOCAL_ID, 4)),
             Box::new(VoicePool::flutes(FLUTE_ID, 4)),
             Box::new(VoicePool::festivals(FESTIVAL_ID, 6)),
-            Box::new(Crash::new(CRASH_ID)),
             Box::new(VoicePool::guitars(GUITAR_ID, 6)),
             Box::new(Rain::new(RAIN_ID)),
             Box::new(VoicePool::fuzzes(FUZZ_ID, 4)),
+            Box::new(Acid::new(ACID_ID)),
         ];
         let mut state = RenderState::new(insts, sr);
         let volumes: Vec<(usize, f32)> = crate::playback::ENSEMBLE_IDS
@@ -937,10 +937,10 @@ mod tests {
             (VOCAL_ID, 69, 0.7, 0.4),
             (FLUTE_ID, 72, 0.7, 1.0),
             (FESTIVAL_ID, 79, 0.7, 0.3),
-            (CRASH_ID, 49, 0.9, 1.0),
             (GUITAR_ID, 64, 0.7, 1.0),
             (RAIN_ID, 60, 0.5, 2.0),
             (FUZZ_ID, 45, 0.8, 0.4),
+            (ACID_ID, 50, 0.8, 0.4),
         ];
         for (id, pitch, vel, dur) in notes {
             state.push_note(&NoteEvent::new(id, pitch, vel, dur));

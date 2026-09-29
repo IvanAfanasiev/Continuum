@@ -31,9 +31,6 @@ const KEYS_W: &[f32] = &[
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-const CRASH_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-];
 // Длинная флейта поверх Rhodes: редкие ноты с дыханием.
 const FLUTE_W: &[f32] = &[
     0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0,
@@ -140,6 +137,15 @@ impl Style for LofiStyle {
             Slot::Guitar,
             Slot::Rain,
         ]
+    }
+
+    /// Гость по сиду: пыльные чопы или глубокий саб-толчок.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[Slot::Vocal, Slot::Kick808]
+    }
+
+    fn flex_count(&self) -> usize {
+        1
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
@@ -296,12 +302,6 @@ impl Style for LofiStyle {
             ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.25)
         };
         // Чужой крэш: тихий, только на стыках секций.
-        let crash = RoleGuide {
-            climax_only: true,
-            duration_mult: 8.0,
-            vel_base: 0.3,
-            ..RoleGuide::kit(CRASH_W, 49, 0.3)
-        };
         // Фазз вне рок-полки: тихий редкий рифф для ручки фронта.
         let fuzz = RoleGuide {
             energy_response: 1.0,
@@ -328,7 +328,7 @@ impl Style for LofiStyle {
         };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, crash, guitar, rain, fuzz, acid,
+            festival, guitar, rain, fuzz, acid,
         ]
     }
 }

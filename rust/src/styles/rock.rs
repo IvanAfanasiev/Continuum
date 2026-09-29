@@ -50,9 +50,6 @@ const RIFF_P1: &[f32] = &[
 ];
 const RIFF_POLES: &[&[f32]] = &[RIFF_W, RIFF_P1];
 
-const CRASH_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-];
 const BED_W: &[f32] = &[
     0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
@@ -129,6 +126,15 @@ impl Style for RockStyle {
             Slot::Hat,
             Slot::Fuzz,
         ]
+    }
+
+    /// Гость по сиду: редкое пианино или далекие чопы поверх стены.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[Slot::Keys, Slot::Vocal]
+    }
+
+    fn flex_count(&self) -> usize {
+        1
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
@@ -257,13 +263,6 @@ impl Style for RockStyle {
             follow_motif: true,
             ..RoleGuide::pitched(RIFF_W, 0, 1, 0, 0.8, 0.3)
         };
-        let crash = RoleGuide {
-            climax_only: true,
-            duration_mult: 10.0,
-            vel_base: 0.8,
-            vel_jitter: 0.05,
-            ..RoleGuide::kit(CRASH_W, 49, 0.8)
-        };
         let guitar = RoleGuide {
             energy_response: 1.0,
             duration_mult: 1.2,
@@ -311,7 +310,7 @@ impl Style for RockStyle {
         };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, crash, guitar, rain, fuzz, acid,
+            festival, guitar, rain, fuzz, acid,
         ]
     }
 }

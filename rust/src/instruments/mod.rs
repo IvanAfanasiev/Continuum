@@ -1,6 +1,5 @@
 pub mod acid;
 pub mod bass;
-pub mod crash;
 pub mod dsp;
 pub mod festival;
 pub mod flute;
@@ -20,7 +19,6 @@ pub mod vocal;
 
 pub use acid::Acid;
 pub use bass::BassGuitar;
-pub use crash::Crash;
 pub use fuzz::FuzzVoice;
 pub use guitar::GuitarVoice;
 pub use hat::HiHat;
@@ -142,7 +140,6 @@ pub enum Slot {
     Vocal,
     Flute,
     Festival,
-    Crash,
     Guitar,
     Rain,
     Fuzz,
@@ -150,7 +147,7 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const COUNT: usize = 18;
+    pub const COUNT: usize = 17;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -165,7 +162,6 @@ impl Slot {
         Slot::Vocal,
         Slot::Flute,
         Slot::Festival,
-        Slot::Crash,
         Slot::Guitar,
         Slot::Rain,
         Slot::Fuzz,
@@ -195,7 +191,6 @@ impl Slot {
             Slot::Vocal => "vocal",
             Slot::Flute => "flute",
             Slot::Festival => "festival",
-            Slot::Crash => "crash",
             Slot::Guitar => "guitar",
             Slot::Rain => "rain",
             Slot::Fuzz => "fuzz",
@@ -216,7 +211,6 @@ impl Slot {
             Slot::Laser => InstrumentRole::Lead,
             Slot::Vinyl => InstrumentRole::Texture,
             Slot::Vocal => InstrumentRole::Vocal,
-            Slot::Crash => InstrumentRole::Hat,
             Slot::Guitar => InstrumentRole::Lead,
             Slot::Rain => InstrumentRole::Texture,
             Slot::Flute | Slot::Festival | Slot::Fuzz => InstrumentRole::Lead,
@@ -234,7 +228,6 @@ impl Slot {
             Slot::Vocal => Group::Vocal,
             Slot::Vinyl | Slot::Rain => Group::Texture,
             Slot::Flute | Slot::Festival | Slot::Guitar | Slot::Fuzz => Group::Lead,
-            Slot::Crash => Group::Hat,
         }
     }
 
@@ -257,7 +250,6 @@ impl Slot {
             Slot::Vocal => 0.6,
             Slot::Flute => 0.5,
             Slot::Festival => 0.55,
-            Slot::Crash => 0.7,
             Slot::Guitar => 0.6,
             Slot::Rain => 0.2,
             Slot::Fuzz => 0.7,

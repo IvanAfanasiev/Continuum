@@ -30,9 +30,6 @@ const STAB_W: &[f32] = &[
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-const CRASH_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-];
 const VOCAL_W: &[f32] = &[
     0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
@@ -132,6 +129,16 @@ impl Style for ClubStyle {
             Slot::Hat,
             Slot::Vinyl,
         ]
+    }
+
+    /// Гости битмейкера: кислота, чопы и Rhodes заходят по двое,
+    /// состав зависит от сида.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[Slot::Acid, Slot::Vocal, Slot::Keys]
+    }
+
+    fn flex_count(&self) -> usize {
+        2
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
@@ -291,14 +298,6 @@ impl Style for ClubStyle {
             follow_motif: true,
             ..RoleGuide::pitched(LEAD_W, 0, 2, 2, 0.8, 0.5)
         };
-        // Крэш: только последний такт секции, даунбит — взрыв дропа.
-        let crash = RoleGuide {
-            climax_only: true,
-            duration_mult: 12.0,
-            vel_base: 0.8,
-            vel_jitter: 0.05,
-            ..RoleGuide::kit(CRASH_W, 49, 0.8)
-        };
         // Чужие мелодические/текстуры: разреженные направляющие.
         let guitar = RoleGuide {
             energy_response: 1.2,
@@ -348,7 +347,7 @@ impl Style for ClubStyle {
         };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, crash, guitar, rain, fuzz, acid,
+            festival, guitar, rain, fuzz, acid,
         ]
     }
 }

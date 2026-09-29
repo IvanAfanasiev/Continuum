@@ -8,9 +8,13 @@ use crate::core::midi_to_freq;
 /// Чистый саб дает глубину (синус не умеет дребезжать и алиасить),
 /// мягкое насыщение той же волны — теплое присутствие на мелких
 /// динамиках (мозг восстанавливает фундамент по гармоникам).
+/// Четная октава (+12 полутонов, ~0.3 от фундамента) — ламповая
+/// теплота как в референсах: нечетный tanh в одиночку дает
+/// только «пустой» квадратный тембр.
 /// Никаких расстроенных пил и резонанса: именно они давали
 /// «клавишный» дребезг прошлой версии.
 const SUB_GAIN: f32 = 0.9;
+const OCTAVE_GAIN: f32 = 0.5;
 const PRESENCE_GAIN: f32 = 0.45;
 const DRIVE_BASE: f32 = 1.5;
 const DRIVE_VEL: f32 = 2.5;
@@ -69,6 +73,9 @@ impl Voice for BassVoice {
         let freq = self.frequency * (1.0 - PITCH_DROP * (-PITCH_DROP_RATE * t).exp());
         self.phase = (self.phase + freq / sample_rate) % 1.0;
         let wave = (self.phase * std::f32::consts::TAU).sin();
+        // Четная октава строго в фазе с фундаментом (та же фаза ×2):
+        // тепло без биений — гармоники совпадают, а не спорят.
+        let octave = (self.phase * 2.0 % 1.0 * std::f32::consts::TAU).sin() * OCTAVE_GAIN;
 
         let sub = wave * SUB_GAIN;
         // Та же волна через драйв: гармоники идеально когерентны
@@ -77,7 +84,7 @@ impl Voice for BassVoice {
         let cutoff = (self.frequency * 6.0).clamp(300.0, 1600.0);
         let (presence, _, _) =
             self.presence_lp
-                .process((wave * drive).tanh(), cutoff, PRESENCE_Q, sample_rate);
+                .process((wave * drive).tanh() + octave, cutoff, PRESENCE_Q, sample_rate);
 
         (sub + presence * PRESENCE_GAIN) * self.gain * amp * attack * fade
     }
@@ -209,6 +216,25 @@ mod tests {
         assert!(
             sub > upper * 3.0,
             "weak fundamental: sub={sub} upper={upper}"
+        );
+    }
+
+    #[test]
+    fn even_harmonic_adds_tube_warmth() {
+        // Референс (Bad Angel, C2 65 Гц): 2-я гармоника ~0.3 от фундамента.
+        // Чистый синус + tanh дают только нечетные — отсюда «плоскость».
+        // Меряем на A2 (110 Гц, целая корзина): 2-я = ровно 220 Гц.
+        let sr = 44_100.0;
+        let out = render_bass(45, 1.0, 1.0);
+        let fund = goertzel(&out, 110.0, sr);
+        let second = goertzel(&out, 220.0, sr);
+        assert!(
+            second > fund * 0.15,
+            "no even warmth: 2nd={second} fund={fund}"
+        );
+        assert!(
+            second < fund * 0.45,
+            "too honky: 2nd={second} fund={fund}"
         );
     }
 

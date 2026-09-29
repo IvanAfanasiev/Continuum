@@ -197,6 +197,9 @@ class PlayerController extends ChangeNotifier {
       status = await playbackSetSeedCode(code: code);
       currentSeed = status?.seed ?? currentSeed;
       boxCode = status?.seedCode.replaceAll('-', '') ?? boxCode;
+      // Сид меняет состав (гости из пула): обновляем панели фактом.
+      tracks = await playbackTracks();
+      groups = await playbackGroups();
     } else {
       // Бэкенд спит — запоминаем локально, применится на старте.
       currentSeed = seedCodeToBigInt(code);
@@ -210,6 +213,8 @@ class PlayerController extends ChangeNotifier {
       status = await playbackRandomSeed();
       currentSeed = status?.seed ?? currentSeed;
       boxCode = status?.seedCode.replaceAll('-', '') ?? boxCode;
+      tracks = await playbackTracks();
+      groups = await playbackGroups();
     } else {
       const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
       final rnd = math.Random();

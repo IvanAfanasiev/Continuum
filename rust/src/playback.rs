@@ -21,7 +21,7 @@ use crate::composer::{Composer, LiveTempo};
 use crate::core::{snapshot, DEFAULT_SEED, NOTE_QUEUE_CAPACITY};
 use crate::engine::{f32_identity, AudioEngine, MasterFx, Pump, SharedFx};
 use crate::instruments::{
-    Acid, BassGuitar, Crash, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Slot,
+    Acid, BassGuitar, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Slot,
     SnareDrum, Vinyl, VoicePool,
 };
 use crate::mixer::MixerState;
@@ -40,11 +40,10 @@ pub const VINYL_ID: usize = 10;
 pub const VOCAL_ID: usize = 11;
 pub const FLUTE_ID: usize = 12;
 pub const FESTIVAL_ID: usize = 13;
-pub const CRASH_ID: usize = 14;
-pub const GUITAR_ID: usize = 15;
-pub const RAIN_ID: usize = 16;
-pub const FUZZ_ID: usize = 17;
-pub const ACID_ID: usize = 18;
+pub const GUITAR_ID: usize = 14;
+pub const RAIN_ID: usize = 15;
+pub const FUZZ_ID: usize = 16;
+pub const ACID_ID: usize = 17;
 
 /// Все id ансамбля — для валидации `set_track` из Flutter.
 pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
@@ -61,7 +60,6 @@ pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
     VOCAL_ID,
     FLUTE_ID,
     FESTIVAL_ID,
-    CRASH_ID,
     GUITAR_ID,
     RAIN_ID,
     FUZZ_ID,
@@ -149,7 +147,6 @@ pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
                 Slot::Vocal => Box::new(VoicePool::vocals(slot.id(), 4)),
                 Slot::Flute => Box::new(VoicePool::flutes(slot.id(), 4)),
                 Slot::Festival => Box::new(VoicePool::festivals(slot.id(), 6)),
-                Slot::Crash => Box::new(Crash::new(slot.id())),
                 Slot::Guitar => Box::new(VoicePool::guitars(slot.id(), 6)),
                 Slot::Rain => Box::new(Rain::new(slot.id())),
                 Slot::Fuzz => Box::new(VoicePool::fuzzes(slot.id(), 4)),
@@ -213,19 +210,33 @@ fn spawn_guarded(
 }
 
 /// Дефолтный набор инструментов стиля: канонические громкости слотов
-/// из вайтлиста, остальное — в ноль. Общий для контроллера и CLI.
-/// Слоты вне вайтлиста НЕ запрещены: пользователь может поднять любой
-/// вручную, смена стиля просто снова расставит дефолты.
-pub fn apply_style_mix(style: &dyn Style, mixer: &mut MixerState) {
+/// из вайтлиста плюс гости из флекс-пула (выбор — сидом), остальное — в ноль.
+/// Общий для контроллера и CLI.
+/// Слоты вне набора НЕ запрещены: пользователь может поднять любой
+/// вручную, смена стиля или сида просто снова расставит дефолты.
+pub fn apply_style_mix(style: &dyn Style, mixer: &mut MixerState, seed: u64) {
     let ensemble = style.ensemble();
+    let flex = pick_flex_slots(style, seed);
     for slot in Slot::ALL {
-        let vol = if ensemble.contains(&slot) {
+        let vol = if ensemble.contains(&slot) || flex.contains(&slot) {
             slot.base_volume()
         } else {
             0.0
         };
         mixer.set_track(slot.id(), vol);
     }
+}
+
+/// Гости микса: первые N пула, повернутого хэшем сида.
+/// Один сид — один состав, разные сиды — разные (почти всегда).
+fn pick_flex_slots(style: &dyn Style, seed: u64) -> Vec<Slot> {
+    let pool = style.flex_pool();
+    let n = style.flex_count().min(pool.len());
+    if n == 0 || pool.is_empty() {
+        return Vec::new();
+    }
+    let rot = (crate::arranger::splitmix64(seed ^ 0xF1E9) % pool.len() as u64) as usize;
+    (0..n).map(|k| pool[(rot + k) % pool.len()]).collect()
 }
 
 /// Кламп ручки темпа. Неположительное значение = сброс к дефолту стиля.
@@ -294,7 +305,7 @@ impl RunningSession {
         {
             let style_guard = style.read().unwrap_or_else(|e| e.into_inner());
             let mut mix_guard = mixer.write().unwrap_or_else(|e| e.into_inner());
-            apply_style_mix(&**style_guard, &mut mix_guard);
+            apply_style_mix(&**style_guard, &mut mix_guard, seed);
         }
 
         let composer = Composer::new_shared(
@@ -359,6 +370,9 @@ impl RunningSession {
     fn set_style_live(&self, name: &str) -> bool {
         match styles::make_style(name) {
             Some(next) => {
+                // Сид читаем ДО style.write: иначе инверсия порядка
+                // с set_seed (seed→style против style→seed) = дедлок.
+                let seed_now = snapshot(&self.seed);
                 if let Ok(mut guard) = self.style.write() {
                     // Новый стиль приносит свой дефолтный набор инструментов,
                     // свою комнату/верх и чистые группы: применяется целиком,
@@ -367,7 +381,7 @@ impl RunningSession {
                     *guard = next;
                     if let Ok(mut mixer) = self.mixer.write() {
                         mixer.reset_groups();
-                        apply_style_mix(&**guard, &mut mixer);
+                        apply_style_mix(&**guard, &mut mixer, seed_now);
                     }
                     if let Ok(mut fx) = self.fx.write() {
                         *fx = fx_next;
@@ -568,13 +582,20 @@ impl PlaybackController {
         }
     }
 
-    /// Горячая смена сида: композер подхватит его на следующем шаге.
+    /// Горячая смена сида: композер подхватит его на следующем шаге,
+    /// а микс пересоберется под новый состав (вайтлист + гости сида).
+    /// Групповые фейдеры при этом не трогаем — только слоты.
     pub fn set_seed(&self, seed: u64) -> PlaybackStatus {
         let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_ref() {
             Some(s) => {
                 if let Ok(mut g) = s.seed.write() {
                     *g = seed;
+                }
+                if let Ok(style) = s.style.read() {
+                    if let Ok(mut mixer) = s.mixer.write() {
+                        apply_style_mix(&**style, &mut mixer, seed);
+                    }
                 }
                 s.status()
             }
@@ -789,7 +810,7 @@ pub fn render_offline(style_name: &str, seed: u64, steps: usize) -> Option<Rende
     let mixer = Arc::new(RwLock::new(MixerState::new()));
     {
         let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
-        apply_style_mix(&*style, &mut m);
+        apply_style_mix(&*style, &mut m, seed);
     }
     let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
     let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
@@ -878,7 +899,7 @@ pub fn soak_render(
     let mixer = Arc::new(RwLock::new(MixerState::new()));
     {
         let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
-        apply_style_mix(&*style, &mut m);
+        apply_style_mix(&*style, &mut m, seed);
     }
     let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
     let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
@@ -984,7 +1005,7 @@ pub fn render_wav(
     let mixer = Arc::new(RwLock::new(MixerState::new()));
     {
         let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
-        apply_style_mix(&*style, &mut m);
+        apply_style_mix(&*style, &mut m, seed);
     }
     let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
     let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
@@ -1127,10 +1148,10 @@ mod tests {
         assert_eq!(s.seed, 42);
         assert_eq!(s.tempo_bpm, 126.0);
 
-        // Дефолтный набор club — битмейкер: панч + 808 слоем, саб,
-        // снейр, хэты и виниловый фон. Остальное выключено.
+        // Дефолтный набор club — битмейкер: панч, саб, снейр, хэты,
+        // виниловый фон + двое гостей от сида (пул: кислота, чопы, Rhodes).
         let tracks = c.tracks();
-        assert_eq!(tracks.len(), 18);
+        assert_eq!(tracks.len(), 17);
         let vol = |id: usize| {
             tracks
                 .iter()
@@ -1138,15 +1159,32 @@ mod tests {
                 .map(|t| t.volume)
                 .unwrap_or(-1.0)
         };
+        assert!(vol(BASS_ID) > 0.0);
         assert!(vol(KICK_ID) > 0.0);
         assert!(vol(SNARE_ID) > 0.0);
         assert!(vol(HAT_ID) > 0.0);
         assert!(vol(VINYL_ID) > 0.0);
         assert_eq!(vol(KICK808_ID), 0.0);
-        assert_eq!(vol(KEYS_ID), 0.0);
-        assert_eq!(vol(VOCAL_ID), 0.0);
         assert_eq!(vol(LASER_ID), 0.0);
         assert_eq!(vol(PLUCK_ID), 0.0);
+        // Гости — ровно двое из пула, остальные строго в нуле.
+        let guests: Vec<u64> = tracks
+            .iter()
+            .filter(|t| {
+                t.volume > 0.0
+                    && ![BASS_ID, KICK_ID, SNARE_ID, HAT_ID, VINYL_ID]
+                        .contains(&(t.id as usize))
+            })
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(guests.len(), 2, "guests: {guests:?}");
+        for id in &guests {
+            let slot = Slot::from_id(*id as usize).expect("known slot");
+            assert!(
+                [Slot::Acid, Slot::Vocal, Slot::Keys].contains(&slot),
+                "stranger guest: {slot:?}"
+            );
+        }
 
         // Петля реально генерирует ноты.
         assert!(wait_for_notes(&c, Duration::from_secs(3)));
@@ -1480,7 +1518,7 @@ mod tests {
     #[test]
     fn style_ensembles_match_character() {
         // Характер дефолтных наборов из референсов пользователя:
-        // club — панч+808+лазер+вокал+крэш, без винила;
+        // club — битмейкер (бочка, снейр, хэты, саб, винил) + гости;
         // lofi — винил, Rhodes, флейта, гитара и дождь, без лазера и 808.
         let ensemble_of = |style: &str| styles::make_style(style).unwrap().ensemble().to_vec();
         use Slot::*;
@@ -1490,7 +1528,7 @@ mod tests {
             assert!(club.contains(&s), "club: {s:?} missing");
         }
         for s in [
-            Pad, Keys, Pluck, Laser, Vocal, Flute, Guitar, Rain, Festival, Crash, Fuzz,
+            Pad, Keys, Pluck, Laser, Vocal, Flute, Guitar, Rain, Festival, Fuzz,
             Kick808, Acid,
         ] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
@@ -1502,7 +1540,7 @@ mod tests {
         ] {
             assert!(lofi.contains(&s), "lofi: {s:?} missing");
         }
-        for s in [Kick808, Laser, Vocal, Festival, Crash] {
+        for s in [Kick808, Laser, Vocal, Festival] {
             assert!(!lofi.contains(&s), "lofi: {s:?} should be off");
         }
 
@@ -1520,26 +1558,60 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Fuzz] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [Guitar, Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Crash, Acid] {
+        for s in [Guitar, Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Acid] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
     }
 
     #[test]
     fn mixes_match_whitelists_with_base_volumes() {
-        // Микс = вайтлист × канонические громкости, без цифр в пресете.
+        // Микс = вайтлист + гости сида, громкости канонические.
+        // Гости — только из пула стиля, остальные строго в нуле.
         for name in styles::style_names() {
             let style = styles::make_style(name).expect("known style");
             let mut mixer = MixerState::new();
-            apply_style_mix(&*style, &mut mixer);
+            apply_style_mix(&*style, &mut mixer, 7);
+            let picked = pick_flex_slots(&*style, 7);
             for slot in Slot::ALL {
                 let vol = mixer.volume_for(slot.id());
-                if style.ensemble().contains(&slot) {
+                let expected = style.ensemble().contains(&slot) || picked.contains(&slot);
+                if expected {
                     assert_eq!(vol, slot.base_volume(), "{name}: {slot:?} volume");
                 } else {
                     assert_eq!(vol, 0.0, "{name}: {slot:?} should be muted");
                 }
             }
         }
+    }
+
+    #[test]
+    fn flex_guests_depend_on_seed() {
+        // Гости меняются от сида (но всегда из пула), ядро стабильно.
+        use std::collections::HashSet;
+        let style = styles::make_style("club").expect("club");
+        let core: HashSet<Slot> = style.ensemble().iter().copied().collect();
+        let mut variants = HashSet::new();
+        for seed in 0..16u64 {
+            let mut mixer = MixerState::new();
+            apply_style_mix(&*style, &mut mixer, seed);
+            let audible: HashSet<Slot> = Slot::ALL
+                .iter()
+                .copied()
+                .filter(|s| mixer.volume_for(s.id()) > 0.0)
+                .collect();
+            // Ядро всегда на месте.
+            assert!(audible.is_superset(&core), "seed {seed}: core missing");
+            // Вне ядра и пула — никого.
+            for s in &audible {
+                assert!(
+                    core.contains(s) || style.flex_pool().contains(s),
+                    "seed {seed}: stranger {s:?}"
+                );
+            }
+            let guests: Vec<Slot> = audible.difference(&core).copied().collect();
+            assert_eq!(guests.len(), style.flex_count().min(style.flex_pool().len()));
+            variants.insert(guests);
+        }
+        assert!(variants.len() > 1, "guests never vary");
     }
 }

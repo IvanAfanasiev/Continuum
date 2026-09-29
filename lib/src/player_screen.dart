@@ -109,7 +109,6 @@ const _slotMeta = {
   'vocal': 'Вокал',
   'flute': 'Флейта',
   'festival': 'Фестиваль',
-  'crash': 'Крэш',
   'guitar': 'Гитара',
   'rain': 'Дождь',
   'fuzz': 'Фазз',

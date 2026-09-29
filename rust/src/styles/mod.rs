@@ -255,6 +255,16 @@ pub trait Style: Send + Sync {
     /// остальные глушатся в ноль. Громкости — канонические, у слотов
     /// ([`Slot::base_volume`]); пресет не хардкодит цифры.
     fn ensemble(&self) -> &'static [Slot];
+    /// Флекс-пул: кандидаты на гостевые места в миксе, выбор — сидом.
+    /// Ядро жанра (вайтлист) стабильно, специи меняются: каждый сид —
+    /// свой состав. Пусто = весь состав фиксирован.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[]
+    }
+    /// Сколько гостевых мест разыгрывается (0 = выключено).
+    fn flex_count(&self) -> usize {
+        0
+    }
     /// Направляющие по слотам в порядке [`Slot::ALL`].
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT];
     /// Комната реверба: доля мокрого (0 = сухо, как хит клуба на массиве).
@@ -330,11 +340,10 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
 const CHORD_ATTEN: [f32; 4] = [1.0, 0.75, 0.65, 0.6];
 
 /// Prior участия акцентных слотов в визитах секций (остальные — всегда).
-/// Крэш, лазеры, гимны и чопы — эффекты: их отсутствие в части стыков
+/// Лазеры, гимны и чопы — эффекты: их отсутствие в части стыков
 /// и есть разнообразие сидов, а не поломка.
 fn accent_prior(instrument_id: usize) -> f32 {
     match Slot::from_id(instrument_id) {
-        Some(Slot::Crash) => 0.5,
         Some(Slot::Laser) => 0.7,
         Some(Slot::Festival) => 0.75,
         Some(Slot::Vocal) => 0.75,
@@ -816,7 +825,7 @@ mod tests {
         // вариация сида, а не долбежка и не тишина.
         let guide = RoleGuide {
             climax_only: true,
-            ..RoleGuide::kit(&[1.0; 8], 49, 0.8)
+            ..RoleGuide::kit(&[1.0; 8], 74, 0.8)
         };
         let mut hits = 0;
         for stage in 0..17 {
@@ -824,14 +833,14 @@ mod tests {
             song.is_last_measure = true;
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
-            // id 14 = Crash, индекс слота 13 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 14, 13, &mut rng)
+            // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
+            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, &mut rng)
                 .is_empty()
             {
                 hits += 1;
             }
         }
-        assert!(hits > 0 && hits < 17, "crash visits: {hits}/17");
+        assert!(hits > 0 && hits < 17, "laser visits: {hits}/17");
     }
 
     #[test]
