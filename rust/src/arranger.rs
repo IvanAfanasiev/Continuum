@@ -70,10 +70,12 @@ pub const CALM_SCORE: Score = Score {
 };
 
 /// Порядок входа инструментов в интро — в две волны, и это обоснование,
-/// а не случайность: сначала тема и пелена (что играем), потом грув
-/// (как качаем). Внутри грува порядок поворачивается сидом: у разных
-/// сидов музыка «собирается» по-разному.
-const EARLY_JOIN: [InstrumentRole; 3] = [
+/// а не случайность: сначала пульс и тема (что играем), потом грув
+/// (как качаем). Бочка входит первой везде — heartbeat с первого такта,
+/// иначе стили без пэдов стартуют в тишину. Внутри грува порядок
+/// поворачивается сидом: у разных сидов музыка «собирается» по-разному.
+const EARLY_JOIN: [InstrumentRole; 4] = [
+    InstrumentRole::Kick,
     InstrumentRole::Chords,
     InstrumentRole::Texture,
     InstrumentRole::Lead,
@@ -208,7 +210,7 @@ fn stage_gains_for(section: SongSection, progress: f32, seed_hash: u64) -> [f32;
                 *gain *= smoothstep((progress - k as f32 * 0.06) / 0.15);
             } else if let Some(k) = LATE_JOIN.iter().position(|r| *r as usize == i) {
                 let pos = (k + rot) % LATE_JOIN.len();
-                *gain *= smoothstep((progress - 0.35 - pos as f32 * 0.07) / 0.18);
+                *gain *= smoothstep((progress - 0.28 - pos as f32 * 0.07) / 0.18);
             }
         }
     }
@@ -614,22 +616,25 @@ mod tests {
 
     #[test]
     fn intro_builds_theme_before_groove() {
-        // Первая половина интро: тема и пелена уже звучат,
-        // грув (кик/бас) еще молчит. Порядок обоснования: что, потом как.
+        // Первый такт интро: heartbeat бочки уже стучит,
+        // остальной грув (бас/снейр/хэт) еще молчит.
+        // Порядок: пульс, потом мясо.
         let mut a = Arranger::new(3);
         let ctx = a.advance_measure();
         assert_eq!(ctx.section, SongSection::Intro);
         let g = ctx.stage_gains;
         let bass = InstrumentRole::Bass.index();
         let kick = InstrumentRole::Kick.index();
-        let chords = InstrumentRole::Chords.index();
+        let snare = InstrumentRole::Snare.index();
+        let hat = InstrumentRole::Hat.index();
+        assert!(g[kick] > 0.1, "no heartbeat: {}", g[kick]);
         assert!(
-            g[bass] < 0.05 && g[kick] < 0.05,
-            "groove leaked early: bass={} kick={}",
+            g[bass] < 0.05 && g[snare] < 0.05 && g[hat] < 0.05,
+            "groove leaked early: bass={} snare={} hat={}",
             g[bass],
-            g[kick]
+            g[snare],
+            g[hat]
         );
-        assert!(g[chords] > 0.1, "theme missing early: {}", g[chords]);
     }
 
     #[test]

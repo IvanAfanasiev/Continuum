@@ -119,26 +119,25 @@ impl Style for ClubStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Битмейкер: только биты, ударные, бас и кассетный фон —
-        // бочка, снейр, хэты, глубокий саб и виниловый треск.
-        // Без клавишных, синтезаторов и верхов.
+        // Битмейкер: только биты, ударные и бас —
+        // бочка, снейр, хэты и глубокий саб. Без клавишных,
+        // синтезаторов, верхов и шумовых подложек.
         &[
             Slot::Bass,
             Slot::Kick,
             Slot::Snare,
             Slot::Hat,
-            Slot::Vinyl,
         ]
     }
 
-    /// Гости битмейкера: кислота, чопы и Rhodes заходят по двое,
+    /// Гости битмейкера: чопы или Rhodes заходят по одному,
     /// состав зависит от сида.
     fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Acid, Slot::Vocal, Slot::Keys]
+        &[Slot::Vocal, Slot::Keys]
     }
 
     fn flex_count(&self) -> usize {
-        2
+        1
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
