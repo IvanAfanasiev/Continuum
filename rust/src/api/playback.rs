@@ -92,6 +92,18 @@ pub fn playback_engine_stats() -> EngineStats {
     controller().engine_stats()
 }
 
+/// Старт pull-сессии для фронтенда (Android играет сам):
+/// композер крутится, аудио-потока нет, сэмплы забирают по запросу.
+pub fn playback_pull_start(style_name: String, seed: u64) -> PlaybackStatus {
+    controller().start(&style_name, seed, false)
+}
+
+/// Pull-блок для фронтенда: стерео interleaved f32.
+/// Вызывать циклично (~4-8 раз в секунду), темп задает потребитель.
+pub fn playback_pull_render(frames: u64, sample_rate: f32) -> Vec<f32> {
+    controller().render_pull(frames, sample_rate)
+}
+
 pub fn playback_style_names() -> Vec<String> {
     crate::styles::style_names()
         .iter()

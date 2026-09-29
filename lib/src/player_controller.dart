@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -143,7 +144,11 @@ class PlayerController extends ChangeNotifier {
   Future<void> togglePlay() async {
     final s = status;
     if (s == null || !s.running) {
-      status = await playbackStart(styleName: currentStyle, seed: currentSeed);
+      // Android играет сам (pull через AudioTrack): бэкенд только
+      // рендерит, без cpal-потока. Остальные платформы — как раньше.
+      status = Platform.isAndroid
+          ? await playbackPullStart(styleName: currentStyle, seed: currentSeed)
+          : await playbackStart(styleName: currentStyle, seed: currentSeed);
       tracks = await playbackTracks();
       groups = await playbackGroups();
       currentStyle = status?.styleName ?? currentStyle;

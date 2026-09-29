@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1289186050;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1304966642;
 
 // Section: executor
 
@@ -169,6 +169,80 @@ fn wire__crate__api__playback__playback_groups_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Ok::<_, ()>(crate::api::playback::playback_groups())?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__playback__playback_pull_render_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "playback_pull_render",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_frames = <u64>::sse_decode(&mut deserializer);
+            let api_sample_rate = <f32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::playback::playback_pull_render(
+                        api_frames,
+                        api_sample_rate,
+                    ))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__playback__playback_pull_start_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "playback_pull_start",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_style_name = <String>::sse_decode(&mut deserializer);
+            let api_seed = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::playback::playback_pull_start(
+                        api_style_name,
+                        api_seed,
+                    ))?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -762,6 +836,18 @@ impl SseDecode for Vec<crate::playback::GroupInfo> {
     }
 }
 
+impl SseDecode for Vec<f32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<f32>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -909,50 +995,56 @@ fn pde_ffi_dispatcher_primary_impl(
         ),
         4 => wire__crate__api__playback__playback_groups_impl(port, ptr, rust_vec_len, data_len),
         5 => {
+            wire__crate__api__playback__playback_pull_render_impl(port, ptr, rust_vec_len, data_len)
+        }
+        6 => {
+            wire__crate__api__playback__playback_pull_start_impl(port, ptr, rust_vec_len, data_len)
+        }
+        7 => {
             wire__crate__api__playback__playback_random_seed_impl(port, ptr, rust_vec_len, data_len)
         }
-        6 => wire__crate__api__playback__playback_set_group_volume_impl(
+        8 => wire__crate__api__playback__playback_set_group_volume_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        7 => wire__crate__api__playback__playback_set_intensity_impl(
+        9 => wire__crate__api__playback__playback_set_intensity_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        8 => {
+        10 => {
             wire__crate__api__playback__playback_set_paused_impl(port, ptr, rust_vec_len, data_len)
         }
-        9 => wire__crate__api__playback__playback_set_seed_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__playback__playback_set_seed_code_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        11 => {
-            wire__crate__api__playback__playback_set_style_impl(port, ptr, rust_vec_len, data_len)
-        }
-        12 => wire__crate__api__playback__playback_set_tempo_bpm_impl(
+        11 => wire__crate__api__playback__playback_set_seed_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__playback__playback_set_seed_code_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
         13 => {
+            wire__crate__api__playback__playback_set_style_impl(port, ptr, rust_vec_len, data_len)
+        }
+        14 => wire__crate__api__playback__playback_set_tempo_bpm_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        15 => {
             wire__crate__api__playback__playback_set_track_impl(port, ptr, rust_vec_len, data_len)
         }
-        14 => wire__crate__api__playback__playback_start_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__playback__playback_status_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__playback__playback_stop_impl(port, ptr, rust_vec_len, data_len),
-        17 => {
+        16 => wire__crate__api__playback__playback_start_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__playback__playback_status_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__playback__playback_stop_impl(port, ptr, rust_vec_len, data_len),
+        19 => {
             wire__crate__api__playback__playback_style_names_impl(port, ptr, rust_vec_len, data_len)
         }
-        18 => wire__crate__api__playback__playback_styles_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__playback__playback_tracks_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__playback__playback_styles_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__playback__playback_tracks_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1131,6 +1223,16 @@ impl SseEncode for Vec<crate::playback::GroupInfo> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::playback::GroupInfo>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<f32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <f32>::sse_encode(item, serializer);
         }
     }
 }

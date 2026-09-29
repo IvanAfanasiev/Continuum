@@ -7,9 +7,9 @@ use crate::core::midi_to_freq;
 /// Кислотный бас в духе TB-303: пила через резонансный lowpass
 /// с огибающей среза, акценты (громкие ноты — ярче и злее) и слайды
 /// между нотами. Сквигл поверх саба, а не вместо него.
-const RESO: f32 = 6.0;
+const RESO: f32 = 3.0;
 const CUTOFF_BASE_HZ: f32 = 500.0;
-const CUTOFF_ENV_HZ: f32 = 2800.0;
+const CUTOFF_ENV_HZ: f32 = 2000.0;
 const ENV_DECAY: f32 = 9.0;
 const ACCENT_THRESH: f32 = 0.7;
 const ACCENT_BOOST: f32 = 1.35;

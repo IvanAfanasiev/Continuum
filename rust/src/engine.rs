@@ -160,6 +160,10 @@ impl RenderState {
         self.duck_mult = mult.clamp(0.0, 2.0);
     }
 
+    pub(crate) fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
+
     fn volume_of(volumes: &[(usize, f32)], id: usize) -> f32 {
         for (vid, vol) in volumes {
             if *vid == id {
@@ -238,7 +242,7 @@ impl RenderState {
 /// Один код для всех форматов сэмплов: часть Android-девайсов отдает
 /// только I16/U16, и мономорфный F32-поток там не строился (тишина
 /// без видимой ошибки). Конвертация — в тонких замыканиях `run`.
-struct Pump {
+pub(crate) struct Pump {
     queue: Arc<ArrayQueue<NoteEvent>>,
     mixer: Arc<RwLock<MixerState>>,
     is_paused: Arc<AtomicBool>,
@@ -257,7 +261,7 @@ struct Pump {
 
 impl Pump {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub(crate) fn new(
         queue: Arc<ArrayQueue<NoteEvent>>,
         instruments: Vec<Box<dyn Instrument>>,
         mixer: Arc<RwLock<MixerState>>,
@@ -293,9 +297,13 @@ impl Pump {
 
     /// Перенастройка насоса на новую частоту вывода (реконнект):
     /// состояние микса сохраняется, гейны не рвутся.
-    fn retune(&mut self, sample_rate: f32) {
+    pub(crate) fn retune(&mut self, sample_rate: f32) {
         self.state.retune(sample_rate);
         self.pause_step = 1.0 / (0.01 * self.state.sample_rate);
+    }
+
+    pub(crate) fn sample_rate(&self) -> f32 {
+        self.state.sample_rate()
     }
 
     /// Подготовка блока: ноты, громкости, живые FX и время эха.
@@ -352,7 +360,7 @@ impl Pump {
     }
 
     /// Заливка блока колбэка. Полная пауза: тишина, DSP заморожен.
-    fn fill<T>(&mut self, data: &mut [T], channels: usize, conv: fn(f32) -> T) {
+    pub(crate) fn fill<T>(&mut self, data: &mut [T], channels: usize, conv: fn(f32) -> T) {
         let target = if self.is_paused.load(Ordering::Relaxed) {
             0.0
         } else {
@@ -391,7 +399,7 @@ impl Pump {
     }
 }
 
-fn f32_identity(x: f32) -> f32 {
+pub(crate) fn f32_identity(x: f32) -> f32 {
     x
 }
 

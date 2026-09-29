@@ -345,8 +345,15 @@ class _CenterColumn extends StatelessWidget {
     final c = controller;
     if (c.running && !c.paused) {
       await bridge.pause();
-    } else {
-      await bridge.play();
+    } else if (!await bridge.play()) {
+      // Трек не создался (нет устройства): объясняем, а не молчим.
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Не удалось запустить звук: нет устройства вывода'),
+          ),
+        );
+      }
     }
   }
 

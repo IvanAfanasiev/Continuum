@@ -261,7 +261,7 @@ impl Slot {
             Slot::Guitar => 0.6,
             Slot::Rain => 0.2,
             Slot::Fuzz => 0.7,
-            Slot::Acid => 0.7,
+            Slot::Acid => 0.6,
         }
     }
 }

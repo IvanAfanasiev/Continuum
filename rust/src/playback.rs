@@ -19,7 +19,7 @@ use crossbeam::queue::ArrayQueue;
 
 use crate::composer::{Composer, LiveTempo};
 use crate::core::{snapshot, DEFAULT_SEED, NOTE_QUEUE_CAPACITY};
-use crate::engine::{AudioEngine, MasterFx, SharedFx};
+use crate::engine::{f32_identity, AudioEngine, MasterFx, Pump, SharedFx};
 use crate::instruments::{
     Acid, BassGuitar, Crash, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Slot,
     SnareDrum, Vinyl, VoicePool,
@@ -264,6 +264,9 @@ struct RunningSession {
     engine_error: Arc<Mutex<Option<String>>>,
     counters: EngineCounters,
     audio_config: Arc<RwLock<String>>,
+    /// Насос для pull-режима (фронтенд играет сам): создается лениво
+    /// первым render_pull, переживает вызовы (голоса/хвосты целы).
+    pull_pump: Mutex<Option<Pump>>,
 }
 
 impl RunningSession {
@@ -349,6 +352,7 @@ impl RunningSession {
             engine_error,
             counters,
             audio_config,
+            pull_pump: Mutex::new(None),
         }
     }
 
@@ -692,6 +696,52 @@ impl PlaybackController {
         }
     }
 
+    /// Pull-рендер для фронтенда (Android играет сам через AudioTrack):
+    /// стерео interleaved f32, `frames` фреймов. Насос создается лениво
+    /// и переживает вызовы; смена частоты ретюнит без потери голосов.
+    /// Без сессии — пусто. Кап 4 секунд за вызов от дурака.
+    pub fn render_pull(&self, frames: u64, sample_rate: f32) -> Vec<f32> {
+        let n = (frames as usize).min(192_000);
+        if n == 0 {
+            return Vec::new();
+        }
+        let sr = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            44_100.0
+        };
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(s) = guard.as_ref() else {
+            return Vec::new();
+        };
+        let mut pump_guard = s.pull_pump.lock().unwrap_or_else(|e| e.into_inner());
+        let pump = match pump_guard.as_mut() {
+            Some(p) => {
+                if (p.sample_rate() - sr).abs() > 1.0 {
+                    p.retune(sr);
+                }
+                p
+            }
+            None => {
+                *pump_guard = Some(Pump::new(
+                    Arc::clone(&s.queue),
+                    build_instruments(),
+                    Arc::clone(&s.mixer),
+                    Arc::clone(&s.paused),
+                    Arc::clone(&s.fx),
+                    Arc::clone(&s.live_bpm),
+                    sr,
+                    s.counters.clone(),
+                    Arc::clone(&s.filter_open),
+                ));
+                pump_guard.as_mut().expect("pump just created")
+            }
+        };
+        let mut out = vec![0.0f32; n * 2];
+        pump.fill(&mut out, 2, f32_identity);
+        out
+    }
+
     pub fn status(&self) -> PlaybackStatus {
         let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_ref() {
@@ -901,6 +951,149 @@ pub fn soak_render(
     })
 }
 
+// ---------------------------------------------------------------------------
+// WAV-экспорт: первые N секунд генерации в PCM16-файл для прослушивания.
+// Тот же тракт, что soak (Composer + RenderState), плюс запись сэмплов.
+// Без внешних зависимостей: 44-байтный заголовок WAV пишем вручную.
+// ---------------------------------------------------------------------------
+
+/// Рендерит `seconds` секунд стиля/сида в WAV PCM16 stereo.
+/// Возвращает отчет (как soak) — пик/RMS файла видно до прослушивания.
+pub fn render_wav(
+    style_name: &str,
+    seed: u64,
+    seconds: f32,
+    sample_rate: f32,
+    path: &str,
+) -> Result<SoakReport, String> {
+    use crate::core::MAX_ACTIVE_TRACKS;
+    use crate::engine::RenderState;
+
+    let style = styles::make_style(style_name).ok_or_else(|| format!("unknown style '{style_name}'"))?;
+    let style_name_out = style.name().to_string();
+    let sr = if sample_rate.is_finite() && sample_rate > 0.0 {
+        sample_rate
+    } else {
+        44_100.0
+    };
+    let wet = style.reverb_wet();
+    let size = style.reverb_size();
+    let treble = style.treble_cutoff();
+    let echo_secs = 60.0 / style.bpm() * 0.75;
+
+    let mixer = Arc::new(RwLock::new(MixerState::new()));
+    {
+        let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
+        apply_style_mix(&*style, &mut m);
+    }
+    let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
+    let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
+    let mut composer = Composer::new(
+        Arc::clone(&queue),
+        Arc::clone(&style_shared),
+        Arc::clone(&mixer),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+        seed,
+    );
+
+    let mut render = RenderState::new(build_instruments(), sr);
+    render.set_room(wet, size);
+    render.set_echo_time(echo_secs);
+
+    let target = (seconds.max(0.0) * sr) as u64;
+    let mut pcm: Vec<i16> = Vec::with_capacity((target * 2) as usize);
+    let mut done = 0u64;
+    let mut note_count = 0usize;
+    let mut peak: f32 = 0.0;
+    let mut sum_sq = 0.0;
+    let mut non_finite = 0u64;
+
+    while done < target {
+        let (step_notes, duration) = composer.next_step();
+        for note in &step_notes {
+            render.push_note(note);
+        }
+        note_count += step_notes.len();
+
+        let mut vols = [(0usize, 0.0f32); MAX_ACTIVE_TRACKS];
+        let vlen = {
+            let m = mixer.read().unwrap_or_else(|e| e.into_inner());
+            let mut buf = [0usize; MAX_ACTIVE_TRACKS];
+            let n = m.active_ids(&mut buf);
+            for (i, id) in buf[..n].iter().enumerate() {
+                vols[i] = (*id, m.volume_for(*id));
+            }
+            n
+        };
+
+        let mut step_samples = ((duration * sr) as u64).max(1);
+        while step_samples > 0 && done < target {
+            let (l, r) = render.render_sample(&vols[..vlen], treble);
+            if l.is_finite() && r.is_finite() {
+                peak = peak.max(l.abs().max(r.abs()));
+                sum_sq += l * l + r * r;
+                pcm.push((l.clamp(-1.0, 1.0) * 32767.0) as i16);
+                pcm.push((r.clamp(-1.0, 1.0) * 32767.0) as i16);
+            } else {
+                non_finite += 1;
+                pcm.push(0);
+                pcm.push(0);
+            }
+            done += 1;
+            step_samples -= 1;
+        }
+    }
+
+    write_wav_pcm16(path, &pcm, 2, sr as u32)
+        .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    let rms = if done > 0 {
+        (sum_sq / (2 * done) as f32).sqrt()
+    } else {
+        0.0
+    };
+    Ok(SoakReport {
+        style_name: style_name_out,
+        seed,
+        seconds: done as f32 / sr,
+        samples: done,
+        notes: note_count,
+        peak,
+        rms,
+        non_finite,
+    })
+}
+
+/// Минимальный WAV-писатель: PCM16 stereo, 44-байтный заголовок.
+fn write_wav_pcm16(
+    path: &str,
+    samples: &[i16],
+    channels: u16,
+    sample_rate: u32,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let data_bytes = (samples.len() * 2) as u32;
+    let mut buf = Vec::with_capacity((44 + data_bytes) as usize);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes());
+    buf.extend_from_slice(&channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&(sample_rate * channels as u32 * 2).to_le_bytes());
+    buf.extend_from_slice(&(channels * 2).to_le_bytes());
+    buf.extend_from_slice(&16u16.to_le_bytes());
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_bytes.to_le_bytes());
+    for s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::File::create(path)?.write_all(&buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1056,6 +1249,29 @@ mod tests {
         let s = c.stop();
         assert!(!s.running);
         assert!(!c.status().running);
+    }
+
+    #[test]
+    fn pull_renders_finite_blocks() {
+        // Pull-режим фронта: старт без аудио, затем блоки сэмплов.
+        // Размер = фреймы × 2 канала, все конечно.
+        let c = PlaybackController::new();
+        let s = c.start("club", 42, false);
+        assert!(s.running);
+        // Даем композеру положить ноты в очередь.
+        std::thread::sleep(Duration::from_secs(2));
+        let out = c.render_pull(44_100, 44_100.0);
+        assert_eq!(out.len(), 88_200);
+        assert!(out.iter().all(|s| s.is_finite()));
+        // Смена частоты ретюнит насос без потери состояния.
+        let out2 = c.render_pull(48_000, 48_000.0);
+        assert_eq!(out2.len(), 96_000);
+        assert!(out2.iter().all(|s| s.is_finite()));
+        // Без сессии — пусто, без паники.
+        let c2 = PlaybackController::new();
+        assert!(c2.render_pull(100, 44_100.0).is_empty());
+        assert!(c.render_pull(0, 44_100.0).is_empty());
+        let _ = c.stop();
     }
 
     #[test]
@@ -1224,6 +1440,25 @@ mod tests {
         let b = render_offline("club", 5, 32).expect("renders");
         assert_eq!(a.notes_total, b.notes_total);
         assert_eq!(a.notes_per_instrument, b.notes_per_instrument);
+    }
+
+    #[test]
+    fn wav_export_writes_valid_file() {
+        // 2 секунды на пониженной частоте: быстро, но весь тракт настоящий.
+        let path = std::env::temp_dir().join("cont_wav_export_test.wav");
+        let path_str = path.to_string_lossy().to_string();
+        let report = render_wav("club", 11, 2.0, 22_050.0, &path_str).expect("renders wav");
+        assert_eq!(report.samples, 44_100);
+        assert_eq!(report.non_finite, 0);
+
+        let bytes = std::fs::read(&path).expect("wav readable");
+        // RIFF/WAVE-магия + размер = заголовок + сэмплы × 2 канала × 2 байта.
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(&bytes[12..16], b"fmt ");
+        assert_eq!(&bytes[36..40], b"data");
+        assert_eq!(bytes.len(), 44 + 44_100 * 2 * 2);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

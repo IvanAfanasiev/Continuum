@@ -18,12 +18,13 @@ use std::{
 
 use rust_lib_cont::core::DEFAULT_SEED;
 use rust_lib_cont::playback::{
-    render_offline, soak_render, PlaybackController, RenderReport, SoakReport,
+    render_offline, render_wav, soak_render, PlaybackController, RenderReport, SoakReport,
 };
 use rust_lib_cont::styles;
 
 const DEFAULT_RENDER_STEPS: usize = 64;
 const DEFAULT_SOAK_SECS: f32 = 60.0;
+const DEFAULT_WAV_SECS: f32 = 60.0;
 
 #[derive(Debug, PartialEq)]
 struct Cli {
@@ -31,6 +32,8 @@ struct Cli {
     style: String,
     render_steps: Option<usize>,
     soak_secs: Option<f32>,
+    wav_path: Option<String>,
+    wav_secs: Option<f32>,
 }
 
 impl Cli {
@@ -40,6 +43,8 @@ impl Cli {
             style: "club".to_string(),
             render_steps: None,
             soak_secs: None,
+            wav_path: None,
+            wav_secs: None,
         }
     }
 }
@@ -80,6 +85,28 @@ fn parse_cli(args: &[String]) -> Cli {
             }
         } else if let Some(value) = arg.strip_prefix("--soak=") {
             cli.soak_secs = value.parse().ok();
+        } else if arg == "--wav" {
+            match args.get(i + 1) {
+                Some(next) if !next.starts_with("--") => {
+                    cli.wav_path = Some(next.clone());
+                    i += 1;
+                }
+                _ => eprintln!("--wav needs a file path"),
+            }
+        } else if let Some(value) = arg.strip_prefix("--wav=") {
+            cli.wav_path = Some(value.to_string());
+        } else if arg == "--secs" {
+            match args.get(i + 1) {
+                Some(next) if !next.starts_with("--") => {
+                    if let Ok(n) = next.parse::<f32>() {
+                        cli.wav_secs = Some(n);
+                        i += 1;
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(value) = arg.strip_prefix("--secs=") {
+            cli.wav_secs = value.parse().ok();
         } else if let Some(value) = arg.strip_prefix("--seed=") {
             if let Ok(n) = value.parse::<u64>() {
                 cli.seed = n;
@@ -101,13 +128,14 @@ fn parse_cli(args: &[String]) -> Cli {
 
 fn print_help() {
     println!(
-        "Usage: cargo run -- [SEED] [STYLE] [--render [N]] [--soak [SECS]]\n\
+        "Usage: cargo run -- [SEED] [STYLE] [--render [N]] [--soak [SECS]] [--wav FILE [--secs N]]\n\
          Styles: {}\n\
          Examples:\n  \
          cargo run -- lofi\n  \
          cargo run -- 1234 deephouse\n  \
          cargo run -- lofi --render 64\n  \
-         cargo run -- club --soak 300",
+         cargo run -- club --soak 300\n  \
+         cargo run -- club 424242 --wav club.wav --secs 60",
         styles::style_names().join(", ")
     );
 }
@@ -161,6 +189,19 @@ fn main() {
             "club".to_string()
         }
     };
+
+    if let Some(path) = cli.wav_path {
+        let secs = cli.wav_secs.unwrap_or(DEFAULT_WAV_SECS);
+        let wall = Instant::now();
+        match render_wav(&style_name, cli.seed, secs, 44_100.0, &path) {
+            Ok(report) => {
+                print_soak(&report, wall.elapsed().as_secs_f32());
+                println!("  wrote: {path}");
+            }
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
+    }
 
     if let Some(steps) = cli.render_steps {
         match render_offline(&style_name, cli.seed, steps) {
@@ -262,5 +303,23 @@ mod tests {
             Some(DEFAULT_SOAK_SECS)
         );
         assert_eq!(parse_cli(&args(&["--soak=10"])).soak_secs, Some(10.0));
+    }
+
+    #[test]
+    fn wav_flag_with_and_without_secs() {
+        let cli = parse_cli(&args(&["club", "42", "--wav", "out.wav", "--secs", "30"]));
+        assert_eq!(cli.wav_path, Some("out.wav".to_string()));
+        assert_eq!(cli.wav_secs, Some(30.0));
+        assert_eq!(cli.seed, 42);
+        assert_eq!(cli.style, "club");
+        let cli = parse_cli(&args(&["--wav=x.wav"]));
+        assert_eq!(cli.wav_path, Some("x.wav".to_string()));
+        assert_eq!(cli.wav_secs, None);
+        let cli = parse_cli(&args(&["--secs=10", "--wav", "y.wav"]));
+        assert_eq!(cli.wav_secs, Some(10.0));
+        // Без пути --wav игнорируется, secs живет отдельно.
+        let cli = parse_cli(&args(&["--secs", "10"]));
+        assert_eq!(cli.wav_path, None);
+        assert_eq!(cli.wav_secs, Some(10.0));
     }
 }

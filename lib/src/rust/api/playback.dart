@@ -84,6 +84,26 @@ Future<PlaybackStatus> playbackStatus() =>
 Future<EngineStats> playbackEngineStats() =>
     RustLib.instance.api.crateApiPlaybackPlaybackEngineStats();
 
+/// Старт pull-сессии для фронтенда (Android играет сам):
+/// композер крутится, аудио-потока нет, сэмплы забирают по запросу.
+Future<PlaybackStatus> playbackPullStart({
+  required String styleName,
+  required BigInt seed,
+}) => RustLib.instance.api.crateApiPlaybackPlaybackPullStart(
+  styleName: styleName,
+  seed: seed,
+);
+
+/// Pull-блок для фронтенда: стерео interleaved f32.
+/// Вызывать циклично (~4-8 раз в секунду), темп задает потребитель.
+Future<Float32List> playbackPullRender({
+  required BigInt frames,
+  required double sampleRate,
+}) => RustLib.instance.api.crateApiPlaybackPlaybackPullRender(
+  frames: frames,
+  sampleRate: sampleRate,
+);
+
 Future<List<String>> playbackStyleNames() =>
     RustLib.instance.api.crateApiPlaybackPlaybackStyleNames();
 

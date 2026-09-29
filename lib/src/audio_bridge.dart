@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:cont/src/player_controller.dart';
+import 'package:cont/src/pull_player.dart';
 
 /// Мост к системному плееру: фоновая служба, уведомление с паузой,
 /// аудиофокус («главный звуковой поток»). Весь звук по-прежнему
@@ -22,13 +23,23 @@ class AudioBridge {
   final PlayerController _controller;
   ContAudioHandler? _handler;
   StreamSubscription? _interruptionSub;
+  StreamSubscription? _noisySub;
+
+  /// На Android Rust только рендерит (pull), играет AudioTrack.
+  /// Создается лениво при первом play, живет пока жив мост.
+  PullPlayer? _pull;
 
   bool get available => _handler != null;
+
+  PullPlayer _pullPlayer() => _pull ??= PullPlayer();
 
   Future<void> init() async {
     try {
       debugPrint('[audio] AudioService.init...');
-      final handler = ContAudioHandler(_controller);
+      final handler = ContAudioHandler(
+        _controller,
+        pull: Platform.isAndroid ? _pullPlayer() : null,
+      );
       await AudioService.init(
         builder: () => handler,
         config: const AudioServiceConfig(
@@ -56,22 +67,49 @@ class AudioBridge {
       });
       session.becomingNoisyEventStream.listen((_) {
         debugPrint('[audio] becoming noisy -> pause');
-        unawaited(_controller.setPausedExternal(true));
+        unawaited(pause());
       });
+      // Дублирующий native-сигнал (трек душится сам, событие — для паузы
+      // состояния и уведомления, если главный изолят жив).
+      if (Platform.isAndroid) {
+        _noisySub = const EventChannel('cont/audio_events')
+            .receiveBroadcastStream()
+            .listen((_) async {
+          debugPrint('[pull] becoming noisy -> pause');
+          await pause();
+        }, onError: (Object e) {
+          debugPrint('[pull] events error: $e');
+        });
+      }
     } catch (e) {
       debugPrint('[audio] session unavailable: $e');
     }
   }
 
-  Future<void> play() async {
+  /// Play через pull-плеер на Android (true = трек создан).
+  /// Остальные платформы — как раньше, через контроллер напрямую.
+  Future<bool> play() async {
+    if (Platform.isAndroid) {
+      await _controller.ensurePlaying();
+      final ok = await _pullPlayer().start();
+      await sync();
+      return ok;
+    }
     if (_handler != null) {
       await _handler!.play();
     } else {
       await _controller.togglePlay();
     }
+    return true;
   }
 
   Future<void> pause() async {
+    if (Platform.isAndroid) {
+      await _pullPlayer().stop();
+      await _controller.ensurePaused();
+      await sync();
+      return;
+    }
     if (_handler != null) {
       await _handler!.pause();
     } else {
@@ -99,15 +137,18 @@ class AudioBridge {
 
   Future<void> dispose() async {
     await _interruptionSub?.cancel();
+    await _noisySub?.cancel();
   }
 }
 
 /// Хендлер системных кнопок (уведомление, гарнитура, Android Auto).
 /// Делегирует в PlayerController, затем публикует состояние.
+/// На Android в пару к состоянию запускает/останавливает pull-цикл.
 class ContAudioHandler extends BaseAudioHandler {
-  ContAudioHandler(this.controller);
+  ContAudioHandler(this.controller, {this.pull});
 
   final PlayerController controller;
+  final PullPlayer? pull;
 
   Future<void> _sync() async {
     final s = controller.status;
@@ -135,11 +176,13 @@ class ContAudioHandler extends BaseAudioHandler {
   @override
   Future<void> play() async {
     await controller.ensurePlaying();
+    await pull?.start();
     await _sync();
   }
 
   @override
   Future<void> pause() async {
+    await pull?.stop();
     await controller.ensurePaused();
     await _sync();
   }
@@ -147,6 +190,7 @@ class ContAudioHandler extends BaseAudioHandler {
   @override
   Future<void> stop() async {
     // У плеера stop = пауза + убрать уведомление.
+    await pull?.stop();
     await controller.ensurePaused();
     playbackState.add(playbackState.value.copyWith(
       controls: const [MediaControl.play],
