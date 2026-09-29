@@ -122,6 +122,12 @@ pub struct SongContext {
     /// Создается в интро и НЕ меняется весь круг: один сид = одна
     /// узнаваемая тема, развиваемая формой, а не пересочиняемая.
     pub motif: [u8; 8],
+    /// Вторая тема сида: ретроград + терция вверх от мотива.
+    /// Четные круги играют A, нечетные — B: бесконечность
+    /// чередуется, а не зацикливается на одной фразе.
+    pub motif_b: [u8; 8],
+    /// Какой мотив звучит в текущем круге.
+    pub use_alt_motif: bool,
     /// Гармоническая прогрессия сида: сдвиги ступеней 0..4 для аккомпанемента,
     /// меняются каждые 2 такта. Лид держит мотив, гармония движется —
     /// сиды отличаются и темой, и гармоническим движением.
@@ -148,6 +154,7 @@ pub struct Arranger {
     phrase_offset: usize,
     density: f32,
     motif: [u8; 8],
+    motif_b: [u8; 8],
     prog: [u8; 4],
 }
 
@@ -233,6 +240,15 @@ impl Arranger {
             m = splitmix64(m);
             *slot = (m % 5) as u8;
         }
+        // Тема B: ретроград + терция вверх. Родственна A, но другая.
+        // Защита от палиндрома: совпавшую B сдвигаем на первой ступени.
+        let mut motif_b = [0u8; 8];
+        for (i, slot) in motif_b.iter_mut().enumerate() {
+            *slot = (motif[7 - i] + 2) % 5;
+        }
+        if motif_b == motif {
+            motif_b[0] = (motif_b[0] + 1) % 5;
+        }
         let mut a = Self {
             score,
             in_intro: true,
@@ -247,6 +263,7 @@ impl Arranger {
             phrase_offset: (seed_hash % 8) as usize,
             density: 0.7 + 0.6 * hash01(seed_hash, 0xD517, 0),
             motif,
+            motif_b,
             prog: PROGS[(seed_hash % PROGS.len() as u64) as usize],
         };
         a.enter_section();
@@ -324,6 +341,8 @@ impl Arranger {
             seed_hash: self.seed_hash,
             density: self.density,
             motif: self.motif,
+            motif_b: self.motif_b,
+            use_alt_motif: self.cycle % 2 == 1,
             prog: self.prog,
         }
     }
@@ -539,7 +558,35 @@ mod tests {
             assert_eq!(x.energy, y.energy);
             assert_eq!(x.cycle, y.cycle);
             assert_eq!(x.motif, y.motif);
+            assert_eq!(x.motif_b, y.motif_b);
+            assert_eq!(x.use_alt_motif, y.use_alt_motif);
         }
+    }
+
+    #[test]
+    fn motif_pair_differs_and_alternates_by_cycle() {
+        // Пара тем: B — родственник A, но другая тема; круги чередуют.
+        for seed in [0u64, 1, 7, 42, 777, 424242] {
+            let mut a = Arranger::new(seed);
+            let first = a.advance_measure();
+            assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
+            assert!(!first.use_alt_motif, "cycle 0 must play A");
+            for v in first.motif_b {
+                assert!(v <= 4, "motif_b out of range: {v}");
+            }
+        }
+        // Дожимаем до 1-го круга: там звучит B.
+        let mut a = Arranger::new(5);
+        let mut saw_alt = false;
+        for _ in 0..400 {
+            let ctx = a.advance_measure();
+            if ctx.cycle == 1 {
+                assert!(ctx.use_alt_motif, "cycle 1 must play B");
+                saw_alt = true;
+                break;
+            }
+        }
+        assert!(saw_alt, "cycle 1 never came");
     }
 
     #[test]

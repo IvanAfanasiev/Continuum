@@ -524,7 +524,14 @@ fn play_guide(
                 0
             };
             let (degree, jitter) = if guide.follow_motif {
-                let motif_step = song.motif[(step_in_measure / 2) % song.motif.len()] as usize;
+                // Тема круга: A на четных, B на нечетных. B — ретроград
+                // со сдвигом: бесконечность чередуется, мотив не замыливается.
+                let theme = if song.use_alt_motif {
+                    &song.motif_b
+                } else {
+                    &song.motif
+                };
+                let motif_step = theme[(step_in_measure / 2) % theme.len()] as usize;
                 (motif_step + answer, 0)
             } else {
                 let mut d = (degree + prog_shift) % scale.len().max(1);
@@ -639,6 +646,8 @@ mod tests {
             seed_hash: 42,
             density: 1.0,
             motif: [0, 2, 4, 2, 0, 3, 1, 4],
+            motif_b: [1, 4, 0, 3, 2, 4, 2, 0],
+            use_alt_motif: false,
             prog: [0, 0, 0, 0],
         }
     }
@@ -759,6 +768,47 @@ mod tests {
                 .map(|n| n.midi_pitch)
             })
             .collect()
+    }
+
+    #[test]
+    fn alt_motif_switches_theme() {
+        // Тот же лид, разные темы A/B — разные мелодии.
+        // use_alt_motif переключает массив, остальное одинаково.
+        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4]);
+        let mut song_b = test_song(0.5);
+        song_b.motif = [0, 2, 4, 2, 0, 3, 1, 4];
+        song_b.motif_b = [4, 4, 0, 0, 2, 2, 4, 4];
+        song_b.use_alt_motif = true;
+        let guide = RoleGuide {
+            weights: &[1.0; 16],
+            follow_motif: true,
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+        };
+        let scale = [48, 50, 52, 53, 55, 57, 59];
+        let mut rng = rand::SeedableRng::seed_from_u64(3);
+        let b: Vec<u8> = (0..8)
+            .filter_map(|step| {
+                play_guide(
+                    &guide,
+                    &scale,
+                    &song_b,
+                    1.0,
+                    false,
+                    step * 2,
+                    16,
+                    0.1,
+                    6,
+                    5,
+                    &mut rng,
+                )
+                .into_iter()
+                .next()
+                .map(|n| n.midi_pitch)
+            })
+            .collect();
+        assert_eq!(a.len(), 8);
+        assert_eq!(b.len(), 8);
+        assert_ne!(a, b, "alt motif ignored");
     }
 
     #[test]
