@@ -81,7 +81,14 @@ pub(crate) struct RenderState {
     treble_r: Svf,
     kick_env: f32,
     duck_release: f32,
+    /// Быстрая атака огибающей (2 мс): памп успевает за киком,
+    /// но не трещит широкополосным хэшем по фронту удара.
+    duck_attack: f32,
     duck_mult: f32,
+    /// Мастер-HP 28 Гц: режет инфраниз и постоянку (хрип динамиков
+    /// телефона), музыкального контента не трогает (минимум 32 Гц).
+    hp_l: Svf,
+    hp_r: Svf,
     sample_rate: f32,
 }
 
@@ -115,7 +122,10 @@ impl RenderState {
             treble_r: Svf::default(),
             kick_env: 0.0,
             duck_release: (-1.0 / (sample_rate * DUCK_RELEASE_SECS)).exp(),
+            duck_attack: (-1.0 / (sample_rate * 0.002)).exp(),
             duck_mult: 1.0,
+            hp_l: Svf::default(),
+            hp_r: Svf::default(),
             sample_rate,
         }
     }
@@ -136,7 +146,10 @@ impl RenderState {
         self.echo = Echo::new(sr, 1.0, 0.38, 2800.0);
         self.treble_l = Svf::default();
         self.treble_r = Svf::default();
+        self.hp_l = Svf::default();
+        self.hp_r = Svf::default();
         self.duck_release = (-1.0 / (sr * DUCK_RELEASE_SECS)).exp();
+        self.duck_attack = (-1.0 / (sr * 0.002)).exp();
         self.sample_rate = sr;
     }
 
@@ -190,7 +203,14 @@ impl RenderState {
             kick_r += r * vol;
         }
         let kick_abs = (kick_l + kick_r) * 0.5;
-        self.kick_env = kick_abs.abs().max(self.kick_env * self.duck_release);
+        // Атака сглажена (2 мс): фронт удара не плодит широкополосный
+        // хэш в огибающей, грув при этом не страдает — спад тот же.
+        let a = if kick_abs.abs() > self.kick_env {
+            self.duck_attack
+        } else {
+            self.duck_release
+        };
+        self.kick_env = kick_abs.abs() + (self.kick_env - kick_abs.abs()) * a;
         if self.kick_env < 1e-12 {
             self.kick_env = 0.0;
         }
@@ -232,7 +252,11 @@ impl RenderState {
         let sample_rate = self.sample_rate;
         let (t_l, _, _) = self.treble_l.process(wet_l, treble, 0.7, sample_rate);
         let (t_r, _, _) = self.treble_r.process(wet_r, treble, 0.7, sample_rate);
-        (master_sample(t_l), master_sample(t_r))
+        // Мастер-HP: инфраниз и постоянка вон (хрип динамиков),
+        // музыка начинается с 32 Гц (808) — не задето.
+        let (_, _, h_l) = self.hp_l.process(t_l, 28.0, 0.7, sample_rate);
+        let (_, _, h_r) = self.hp_r.process(t_r, 28.0, 0.7, sample_rate);
+        (master_sample(h_l), master_sample(h_r))
     }
 }
 

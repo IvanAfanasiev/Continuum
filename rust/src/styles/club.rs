@@ -314,6 +314,8 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.35)
         };
         // Кислотный бас поверх саба: плотная линия, сквелч с акцентами.
+        // Джиттер строго 0: эйсид дублирует бас октавой выше —
+        // расстроенная октава бьётся с гармониками саба (жабий стрекот).
         let acid = RoleGuide {
             energy_response: 1.6,
             duration_mult: 0.9,
@@ -323,7 +325,7 @@ impl Style for ClubStyle {
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 0,
-                jitter: 1,
+                jitter: 0,
             },
             vel_high_cut: 0.8,
             poles: Some(ACID_POLES),
@@ -376,6 +378,28 @@ mod tests {
             );
         }
         out
+    }
+
+    #[test]
+    fn acid_doubles_bass_in_unison() {
+        // Правило против жабьего стрекота: эйсид — октава саба
+        // (та же ступень, джиттер 0), иначе фундамента бьются
+        // с гармониками (замер: 11.5 Гц в полосе 120–500).
+        use crate::instruments::Slot;
+        let style = ClubStyle::new();
+        let guides = style.slot_guides();
+        let at = |slot: Slot| {
+            Slot::ALL.iter().position(|s| *s == slot).map(|i| &guides[i]).unwrap()
+        };
+        let (bass, acid) = (at(Slot::Bass), at(Slot::Acid));
+        let deg = |g: &RoleGuide| match g.voice {
+            Voicing::Scale { degree, octave, jitter } => (degree, octave, jitter),
+            _ => (0, 0, 0),
+        };
+        let (bd, bo, _) = deg(bass);
+        let (ad, ao, aj) = deg(acid);
+        assert_eq!((ad, aj), (bd, 0), "acid must mirror bass degree without jitter");
+        assert_eq!(ao, bo + 1, "acid must sit exactly an octave above bass");
     }
 
     #[test]
