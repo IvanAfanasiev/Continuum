@@ -3,22 +3,12 @@
 Put files here with exact names below — code picks them up automatically
 (no code changes needed). Missing file = black placeholder, app won't crash.
 
-Styles and shelves: Club — club, house, techno, trance, dubstep, dnb,
-electro, rave; Rock — poprock, hardrock, metal; Chill — lofi.
+Styles (3): club (Club), rock (Rock), lofi (Chill).
 
 ## Backgrounds (one per style, portrait-friendly)
 
-- `bg_club.png` — dark tense club, strobe smoke
-- `bg_house.png` — warm parquet dancefloor
-- `bg_techno.png` — dark industrial hall, single strobe
-- `bg_trance.png` — euphoric sunrise over crowd, lasers
-- `bg_dubstep.png` — dark bass machinery, heavy smoke
-- `bg_dnb.png` — night city, fast headlights
-- `bg_electro.png` — neon grid, fat saw waves
-- `bg_rave.png` — oldschool warehouse, smiley, strobes
-- `bg_poprock.png` — sunny garage band stage
-- `bg_hardrock.png` — dark arena, wall of amps
-- `bg_metal.png` — black forge, sparks
+- `bg_club.png` — hard beatmaker: 909, sub, acid squelch
+- `bg_rock.png` — mechanical concert: wall of fuzz
 - `bg_lofi.png` — warm dusty room, sunset window
 
 Used in: `lib/src/player_screen.dart` → `StyleBackground`

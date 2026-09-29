@@ -7,28 +7,19 @@ import 'package:cont/src/player_controller.dart';
 import 'package:cont/src/rust/playback.dart';
 import 'package:cont/src/seed_input.dart';
 
-/// Треки в порядке полок групп (как 8 фейдеров выше):
-/// порядок групп — из _groupMeta, внутри — порядок бэкенда.
-List<TrackInfo> _orderedTracks(PlayerController c) {
-  const groupOrder = [
-    'bass',
-    'kick',
-    'snare',
-    'hat',
-    'chords',
-    'lead',
-    'vocal',
-    'texture'
-  ];
-  final list = c.tracks.toList();
-  list.sort((a, b) {
-    final ga = groupOrder.indexOf(a.group);
-    final gb = groupOrder.indexOf(b.group);
-    final ca = ga < 0 ? groupOrder.length : ga;
-    final cb = gb < 0 ? groupOrder.length : gb;
-    return ca != cb ? ca.compareTo(cb) : a.id.compareTo(b.id);
-  });
-  return list;
+/// Треки, разложенные по полкам групп. Порядок полок — из бэкенда
+/// (`groups` идут в каноническом порядке), внутри — порядок слотов.
+/// Пустые полки пропускаются. Никаких своих списков во фронте.
+List<(String, List<TrackInfo>)> _groupedTracks(PlayerController c) {
+  final out = <(String, List<TrackInfo>)>[];
+  for (final g in c.groups) {
+    final items = c.tracks.where((t) => t.group == g.name).toList();
+    if (items.isNotEmpty) out.add((g.name, items));
+  }
+  final known = c.groups.map((g) => g.name).toSet();
+  final rest = c.tracks.where((t) => !known.contains(t.group)).toList();
+  if (rest.isNotEmpty) out.add(('', rest));
+  return out;
 }
 
 /// Подписи и иконки групп для обычного пользователя (без слов-TODO).
@@ -497,32 +488,27 @@ class _MixPanelBody extends StatelessWidget {
             percent: true,
             onChanged: (v) => c.setIntensity(v),
           ),
-          const Divider(height: 32),
-          // Группы всегда доступны: ручка задает потолок громкости
-          // для инструментов своей группы (слот выше потолка не уйдет).
-          // Пустая группа тоже двигается — потолок запомнится и сработает,
-          // как только включишь в ней инструмент.
-          for (final g in c.groups)
-            _VolumeRow(
-              icon: _groupMeta[g.name]?.$1 ?? Icons.tune,
-              tooltip: _groupMeta[g.name]?.$2 ?? g.name,
-              value: g.volume,
-              max: 1.0,
-              percent: true,
-              onChanged: (v) => c.setGroupVolume(g.name, v),
-            ),
-          // Все 16 инструментов доступны всегда: вайтлист стиля лишь
-          // расставляет дефолты (вне списка — 0, внутри — 100% базы),
-          // поднять любой вручную можно в любой момент. Смена стиля
-          // снова сбросит уровни на дефолт. Шкала — % от базы стиля.
+          // Инструменты, сгруппированные по полкам (порядок полок —
+          // как 8 типов выше было). Групповых фейдеров нет: ручка
+          // инструмента — единственная, потолок ей не нужен.
           if (c.tracks.isNotEmpty) ...[
             const Divider(height: 32),
-            const Text('Инструменты',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            // Порядок — как полки групп: бас, ударные, аккорды, лиды,
-            // вокал, атмосфера. Внутри группы — порядок слотов бэкенда.
-            for (final t in _orderedTracks(c))
+            for (final entry in _groupedTracks(c)) ...[
+              Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+              child: Text(
+                _groupMeta[entry.$1]?.$2 ?? entry.$1,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.6),
+                ),
+              ),
+            ),
+            for (final t in entry.$2)
               _VolumeRow(
                 icon: _groupMeta[t.group]?.$1 ?? Icons.music_note,
                 tooltip: (_slotMeta[t.name] ?? t.name) +
@@ -537,6 +523,7 @@ class _MixPanelBody extends StatelessWidget {
                 dimmed: t.volume <= 0.0,
                 onChanged: (v) => c.setTrackVolume(t.id, v * t.baseVolume),
               ),
+            ],
           ],
         ],
       ),

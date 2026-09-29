@@ -7,18 +7,8 @@
 //! масштабируемые энергией секции. Никаких номеров шагов в коде стилей.
 
 pub mod club;
-pub mod dnb;
-pub mod dubstep;
-pub mod electro;
-pub mod hardrock;
-pub mod house;
 pub mod lofi;
-pub mod metal;
-pub mod poprock;
-pub mod rave;
 pub mod rock;
-pub mod techno;
-pub mod trance;
 
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -606,42 +596,19 @@ fn play_guide(
 /// вместо тихого включения не того стиля.
 pub fn make_style(name: &str) -> Option<Box<dyn Style>> {
     use club::ClubStyle;
-    use dnb::DnbStyle;
-    use dubstep::DubstepStyle;
-    use electro::ElectroStyle;
-    use hardrock::HardRockStyle;
-    use house::HouseStyle;
     use lofi::LofiStyle;
-    use metal::MetalStyle;
-    use poprock::PopRockStyle;
-    use rave::RaveStyle;
     use rock::RockStyle;
-    use techno::TechnoStyle;
-    use trance::TranceStyle;
     match name.trim().to_lowercase().as_str() {
         "club" => Some(Box::new(ClubStyle::new())),
-        "house" => Some(Box::new(HouseStyle::new())),
-        "techno" => Some(Box::new(TechnoStyle::new())),
-        "trance" => Some(Box::new(TranceStyle::new())),
-        "dubstep" => Some(Box::new(DubstepStyle::new())),
-        "dnb" => Some(Box::new(DnbStyle::new())),
-        "electro" => Some(Box::new(ElectroStyle::new())),
-        "rave" => Some(Box::new(RaveStyle::new())),
-        "rock" => Some(Box::new(RockStyle::new())),
-        "poprock" => Some(Box::new(PopRockStyle::new())),
-        "hardrock" => Some(Box::new(HardRockStyle::new())),
-        "metal" => Some(Box::new(MetalStyle::new())),
         "lofi" => Some(Box::new(LofiStyle::new())),
+        "rock" => Some(Box::new(RockStyle::new())),
         _ => None,
     }
 }
 
 /// Все доступные стили: имена для CLI и Flutter.
 pub fn style_names() -> &'static [&'static str] {
-    &[
-        "club", "house", "techno", "trance", "dubstep", "dnb", "electro", "rave", "rock",
-        "poprock", "hardrock", "metal", "lofi",
-    ]
+    &["club", "rock", "lofi"]
 }
 
 #[cfg(test)]
