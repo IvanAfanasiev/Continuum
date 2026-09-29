@@ -1138,11 +1138,11 @@ mod tests {
                 .map(|t| t.volume)
                 .unwrap_or(-1.0)
         };
-        assert!(vol(KICK808_ID) > 0.0);
         assert!(vol(KICK_ID) > 0.0);
         assert!(vol(SNARE_ID) > 0.0);
         assert!(vol(HAT_ID) > 0.0);
         assert!(vol(VINYL_ID) > 0.0);
+        assert_eq!(vol(KICK808_ID), 0.0);
         assert_eq!(vol(KEYS_ID), 0.0);
         assert_eq!(vol(VOCAL_ID), 0.0);
         assert_eq!(vol(LASER_ID), 0.0);
@@ -1151,18 +1151,18 @@ mod tests {
         // Петля реально генерирует ноты.
         assert!(wait_for_notes(&c, Duration::from_secs(3)));
 
-        // Группы: 8 макро-фейдеров вместо 12 слотов; один Kick на два кика.
+        // Группы: 8 макро-фейдеров; один Kick на два кика.
         assert_eq!(c.groups().len(), 8);
         let s = c.set_group_volume("kick", 0.5);
         assert!(s.running);
-        let kick808 = c
+        let kick = c
             .tracks()
             .iter()
-            .find(|t| t.id == KICK808_ID as u64)
+            .find(|t| t.id == KICK_ID as u64)
             .unwrap()
             .clone();
-        assert_eq!(kick808.group, "kick");
-        assert_eq!(kick808.volume, 0.5); // 1.0 слота × 0.5 группы
+        assert_eq!(kick.group, "kick");
+        assert_eq!(kick.volume, 0.95 * 0.5); // 0.95 слота × 0.5 группы
         assert!(c.set_group_volume("nope", 0.5).running); // чужое имя игнор
         assert!(c.status().running);
 
@@ -1349,14 +1349,11 @@ mod tests {
         // 808-й в club: база — чистая four-floor (шага 14 нет),
         // альтернатива — с пушем на 14-м шаге. Обе ветки обязаны
         // встречаться: иначе alt-данные мертвы.
+        // (808-й вне дефолта club — тестируем направляющую напрямую,
+        // активны все слоты.)
         fn full_has_push(seed: u64) -> bool {
             let style = styles::make_style("club").expect("club");
-            let ensemble = style.ensemble();
-            let active: Vec<usize> = Slot::ALL
-                .iter()
-                .filter(|s| ensemble.contains(s))
-                .map(|s| s.id())
-                .collect();
+            let active: Vec<usize> = Slot::ALL.iter().map(|s| s.id()).collect();
             let mut rng = StdRng::seed_from_u64(seed);
             let mut arranger = Arranger::new(seed);
             let mut song = arranger.advance_measure();
@@ -1489,11 +1486,12 @@ mod tests {
         use Slot::*;
 
         let club = ensemble_of("club");
-        for s in [Bass, Kick, Snare, Hat, Kick808, Vinyl, Acid] {
+        for s in [Bass, Kick, Snare, Hat, Vinyl] {
             assert!(club.contains(&s), "club: {s:?} missing");
         }
         for s in [
             Pad, Keys, Pluck, Laser, Vocal, Flute, Guitar, Rain, Festival, Crash, Fuzz,
+            Kick808, Acid,
         ] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
         }
@@ -1519,10 +1517,10 @@ mod tests {
 
         // Rock: механика без переборов — рев фазза вместо гитары.
         let rock = ensemble_of("rock");
-        for s in [Bass, Kick, Snare, Hat, Fuzz, Crash] {
+        for s in [Bass, Kick, Snare, Hat, Fuzz] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [Guitar, Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck] {
+        for s in [Guitar, Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Crash, Acid] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
     }

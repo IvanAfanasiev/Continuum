@@ -122,17 +122,15 @@ impl Style for ClubStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Битмейкер: только биты, ударные, бас, кислота и кассетный фон —
-        // бочка, саб с хвостом, снейр, хэты, 303-рифф и виниловый треск.
-        // Без клавишных, высоких синтезаторов и верхов.
+        // Битмейкер: только биты, ударные, бас и кассетный фон —
+        // бочка, снейр, хэты, глубокий саб и виниловый треск.
+        // Без клавишных, синтезаторов и верхов.
         &[
             Slot::Bass,
             Slot::Kick,
             Slot::Snare,
             Slot::Hat,
-            Slot::Kick808,
             Slot::Vinyl,
-            Slot::Acid,
         ]
     }
 
@@ -362,11 +360,10 @@ mod tests {
     use crate::playback::{HAT_ID, KICK808_ID, KICK_ID, SNARE_ID};
 
     fn render(seed: u64, steps: usize) -> Vec<(usize, crate::instruments::NoteEvent)> {
+        // Тестируем направляющие, а не микс: активны все слоты.
         let style = ClubStyle::new();
-        let ensemble = style.ensemble();
         let active: Vec<usize> = crate::instruments::Slot::ALL
             .iter()
-            .filter(|s| ensemble.contains(s))
             .map(|s| s.id())
             .collect();
         let mut rng = rand::SeedableRng::seed_from_u64(seed);

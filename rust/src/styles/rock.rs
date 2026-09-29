@@ -119,7 +119,8 @@ impl Style for RockStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Механика: бочка, снейр, хэт, бас, рев фазза и молот-крэш.
+        // Механика: бочка, снейр, хэт, бас и рев фазза.
+        // Без тарелок: металлический звон не к месту даже на стыках.
         // Без гитарных переборов, клавиш и текстур.
         &[
             Slot::Bass,
@@ -127,7 +128,6 @@ impl Style for RockStyle {
             Slot::Snare,
             Slot::Hat,
             Slot::Fuzz,
-            Slot::Crash,
         ]
     }
 
