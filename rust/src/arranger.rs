@@ -123,8 +123,10 @@ pub struct SongContext {
     /// узнаваемая тема, развиваемая формой, а не пересочиняемая.
     pub motif: [u8; 8],
     /// Вторая тема сида: ретроград + терция вверх от мотива.
-    /// Четные круги играют A, нечетные — B: бесконечность
-    /// чередуется, а не зацикливается на одной фразе.
+    /// Блоки по 8 фраз (~16 тактов): 8 фраз A, 8 фраз B. Внутри блока
+    /// тема дополнительно ротируется окном фразы, так что дословных
+    /// повторов нет ни внутри блока, ни на стыке. Привязка к фразе,
+    /// а не к кругу формы: длительность блоков одинакова во всех стилях.
     pub motif_b: [u8; 8],
     /// Какой мотив звучит в текущем круге.
     pub use_alt_motif: bool,
@@ -342,7 +344,10 @@ impl Arranger {
             density: self.density,
             motif: self.motif,
             motif_b: self.motif_b,
-            use_alt_motif: self.cycle % 2 == 1,
+            // Блок A/B по 8 фраз: одинаковые блоки во всех стилях,
+            // без привязки к длине круга формы. Фразовый оффсет сида
+            // сдвигает границы блоков — у разных сидов B входит раньше/позже.
+            use_alt_motif: (phrase_index / 8) % 2 == 1,
             prog: self.prog,
         }
     }
@@ -564,29 +569,39 @@ mod tests {
     }
 
     #[test]
-    fn motif_pair_differs_and_alternates_by_cycle() {
-        // Пара тем: B — родственник A, но другая тема; круги чередуют.
+    fn motif_pair_differs_and_alternates_by_phrase_blocks() {
+        // Пара тем: B — родственник A, но другая тема; блоки по 8 фраз чередуют.
         for seed in [0u64, 1, 7, 42, 777, 424242] {
             let mut a = Arranger::new(seed);
             let first = a.advance_measure();
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
-            assert!(!first.use_alt_motif, "cycle 0 must play A");
+            assert!(!first.use_alt_motif, "track must start with A");
             for v in first.motif_b {
                 assert!(v <= 4, "motif_b out of range: {v}");
             }
         }
-        // Дожимаем до 1-го круга: там звучит B.
+        // За ~200 тактов (~100 фраз) видны оба блока; границы детерминированы.
         let mut a = Arranger::new(5);
-        let mut saw_alt = false;
-        for _ in 0..400 {
+        let mut seen_a = false;
+        let mut seen_b = false;
+        for _ in 0..200 {
             let ctx = a.advance_measure();
-            if ctx.cycle == 1 {
-                assert!(ctx.use_alt_motif, "cycle 1 must play B");
-                saw_alt = true;
-                break;
+            if ctx.use_alt_motif {
+                seen_b = true;
+            } else {
+                seen_a = true;
             }
         }
-        assert!(saw_alt, "cycle 1 never came");
+        assert!(seen_a && seen_b, "A/B blocks never alternate");
+        let mut x = Arranger::new(5);
+        let mut y = Arranger::new(5);
+        for _ in 0..40 {
+            assert_eq!(
+                x.advance_measure().use_alt_motif,
+                y.advance_measure().use_alt_motif,
+                "block boundary must be deterministic"
+            );
+        }
     }
 
     #[test]
