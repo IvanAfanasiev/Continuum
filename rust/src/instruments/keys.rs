@@ -38,6 +38,8 @@ pub struct KeysVoice {
     tine_gain: f32,
     t: f32,
     samples_left: usize,
+    attack_mul: f32,
+    release_mul: f32,
 }
 
 impl Voice for KeysVoice {
@@ -51,6 +53,8 @@ impl Voice for KeysVoice {
         self.gain = note.velocity;
         self.index_start = 1.2 + 3.0 * note.velocity;
         self.tine_gain = 0.12 + 0.45 * note.velocity;
+        self.attack_mul = note.attack_mul;
+        self.release_mul = note.release_mul;
         self.t = 0.0;
         self.car_phase = 0.0;
         self.mod_phase = 0.0;
@@ -66,10 +70,13 @@ impl Voice for KeysVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        let attack_raw = (self.t / ATTACK_SECS).min(1.0);
+        // Атака/релиз от сида: Rhodes бывает кусачим и ватным.
+        let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
+        let attack_raw = (self.t / attack_secs).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
         let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-AMP_DECAY_RATE * self.t).exp();
-        let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
+        let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
+        let fade = release_fade(self.samples_left, fade_len);
 
         // FM 1:1 с падающим индексом: колокол в атаке, синус в сустейне.
         let index = INDEX_FLOOR + (self.index_start - INDEX_FLOOR) * (-INDEX_DECAY * self.t).exp();
@@ -106,6 +113,27 @@ impl Voice for KeysVoice {
 mod tests {
     use super::super::{Instrument, VoicePool};
     use super::*;
+
+    #[test]
+    fn seed_articulation_softens_attack() {
+        // Мягкий Rhodes (длинная атака) кусается меньше в первые 15 мс.
+        fn early_energy(atk: f32) -> f32 {
+            let sr = 44_100.0;
+            let mut keys = VoicePool::keys(7, 1);
+            keys.set_sample_rate(sr);
+            keys.trigger(&NoteEvent::new(7, 60, 0.7, 0.5).shaped(atk, 1.0));
+            (0..(0.015 * sr) as usize)
+                .map(|_| {
+                    let s = keys.next_sample();
+                    assert!(s.is_finite());
+                    s.abs()
+                })
+                .sum()
+        }
+        let sharp = early_energy(0.8);
+        let soft = early_energy(1.8);
+        assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
+    }
 
     #[test]
     fn keys_ring_with_tine_and_tremolo() {

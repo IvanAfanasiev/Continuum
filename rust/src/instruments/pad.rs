@@ -50,15 +50,18 @@ impl Voice for PadVoice {
         self.samples_left = total;
         self.elapsed = 0;
         self.gain = note.velocity;
-        self.attack_samples = ((total as f32 * 0.25) as usize)
+        // Артикуляция сида растягивает атаку/релиз: одни сиды открывают
+        // пэд резко, другие — наплывом. Клампы оригинала сохранены.
+        self.attack_samples = ((total as f32 * 0.25 * note.attack_mul.max(0.25)) as usize)
             .clamp(
                 (0.005 * self.sample_rate) as usize,
                 (1.8 * self.sample_rate) as usize,
             )
             .max(1);
-        self.fade_samples = ((total as f32 * 0.3) as usize)
-            .min((0.6 * self.sample_rate) as usize)
-            .max(1);
+        self.fade_samples =
+            ((total as f32 * 0.3 * note.release_mul.max(0.25)) as usize)
+                .min((0.6 * self.sample_rate) as usize)
+                .max(1);
         self.phases = [0.0; 5];
         self.drift_phase = (note.midi_pitch as f32 * 0.7) % TAU;
         // LFO и фильтры сохраняются — стена звука дышит непрерывно.
@@ -115,6 +118,28 @@ impl Voice for PadVoice {
 mod tests {
     use super::super::{Instrument, VoicePool};
     use super::*;
+
+    #[test]
+    fn seed_articulation_softens_attack() {
+        // Длинная атака сида = наплыв вместо удара: энергии в первые
+        // 150 мс меньше, чем у резкого.
+        fn early_energy(atk: f32) -> f32 {
+            let sr = 44_100.0;
+            let mut pad = VoicePool::pads(3, 1);
+            pad.set_sample_rate(sr);
+            pad.trigger(&NoteEvent::new(3, 55, 0.7, 1.0).shaped(atk, 1.0));
+            (0..(0.15 * sr) as usize)
+                .map(|_| {
+                    let s = pad.next_sample();
+                    assert!(s.is_finite());
+                    s.abs()
+                })
+                .sum()
+        }
+        let sharp = early_energy(0.8);
+        let soft = early_energy(1.8);
+        assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
+    }
 
     #[test]
     fn pad_chord_sounds_all_notes() {

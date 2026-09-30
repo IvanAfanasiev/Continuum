@@ -471,6 +471,19 @@ fn melodic_drift(seed_hash: u64, phrase: usize, span: usize) -> usize {
     pos.rem_euclid(span.max(1) as i64) as usize
 }
 
+/// Артикуляция сида: множители атаки/релиза для мягких голосов.
+/// Статична на (сид, слот) — «этот сид помягче», а не болтанка внутри
+/// трека. Диапазон узкий: характер инструментов цел, сиды различимы.
+/// Ударные поля игнорируют (их transient — лицо жанра).
+pub(crate) fn envelope_shape(seed_hash: u64, slot_idx: usize) -> (f32, f32) {
+    let h = crate::arranger::splitmix64(
+        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xA771C04,
+    );
+    let hi = (h >> 32) as f32 / (u32::MAX as f32);
+    let lo = (h & 0xFFFF_FFFF) as f32 / (u32::MAX as f32);
+    (0.8 + 1.0 * hi, 0.8 + 0.8 * lo)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn play_guide(
     guide: &RoleGuide,
@@ -585,6 +598,10 @@ fn play_guide(
         + energy * guide.vel_energy
         + rng.gen_range(-guide.vel_jitter..=guide.vel_jitter))
     .clamp(0.1, 1.0);
+
+    // Артикуляция сида для мягких голосов: та же нота тем же голосом —
+    // с разной мягкостью у разных сидов. Ударные идут как есть.
+    let (attack_mul, release_mul) = envelope_shape(song.seed_hash, slot_idx);
 
     // Роль слота: квинтовый бас, аккорды по умолчанию, баланс партии.
     let role = Slot::from_id(instrument_id).map(|s| s.role());
@@ -732,7 +749,10 @@ fn play_guide(
             v *= song.stage_gain(r);
         }
         if v >= 0.05 {
-            out.push(NoteEvent::new(instrument_id, tone, v, duration));
+            out.push(
+                NoteEvent::new(instrument_id, tone, v, duration)
+                    .shaped(attack_mul, release_mul),
+            );
         }
     }
     out
@@ -1359,6 +1379,47 @@ mod tests {
                 song = arranger.advance_measure();
             }
         }
+    }
+
+    #[test]
+    fn seed_articulation_varies_and_sticks_to_notes() {
+        // Артикуляция: в диапазоне, детерминирована (сид, слот),
+        // различается между сидами и цепляется к нотам гайда.
+        for seed in [0u64, 1, 42, 777, 424242] {
+            for slot in 0..8usize {
+                let (a, r) = envelope_shape(seed, slot);
+                assert!((0.8..=1.8).contains(&a), "attack out of range: {a}");
+                assert!((0.8..=1.6).contains(&r), "release out of range: {r}");
+                assert_eq!((a, r), envelope_shape(seed, slot), "not deterministic");
+            }
+        }
+        let shapes: std::collections::HashSet<(u32, u32)> = (0..16u64)
+            .map(|s| {
+                let (a, r) = envelope_shape(s, 2);
+                ((a * 1000.0) as u32, (r * 1000.0) as u32)
+            })
+            .collect();
+        assert!(shapes.len() > 8, "seeds sound alike");
+        // Пин: сид 83 — самый мягкий бас из первых 300 (атака ~1.8).
+        // Хэш-путь честный: seed_hash = splitmix(seed ^ 0x51ED), как в Arranger.
+        // Если путь поменяется, пин упадет.
+        let h83 = crate::arranger::splitmix64(83 ^ 0x51ED);
+        let (soft_a, _) = envelope_shape(h83, 0);
+        assert!(soft_a > 1.7, "soft-seed pin moved: {soft_a}");
+        // Гайд цепляет shaping сида к ноте.
+        let guide = RoleGuide {
+            weights: &[1.0; 8],
+            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 4.0, 0.6)
+        };
+        let song = test_song(0.5);
+        let mut rng = rand::SeedableRng::seed_from_u64(9);
+        let notes = play_guide(
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 3,
+            2, 1.0, false, false, &mut rng,
+        );
+        assert!(!notes.is_empty());
+        let (a, r) = envelope_shape(42, 2);
+        assert_eq!((notes[0].attack_mul, notes[0].release_mul), (a, r));
     }
 
     #[test]

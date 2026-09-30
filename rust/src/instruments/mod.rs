@@ -264,6 +264,11 @@ pub struct NoteEvent {
     pub midi_pitch: u8,
     pub velocity: f32,
     pub duration_secs: f32,
+    /// Множители атаки и релиза от сида (1.0 = характер инструмента).
+    /// Читают только мягкие голоса (бас, пэд, клавиши): ударные играют
+    /// как написано всегда. Диапазон 0.8..1.8 — характер цел, сиды разные.
+    pub attack_mul: f32,
+    pub release_mul: f32,
 }
 
 impl NoteEvent {
@@ -274,6 +279,17 @@ impl NoteEvent {
             midi_pitch,
             velocity: velocity.clamp(0.0, 1.0),
             duration_secs: duration_secs.max(0.0),
+            attack_mul: 1.0,
+            release_mul: 1.0,
+        }
+    }
+
+    /// Артикуляция сида: множители атаки/релиза с клампом в разумное.
+    pub fn shaped(self, attack_mul: f32, release_mul: f32) -> Self {
+        Self {
+            attack_mul: attack_mul.clamp(0.25, 3.0),
+            release_mul: release_mul.clamp(0.25, 3.0),
+            ..self
         }
     }
 }
@@ -762,6 +778,18 @@ mod tests {
         let n = NoteEvent::new(1, 60, 5.0, -1.0);
         assert_eq!(n.velocity, 1.0);
         assert_eq!(n.duration_secs, 0.0);
+    }
+
+    #[test]
+    fn note_event_shape_defaults_to_neutral() {
+        // Без shaping артикуляция нейтральна (ударные и старые пути),
+        // shaped клампится в разумное и цепляется билдером.
+        let n = NoteEvent::new(1, 60, 0.8, 1.0);
+        assert_eq!((n.attack_mul, n.release_mul), (1.0, 1.0));
+        let s = n.shaped(1.8, 0.8);
+        assert_eq!((s.attack_mul, s.release_mul), (1.8, 0.8));
+        let wild = n.shaped(99.0, -5.0);
+        assert_eq!((wild.attack_mul, wild.release_mul), (3.0, 0.25));
     }
 
     #[test]

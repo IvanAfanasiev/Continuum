@@ -37,6 +37,8 @@ struct BassVoice {
     elapsed: usize,
     samples_left: usize,
     presence_lp: Svf,
+    attack_mul: f32,
+    release_mul: f32,
 }
 
 impl Voice for BassVoice {
@@ -51,6 +53,8 @@ impl Voice for BassVoice {
         self.velocity = note.velocity;
         self.phase = 0.0;
         self.elapsed = 0;
+        self.attack_mul = note.attack_mul;
+        self.release_mul = note.release_mul;
         self.presence_lp.reset();
     }
 
@@ -65,10 +69,13 @@ impl Voice for BassVoice {
         self.elapsed += 1;
 
         // Мягкая S-атака вместо линейной: ни щелчка, ни ватности.
-        let a = (t / ATTACK_SECS).min(1.0);
+        // Длина атаки — от сида: одни сиды punchier, другие ватнее.
+        let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
+        let a = (t / attack_secs).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
         let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-AMP_DECAY_RATE * t).exp();
-        let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
+        let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
+        let fade = release_fade(self.samples_left, fade_len);
 
         let freq = self.frequency * (1.0 - PITCH_DROP * (-PITCH_DROP_RATE * t).exp());
         self.phase = (self.phase + freq / sample_rate) % 1.0;
@@ -260,6 +267,28 @@ mod tests {
             bass.next_sample();
         }
         assert!(!bass.is_active());
+    }
+
+    #[test]
+    fn seed_articulation_softens_attack() {
+        // Мягкий сид (длинная атака) дает меньше энергии в первые 20 мс,
+        // чем резкий — артикуляция реально работает, а не игнорируется.
+        fn early_energy(atk: f32, rel: f32) -> f32 {
+            let sr = 44_100.0;
+            let mut bass = BassGuitar::new(1);
+            bass.set_sample_rate(sr);
+            bass.trigger(&NoteEvent::new(1, 40, 0.9, 0.5).shaped(atk, rel));
+            (0..(0.02 * sr) as usize)
+                .map(|_| {
+                    let s = bass.next_sample();
+                    assert!(s.is_finite());
+                    s.abs()
+                })
+                .sum()
+        }
+        let sharp = early_energy(0.8, 0.8);
+        let soft = early_energy(1.8, 1.6);
+        assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
     }
 
     #[test]
