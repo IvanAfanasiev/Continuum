@@ -90,6 +90,10 @@ pub(crate) struct RenderState {
     hp_l: Svf,
     hp_r: Svf,
     sample_rate: f32,
+    /// Сглаженный срез верхов: цель прыгает на границах секций
+    /// (свип формы), фильтр едет за ней ~120 мс вместо ступеньки —
+    /// ступенька коэффициента SVF и была редким «всхлипом».
+    treble_smooth: f32,
 }
 
 impl RenderState {
@@ -127,6 +131,7 @@ impl RenderState {
             hp_l: Svf::default(),
             hp_r: Svf::default(),
             sample_rate,
+            treble_smooth: 0.0,
         }
     }
 
@@ -146,6 +151,7 @@ impl RenderState {
         self.echo = Echo::new(sr, 1.0, 0.38, 2800.0);
         self.treble_l = Svf::default();
         self.treble_r = Svf::default();
+        self.treble_smooth = 0.0;
         self.hp_l = Svf::default();
         self.hp_r = Svf::default();
         self.duck_release = (-1.0 / (sr * DUCK_RELEASE_SECS)).exp();
@@ -248,8 +254,16 @@ impl RenderState {
         let (echo_l, echo_r) = self.echo.process(send_l, send_r);
         let (wet_l, wet_r) = self.space.process(mix_l + echo_l, mix_r + echo_r);
         // Срез верхов от стиля: lofi мутный, club хирургический.
-        let treble = treble_hz.clamp(2000.0, 20000.0);
+        // Цель сглажена: прыжок на границе секции (свип формы) едет
+        // ~120 мс, а не ступенькой в коэффициент фильтра.
+        let target = treble_hz.clamp(2000.0, 20000.0);
+        if self.treble_smooth <= 0.0 {
+            self.treble_smooth = target;
+        }
         let sample_rate = self.sample_rate;
+        let k = 1.0 - (-1.0 / (sample_rate * 0.12)).exp();
+        self.treble_smooth += (target - self.treble_smooth) * k;
+        let treble = self.treble_smooth;
         let (t_l, _, _) = self.treble_l.process(wet_l, treble, 0.7, sample_rate);
         let (t_r, _, _) = self.treble_r.process(wet_r, treble, 0.7, sample_rate);
         // Мастер-HP: инфраниз и постоянка вон (хрип динамиков),
@@ -958,5 +972,32 @@ mod tests {
         let rms = (sum_sq / (2 * n) as f32).sqrt();
         assert!(peak > 0.15, "mix too quiet: peak={peak}");
         assert!(rms > 0.02, "mix too quiet: rms={rms}");
+    }
+
+    #[test]
+    fn treble_slew_converges_without_jump() {
+        // Срез верхов едет к цели ~120 мс, а не ступенькой: граница секции
+        // (свип формы) не дает щелчка в коэффициент фильтра.
+        use crate::instruments::{BassGuitar, Instrument};
+        let sr = 44_100.0;
+        let insts: Vec<Box<dyn Instrument>> = vec![Box::new(BassGuitar::new(1))];
+        let mut state = RenderState::new(insts, sr);
+        let vols = [(1usize, 0.9f32)];
+        for _ in 0..100 {
+            state.render_sample(&vols, 2000.0);
+        }
+        let before = state.treble_smooth;
+        assert!((before - 2000.0).abs() < 1.0, "snap failed: {before}");
+        state.render_sample(&vols, 19000.0);
+        let jump = (state.treble_smooth - before).abs();
+        assert!(jump < 100.0, "treble jumps: {before} -> {}", state.treble_smooth);
+        for _ in 0..sr as usize {
+            state.render_sample(&vols, 19000.0);
+        }
+        assert!(
+            (state.treble_smooth - 19000.0).abs() < 50.0,
+            "never converges: {}",
+            state.treble_smooth
+        );
     }
 }

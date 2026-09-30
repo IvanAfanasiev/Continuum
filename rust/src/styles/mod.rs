@@ -135,6 +135,10 @@ pub struct RoleGuide {
     /// Квинтовый бас: оффбитные восьмые ходят на квинту — баслайн
     /// движется, а не топчется. Только роль Bass, только по флагу.
     pub bass_fifth: bool,
+    /// Саб-перекос 0..1: гасит струну/щелчок/презенс в пользу чистого
+    /// синуса. Club-бас глубокий и плавный, рок — струнный (0.0).
+    /// Читает только бас-голос.
+    pub sub_bias: f32,
 }
 
 impl RoleGuide {
@@ -161,6 +165,7 @@ impl RoleGuide {
         climax_only: false,
         chord: None,
         bass_fifth: false,
+        sub_bias: 0.0,
     };
 
     pub fn is_silent(&self) -> bool {
@@ -192,6 +197,7 @@ impl RoleGuide {
             climax_only: false,
             chord: None,
             bass_fifth: false,
+            sub_bias: 0.0,
         }
     }
 
@@ -230,6 +236,7 @@ impl RoleGuide {
             climax_only: false,
             chord: None,
             bass_fifth: false,
+            sub_bias: 0.0,
         }
     }
 }
@@ -749,10 +756,10 @@ fn play_guide(
             v *= song.stage_gain(r);
         }
         if v >= 0.05 {
-            out.push(
-                NoteEvent::new(instrument_id, tone, v, duration)
-                    .shaped(attack_mul, release_mul),
-            );
+            let mut note = NoteEvent::new(instrument_id, tone, v, duration)
+                .shaped(attack_mul, release_mul);
+            note.sub_bias = guide.sub_bias.clamp(0.0, 1.0);
+            out.push(note);
         }
     }
     out
@@ -1420,6 +1427,36 @@ mod tests {
         assert!(!notes.is_empty());
         let (a, r) = envelope_shape(42, 2);
         assert_eq!((notes[0].attack_mul, notes[0].release_mul), (a, r));
+    }
+
+    #[test]
+    fn sub_bias_rides_from_guide_to_note() {
+        // Перекос стиля едет в ноту (club-бас 0.8), дефолт — 0.0.
+        use crate::instruments::Slot;
+        use club::ClubStyle;
+        let guides = ClubStyle::new().slot_guides();
+        let bi = Slot::ALL.iter().position(|s| *s == Slot::Bass).unwrap();
+        assert_eq!(guides[bi].sub_bias, 0.8);
+        let mut guide = RoleGuide {
+            weights: &[1.0; 8],
+            sub_bias: 0.8,
+            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 1.0, 0.8)
+        };
+        let song = test_song(0.5);
+        let mut rng = rand::SeedableRng::seed_from_u64(9);
+        let notes = play_guide(
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
+            0, 1.0, false, false, &mut rng,
+        );
+        assert!(!notes.is_empty());
+        assert_eq!(notes[0].sub_bias, 0.8);
+        guide.sub_bias = 0.0;
+        let mut rng = rand::SeedableRng::seed_from_u64(9);
+        let notes = play_guide(
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
+            0, 1.0, false, false, &mut rng,
+        );
+        assert_eq!(notes[0].sub_bias, 0.0);
     }
 
     #[test]

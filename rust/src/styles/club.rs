@@ -161,6 +161,9 @@ impl Style for ClubStyle {
             vel_high_cut: 0.6,
             alt: Some(BASS_ALT_W),
             bass_fifth: true,
+            // Глубокий ровный саб вместо струны: презенс-цепь придавлена,
+            // фундамент — чистый синус. Рок держит струну (0.0).
+            sub_bias: 0.8,
             ..RoleGuide::pitched(BASS_W, 0, -1, 0, 1.8, 0.7)
         };
         let kick = RoleGuide {

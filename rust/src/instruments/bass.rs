@@ -41,6 +41,7 @@ struct BassVoice {
     presence_lp: Svf,
     attack_mul: f32,
     release_mul: f32,
+    sub_bias: f32,
 }
 
 impl Voice for BassVoice {
@@ -57,6 +58,7 @@ impl Voice for BassVoice {
         self.elapsed = 0;
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
+        self.sub_bias = note.sub_bias.clamp(0.0, 1.0);
         self.presence_lp.reset();
     }
 
@@ -89,13 +91,16 @@ impl Voice for BassVoice {
         let sub = wave * SUB_GAIN;
         // Та же волна через драйв: гармоники идеально когерентны
         // фундаменту — тепло без биений и хоруса.
+        // Саб-перекос стиля гасит презенс-цепь (край «струны») в пользу
+        // чистого синуса: club глубокий и ровный, рок струнный (0.0).
         let drive = DRIVE_BASE + DRIVE_VEL * self.velocity;
         let cutoff = (self.frequency * 6.0).clamp(300.0, 1600.0);
         let (presence, _, _) =
             self.presence_lp
                 .process((wave * drive).tanh() + octave, cutoff, PRESENCE_Q, sample_rate);
 
-        (sub + presence * PRESENCE_GAIN) * self.gain * amp * attack * fade
+        let keep = 1.0 - 0.85 * self.sub_bias;
+        (sub + presence * PRESENCE_GAIN * keep) * self.gain * amp * attack * fade
     }
 
     fn reset(&mut self) {
@@ -226,6 +231,31 @@ mod tests {
             sub > upper * 3.0,
             "weak fundamental: sub={sub} upper={upper}"
         );
+    }
+
+    #[test]
+    fn sub_bias_pushes_bass_toward_pure_sine() {
+        // Перекос 1.0 давит презенс-цепь: 2-я гармоника падает ниже
+        // музыкального порога, фундамент цел, все конечно.
+        fn second_ratio(bias: f32) -> (f32, f32) {
+            let sr = 44_100.0;
+            let mut bass = BassGuitar::new(1);
+            bass.set_sample_rate(sr);
+            let mut note = NoteEvent::new(1, 45, 1.0, 1.0);
+            note.sub_bias = bias;
+            bass.trigger(&note);
+            let out: Vec<f32> = (0..sr as usize).map(|_| bass.next_sample()).collect();
+            assert!(out.iter().all(|s| s.is_finite()));
+            (goertzel(&out, 110.0, sr), goertzel(&out, 220.0, sr))
+        }
+        let (fund0, second0) = second_ratio(0.0);
+        let (fund1, second1) = second_ratio(1.0);
+        assert!(second0 > fund0 * 0.15, "baseline warmth lost");
+        assert!(
+            second1 < fund1 * 0.12,
+            "sub not pure: 2nd={second1} fund={fund1}"
+        );
+        assert!(fund1 > fund0 * 0.5, "fundamental collapsed: {fund1} vs {fund0}");
     }
 
     #[test]

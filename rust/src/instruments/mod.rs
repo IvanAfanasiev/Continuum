@@ -269,6 +269,9 @@ pub struct NoteEvent {
     /// как написано всегда. Диапазон 0.8..1.8 — характер цел, сиды разные.
     pub attack_mul: f32,
     pub release_mul: f32,
+    /// Саб-перекос 0..1 от стиля: 1.0 = чистый синус без струны/щелчка.
+    /// Читает только бас-голос.
+    pub sub_bias: f32,
 }
 
 impl NoteEvent {
@@ -281,6 +284,7 @@ impl NoteEvent {
             duration_secs: duration_secs.max(0.0),
             attack_mul: 1.0,
             release_mul: 1.0,
+            sub_bias: 0.0,
         }
     }
 
@@ -790,6 +794,7 @@ mod tests {
         assert_eq!((s.attack_mul, s.release_mul), (1.8, 0.8));
         let wild = n.shaped(99.0, -5.0);
         assert_eq!((wild.attack_mul, wild.release_mul), (3.0, 0.25));
+        assert_eq!(n.sub_bias, 0.0);
     }
 
     #[test]
