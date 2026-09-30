@@ -1460,6 +1460,117 @@ mod tests {
     }
 
     #[test]
+    fn style_contract_holds_across_styles() {
+        // Контракт фазы 1: лицо каждого стиля как измеримые свойства
+        // дефолтного микса за 24 такта. Свобода реализации внутри —
+        // любой рефактор обязан держать эти числа (с запасом ~2x вниз
+        // от замера: ловят поломку, а не вкус).
+        // Замеры: club kickmax 6, rock 5, lofi 2–3; роли и тема — в PROBE.
+        use crate::instruments::Slot;
+        use std::collections::HashMap;
+        // (стиль, потолок кика на такт, полы ролей за 24 такта, пол темы)
+        // Потолки — по самому плотному намеренному полюсу + запас:
+        // club drive-восьмые дают до 9 ударов, это лицо, а не баг.
+        type Floors<'a> = &'a [(&'a str, usize)];
+        let contract: &[(&str, usize, Floors, usize)] = &[
+            (
+                "club",
+                10,
+                &[("kick", 48), ("snare", 24), ("hat", 48), ("bass", 48)],
+                0,
+            ),
+            (
+                "rock",
+                6,
+                &[
+                    ("kick", 48),
+                    ("snare", 24),
+                    ("hat", 48),
+                    ("bass", 48),
+                    ("lead", 48),
+                ],
+                48,
+            ),
+            (
+                "lofi",
+                4,
+                &[
+                    ("kick", 12),
+                    ("snare", 24),
+                    ("hat", 24),
+                    ("bass", 12),
+                    ("chords", 48),
+                    ("lead", 8),
+                    ("texture", 24),
+                ],
+                8,
+            ),
+        ];
+        for (name, kick_cap, role_floors, motif_floor) in contract {
+            let style = make_style(name).expect("style");
+            for seed in [11u64, 42, 777] {
+                let mut mixer = crate::mixer::MixerState::new();
+                crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+                let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+                let n = mixer.active_ids(&mut buf);
+                let active = buf[..n].to_vec();
+                let mut rng = rand::SeedableRng::seed_from_u64(seed);
+                let mut arranger = crate::arranger::Arranger::new(seed);
+                let mut song = arranger.advance_measure();
+                let mut kick_max = 0;
+                let mut roles: HashMap<&str, usize> = HashMap::new();
+                let mut motif_n = 0;
+                let guides = style.slot_guides();
+                for _bar in 0..24 {
+                    let mut kicks = 0;
+                    let mut sctx = StepContext {
+                        step: 0,
+                        step_in_measure: 0,
+                        base_step_secs: style.base_step_secs(),
+                        active_tracks: &active,
+                        song: &song,
+                        rng: &mut rng,
+                        intensity: 1.0,
+                    };
+                    for sim in 0..16 {
+                        sctx.step = sim;
+                        sctx.step_in_measure = sim;
+                        for note in render_style(&*style, &mut sctx) {
+                            let slot = Slot::from_id(note.instrument_id).unwrap();
+                            *roles.entry(slot.role().name()).or_insert(0) += 1;
+                            if note.instrument_id == Slot::Kick.id() {
+                                kicks += 1;
+                            }
+                            let gi =
+                                Slot::ALL.iter().position(|s| *s == slot).unwrap();
+                            if guides[gi].follow_motif {
+                                motif_n += 1;
+                            }
+                        }
+                    }
+                    kick_max = kick_max.max(kicks);
+                    song = arranger.advance_measure();
+                }
+                assert!(
+                    kick_max <= *kick_cap,
+                    "{name} seed {seed}: {kick_max} kicks/bar"
+                );
+                for (role, floor) in *role_floors {
+                    let got = roles.get(role).copied().unwrap_or(0);
+                    assert!(
+                        got >= *floor,
+                        "{name} seed {seed}: role {role} lost ({got} < {floor})"
+                    );
+                }
+                assert!(
+                    motif_n >= *motif_floor,
+                    "{name} seed {seed}: theme gone ({motif_n})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные такты — разные ступени),
         // мотив при той же прогрессии стабилен.
