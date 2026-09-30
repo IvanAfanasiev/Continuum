@@ -308,6 +308,8 @@ pub trait Style: Send + Sync {
 /// (`1/sqrt(n)` на не-якорные вероятности) — выключил второй лид,
 /// оставшийся играет гуще и подхватывает пространство. Якоря жанра
 /// (вес 1.0: бит, фундамент) дележу не подлежат — основа не прерывается.
+/// Мотив не пропадает от мьюта: если все носители темы выключены, ее
+/// подхватывает первый мелодический питчевый слот (Lead→Vocal→Chords→Bass).
 /// Детерминировано составом: тот же сид + тот же набор = та же музыка.
 pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent> {
     let guides = style.slot_guides();
@@ -320,6 +322,29 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             role_n[s.role().index()] += 1;
         }
     }
+    let is_active = |s: Slot| sctx.active_tracks.contains(&s.id());
+    // Тема жива, пока жив хоть один ее носитель.
+    let has_carrier = Slot::ALL
+        .iter()
+        .enumerate()
+        .any(|(i, s)| is_active(*s) && guides[i].follow_motif && !guides[i].is_silent());
+    // Резервный носитель: первый питчевый мелодический по рангу роли.
+    // Ударные тему петь не могут — только Scale-голоса.
+    let fallback: Option<usize> = if has_carrier {
+        None
+    } else {
+        Slot::ALL
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| {
+                is_active(**s)
+                    && !guides[*i].is_silent()
+                    && matches!(guides[*i].voice, Voicing::Scale { .. })
+                    && carrier_rank(s.role()).is_some()
+            })
+            .min_by_key(|(_, s)| (carrier_rank(s.role()).unwrap_or(99), s.id()))
+            .map(|(_, s)| s.id())
+    };
     let mut notes = Vec::new();
     for (i, slot) in Slot::ALL.iter().enumerate() {
         if !sctx.active_tracks.contains(&slot.id()) {
@@ -345,10 +370,24 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             slot.id(),
             i,
             1.0 / n.sqrt(),
+            fallback == Some(slot.id()),
             sctx.rng,
         ));
     }
     notes
+}
+
+/// Ранг роли для резервного носителя темы: лид поет первым,
+/// бас — последним (держит низ, а не мелодию). `None` — роль
+/// тему петь не может (ударные, текстуры).
+fn carrier_rank(role: InstrumentRole) -> Option<u8> {
+    match role {
+        InstrumentRole::Lead => Some(0),
+        InstrumentRole::Vocal => Some(1),
+        InstrumentRole::Chords => Some(2),
+        InstrumentRole::Bass => Some(3),
+        _ => None,
+    }
 }
 
 /// Затухание тонов аккорда: корень в полную силу, верх тише.
@@ -407,6 +446,10 @@ fn play_guide(
     // Доля плотности роли (1/sqrt(n) носителей): 1.0 = единственный
     // носитель, играет в полную силу. Якоря (вес 1.0) не масштабируются.
     role_share: f32,
+    // Форсированный носитель темы: состав без follow_motif — ступень
+    // берется из мотива сида. Озвучка (трезвучия пэдов) и октава гайда
+    // сохраняются: пэд играет аккорд от ступени темы, а не мелодию.
+    force_motif: bool,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
     // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
@@ -540,19 +583,21 @@ fn play_guide(
             // Ротация применяется и к нему — тема развивается с гармонией.
             // Аккомпанемент (не мотив) движется по прогрессии сида:
             // аккорды меняются каждые 2 такта, оставаясь в ладу.
-            let prog_shift = if guide.follow_motif {
+            // Форсированный носитель идет тем же путем темы, что и родной.
+            let use_motif = guide.follow_motif || force_motif;
+            let prog_shift = if use_motif {
                 0
             } else {
                 song.prog[(song.measure_index / 2) % song.prog.len()] as usize
             };
             // Вопрос-ответ: нечетные фразы отвечают транспозицией темы
             // на терцию вверх — та же тема, другое дыхание.
-            let answer = if guide.follow_motif && song.phrase_index % 2 == 1 {
+            let answer = if use_motif && song.phrase_index % 2 == 1 {
                 2
             } else {
                 0
             };
-            let (degree, jitter) = if guide.follow_motif {
+            let (degree, jitter) = if use_motif {
                 // Живой мотив: блок темы (8 фраз A, 8 фраз B) плюс ротация
                 // окном фразы. ДНК сида сохранена, но дословных повторов нет.
                 let theme = if song.use_alt_motif {
@@ -703,7 +748,7 @@ mod tests {
         (0..16)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, &mut rng,
+                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -798,6 +843,7 @@ mod tests {
                     6,
                     5,
                     1.0,
+                    false,
                     &mut rng,
                 )
                 .into_iter()
@@ -837,6 +883,7 @@ mod tests {
                     6,
                     5,
                     1.0,
+                    false,
                     &mut rng,
                 )
                 .into_iter()
@@ -878,7 +925,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, &mut rng,
+                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -896,7 +943,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -923,7 +970,7 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -1018,7 +1065,7 @@ mod tests {
             (0..8)
                 .filter_map(|step| {
                     play_guide(
-                        &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0,
+                        &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0, false,
                         &mut rng,
                     )
                     .into_iter()
@@ -1038,6 +1085,93 @@ mod tests {
     }
 
     #[test]
+    fn motif_fallback_hands_theme_to_first_melodic_slot() {
+        // Мьют всех носителей темы не убивает мотив: клавиши (не носитель)
+        // с подхватом поют ту же тему, что гитара, пошагово.
+        use crate::instruments::Slot;
+        let style = make_style("lofi").expect("known style");
+        let guides = style.slot_guides();
+        let scale = style.scale();
+        let spm = style.steps_per_measure();
+        let ki = Slot::ALL.iter().position(|s| *s == Slot::Keys).unwrap();
+        let song = test_song(0.5);
+        // Эталонная линия мотива: якорный носитель звучит на каждом шаге.
+        let anchor_motif = RoleGuide {
+            weights: &[1.0; 16],
+            follow_motif: true,
+            ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, 1.0, 0.8)
+        };
+        let mut rng = rand::SeedableRng::seed_from_u64(21);
+        let full_line: Vec<u8> = (0..16)
+            .map(|step| {
+                play_guide(
+                    &anchor_motif, scale, &song, 1.0, false, step, spm, 0.1, 6, 5, 1.0,
+                    false, &mut rng,
+                )
+                .into_iter()
+                .next()
+                .map(|n| n.midi_pitch)
+                .unwrap()
+            })
+            .collect();
+        // Клавиши без подхвата и с подхватом — разные линии.
+        let line = |force: bool| -> Vec<(usize, u8)> {
+            let mut rng = rand::SeedableRng::seed_from_u64(22);
+            (0..16)
+                .filter_map(|step| {
+                    play_guide(
+                        &guides[ki], scale, &song, 1.0, false, step, spm, 0.1,
+                        Slot::Keys.id(), ki, 1.0, force, &mut rng,
+                    )
+                    .into_iter()
+                    .next()
+                    .map(|n| (step, n.midi_pitch))
+                })
+                .collect()
+        };
+        let plain = line(false);
+        let forced = line(true);
+        assert!(!forced.is_empty(), "fallback silent");
+        assert_ne!(plain, forced, "fallback ignored");
+        for (step, pitch) in &forced {
+            assert_eq!(*pitch, full_line[*step], "step {step}: not the motif");
+        }
+        // Уровень движка: активны только клавиши — подхват включается сам,
+        // корень аккорда на каждом шаге лежит на линии мотива
+        // (верхние терции трезвучия — гармонизация темы, а не уход с нее).
+        let active = vec![Slot::Keys.id()];
+        let mut rng = rand::SeedableRng::seed_from_u64(23);
+        let mut sctx = StepContext {
+            step: 0,
+            step_in_measure: 0,
+            base_step_secs: style.base_step_secs(),
+            active_tracks: &active,
+            song: &song,
+            rng: &mut rng,
+            intensity: 1.0,
+        };
+        let mut heard = 0;
+        for (sim, expected) in full_line.iter().enumerate() {
+            sctx.step = sim;
+            sctx.step_in_measure = sim;
+            let mut step_pitches = Vec::new();
+            for note in render_style(&*style, &mut sctx) {
+                assert_eq!(note.instrument_id, Slot::Keys.id());
+                step_pitches.push(note.midi_pitch);
+            }
+            if !step_pitches.is_empty() {
+                // Первая нота озвучки — корень: тема на месте.
+                assert_eq!(
+                    step_pitches[0], *expected,
+                    "render step {sim}: motif lost"
+                );
+                heard += step_pitches.len();
+            }
+        }
+        assert!(heard > 0, "keys alone play nothing");
+    }
+
+    #[test]
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные такты — разные ступени),
         // мотив при той же прогрессии стабилен.
@@ -1052,7 +1186,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -1080,7 +1214,7 @@ mod tests {
                 .filter(|step| {
                     !play_guide(
                         &guide, &[48], &song, 1.0, false, *step, 16, 0.1, 6, 5, share,
-                        &mut rng,
+                        false, &mut rng,
                     )
                     .is_empty()
                 })
@@ -1114,7 +1248,7 @@ mod tests {
                 assert!(
                     !play_guide(
                         &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0, share,
-                        &mut rng,
+                        false, &mut rng,
                     )
                     .is_empty(),
                     "anchor dropped at share={share}"
