@@ -8,7 +8,11 @@ use super::{
 /// «песок» — BLEP оставляет чистый металл. Открытость — длительностью
 /// ноты, монофония с choke, как педаль живого хэта.
 const OSC_HZ: [f32; 6] = [203.9, 302.1, 366.3, 431.9, 488.9, 556.2];
-const HP_HZ: f32 = 6800.0;
+/// Срез highpass: гармоники квадратов выше него — тело тика.
+/// Было 6800 (только 33+ гармоники — тика не слышно в миксе,
+/// стем-аудит club: rms 0.0007). 6000 + подъем выхода: металл
+/// слышно, грязи нет (шума в тракте нет, только BLEP-квадраты).
+const HP_HZ: f32 = 6000.0;
 const HP_Q: f32 = 0.7;
 const CLOSED_LEN_SECS: f32 = 0.05;
 const OPEN_THRESHOLD_SECS: f32 = 0.12;
@@ -77,7 +81,7 @@ impl Voice for HatVoice {
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        bright * env * self.gain * attack * fade * 0.5
+        bright * env * self.gain * attack * fade * 0.85
     }
 
     fn reset(&mut self) {
@@ -132,6 +136,36 @@ impl Instrument for HiHat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_hat_is_audible() {
+        // Регрессия «хэта не слышно в миксе»: закрытый тик на полной
+        // громкости обязан давать весомую энергию, а не шепот.
+        let sr = 44_100.0;
+        let mut hat = HiHat::new(5);
+        hat.set_sample_rate(sr);
+        hat.trigger(&NoteEvent::new(5, 42, 1.0, 0.05));
+        let mut sum = 0.0;
+        let mut n = 0;
+        while hat.is_active() {
+            let s = hat.next_sample();
+            assert!(s.is_finite());
+            sum += s.abs();
+            n += 1;
+        }
+        assert!(n > 100, "tick too short: {n}");
+        let mut peak: f32 = 0.0;
+        // второй проход для пика — перетриггерим тот же тик
+        hat.trigger(&NoteEvent::new(5, 42, 1.0, 0.05));
+        while hat.is_active() {
+            peak = peak.max(hat.next_sample().abs());
+        }
+        assert!(
+            sum / n as f32 > 0.005 && peak > 0.1,
+            "hat too quiet: mean={} peak={peak}",
+            sum / n as f32
+        );
+    }
 
     #[test]
     fn closed_and_open_differ_in_length() {

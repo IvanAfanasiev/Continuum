@@ -15,7 +15,9 @@ const WANDER_HZ: f32 = 0.1;
 const WANDER_DEPTH: f32 = 0.3;
 const POP_THRESH: f32 = 0.9999;
 const POP_DECAY: f32 = 120.0;
-const POP_GAIN: f32 = 0.9;
+/// Щелчки идут мимо фильтра — широкополосные, потому тише шипения:
+/// пыль, а не треск костра (замер: наш lofi был ярче всех референсов).
+const POP_GAIN: f32 = 0.5;
 const ATTACK_SECS: f32 = 0.05;
 const FADE_SECS: f32 = 0.1;
 

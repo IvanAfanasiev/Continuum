@@ -1506,6 +1506,75 @@ mod tests {
     }
 
     #[test]
+    fn mix_brightness_stays_in_ref_bands() {
+        // Яркость микса в полосах референсов: lofi темный (пыль, не резкость),
+        // club светлый (хэт и клэп слышно). Метрика — доля ВЧ-энергии
+        // (first-difference) за 20 секунд генерации с дефолтным миксом.
+        // Замеры: lofi 0.0008 (Autumn 0.0107 — мы темнее, это ок),
+        // club 0.0019. Полосы широкие: ловят регресс, а не вкус.
+        use crate::composer::Composer;
+        use crate::core::{MAX_ACTIVE_TRACKS, NOTE_QUEUE_CAPACITY};
+        use crate::engine::RenderState;
+        use crossbeam::queue::ArrayQueue;
+        fn hf_ratio(style_name: &str, seed: u64) -> f32 {
+            let style = styles::make_style(style_name).expect("style");
+            let sr = 44_100.0;
+            let treble = style.treble_cutoff();
+            let mixer = Arc::new(RwLock::new(MixerState::new()));
+            {
+                let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
+                apply_style_mix(&*style, &mut m, seed);
+            }
+            let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
+            let shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
+            let mut composer = Composer::new(
+                Arc::clone(&queue),
+                Arc::clone(&shared),
+                Arc::clone(&mixer),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+                seed,
+            );
+            let mut render = RenderState::new(build_instruments(), sr);
+            let target = (20.0 * sr) as u64;
+            let mut done = 0u64;
+            let (mut sum_sq, mut hf, mut prev) = (0.0f32, 0.0f32, 0.0f32);
+            while done < target {
+                let (step_notes, duration) = composer.next_step();
+                for note in &step_notes {
+                    render.push_note(note);
+                }
+                let mut vols = [(0usize, 0.0f32); MAX_ACTIVE_TRACKS];
+                let vlen = {
+                    let m = mixer.read().unwrap_or_else(|e| e.into_inner());
+                    let mut buf = [0usize; MAX_ACTIVE_TRACKS];
+                    let n = m.active_ids(&mut buf);
+                    for (i, id) in buf[..n].iter().enumerate() {
+                        vols[i] = (*id, m.volume_for(*id));
+                    }
+                    n
+                };
+                let mut step_samples = ((duration * sr) as u64).max(1);
+                while step_samples > 0 && done < target {
+                    let (l, r) = render.render_sample(&vols[..vlen], treble);
+                    let s = (l + r) * 0.5;
+                    assert!(s.is_finite());
+                    sum_sq += s * s;
+                    hf += (s - prev) * (s - prev);
+                    prev = s;
+                    done += 1;
+                    step_samples -= 1;
+                }
+            }
+            hf / sum_sq.max(1e-9)
+        }
+        let lofi = hf_ratio("lofi", 11);
+        assert!(lofi < 0.004, "lofi too bright: {lofi}");
+        let club = hf_ratio("club", 11);
+        assert!(club > 0.001, "club too dark: {club}");
+    }
+
+    #[test]
     fn soak_proves_long_run_stability() {
         // Весь тракт (генерация + DSP) 6 секунд на пониженной частоте:
         // конечность, уровень, генерация не глохнет. Окно почти целиком

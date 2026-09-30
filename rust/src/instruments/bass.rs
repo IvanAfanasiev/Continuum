@@ -22,7 +22,9 @@ const PRESENCE_Q: f32 = 0.7;
 /// Легкое проседание питча в атаке — аналоговая «плотность» удара.
 const PITCH_DROP: f32 = 0.025;
 const PITCH_DROP_RATE: f32 = 80.0;
-const ATTACK_SECS: f32 = 0.004;
+/// Дефолтная атака 6 мс: короче — резкий щелчок в миксе (замер lofi
+/// против референсов), сиды умножают сверху свою мягкость.
+const ATTACK_SECS: f32 = 0.006;
 const AMP_DECAY_RATE: f32 = 8.0;
 const SUSTAIN_LEVEL: f32 = 0.85;
 const FADE_SECS: f32 = 0.012;

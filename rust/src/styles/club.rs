@@ -16,7 +16,11 @@ const HAT_W: &[f32] = &[
     0.0, 0.35, 1.0, 0.35, 0.0, 0.35, 1.0, 0.35, 0.0, 0.35, 1.0, 0.35, 0.0, 0.35, 1.0, 0.35,
 ];
 const BASS_W: &[f32] = &[
-    0.5, 0.5, 1.0, 0.5, 0.5, 0.5, 1.0, 0.5, 0.5, 0.5, 1.0, 0.5, 0.5, 0.5, 1.0, 0.5,
+    // Оффбитные восьмые вместо стены 16-х: кач между ударами бочки,
+    // а не ковер под ней. Стена топила транзиенты (crest 4.4 против 7–12
+    // у референсов) и темнила микс.
+    0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8,
+    0.0,
 ];
 const PAD_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -175,8 +179,8 @@ impl Style for ClubStyle {
         };
         let snare = RoleGuide {
             climax_boost: 0.7,
-            vel_base: 0.85,
-            ..RoleGuide::kit(CLAP_W, 38, 0.85)
+            vel_base: 0.95,
+            ..RoleGuide::kit(CLAP_W, 38, 0.95)
         };
         let hat = RoleGuide {
             energy_response: 1.2,
@@ -184,12 +188,12 @@ impl Style for ClubStyle {
             long_offbeats: true,
             long_mult: 5.0,
             duration_mult: 0.5,
-            vel_base: 0.4,
-            vel_energy: 0.3,
+            vel_base: 0.65,
+            vel_energy: 0.35,
             vel_jitter: 0.1,
             alt: Some(HAT_ALT_W),
             poles: Some(HAT_POLES),
-            ..RoleGuide::kit(HAT_W, 42, 0.4)
+            ..RoleGuide::kit(HAT_W, 42, 0.65)
         };
         let pluck = RoleGuide {
             energy_response: 1.5,

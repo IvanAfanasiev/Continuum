@@ -14,7 +14,11 @@ const SNARE_W: &[f32] = &[
     0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.15,
 ];
 const HAT_W: &[f32] = &[
-    1.0, 0.25, 1.0, 0.25, 1.0, 0.25, 1.0, 0.25, 1.0, 0.25, 1.0, 0.25, 1.0, 0.25, 1.0, 0.25,
+    // Пыльные тики: акцент на оффбитах, ровные доли тише.
+    // Было наоборот (1.0 на каждой доле) — яркий металлический хэт
+    // доминировал в миксе (стем-аудит: самый ВЧ голос).
+    0.3, 0.0, 0.9, 0.0, 0.3, 0.0, 0.9, 0.0, 0.3, 0.0, 0.9, 0.0, 0.3, 0.0, 0.9,
+    0.4,
 ];
 const BASS_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -121,7 +125,9 @@ impl Style for LofiStyle {
     }
 
     fn treble_cutoff(&self) -> f32 {
-        7500.0
+        // Замер против референсов (Autumn 1557, Snowman 824, Redbone 798):
+        // наш был 2504 — ярче всех. Темним к середине референсов.
+        5200.0
     }
 
     /// Пыльная полка: энергия 0.32..0.70 — ни взрывов, ни провалов.
@@ -199,20 +205,20 @@ impl Style for LofiStyle {
             ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.35)
         };
         let snare = RoleGuide {
-            vel_base: 0.8,
+            vel_base: 0.7,
             vel_jitter: 0.06,
-            ..RoleGuide::kit(SNARE_W, 38, 0.8)
+            ..RoleGuide::kit(SNARE_W, 38, 0.7)
         };
         let hat = RoleGuide {
             long_offbeats: true,
             long_mult: 5.0,
             duration_mult: 0.3,
-            vel_base: 0.45,
+            vel_base: 0.34,
             vel_energy: 0.15,
             vel_jitter: 0.08,
             alt: Some(HAT_ALT_W),
             poles: Some(HAT_POLES),
-            ..RoleGuide::kit(HAT_W, 42, 0.45)
+            ..RoleGuide::kit(HAT_W, 42, 0.34)
         };
         // Нарезки гитары: редкие щипки по мотиву сида поверх Rhodes.
         let pluck = RoleGuide {
@@ -263,11 +269,13 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(PLUCK_W, 0, 2, 3, 1.2, 0.4)
         };
+        // Пыль тише музыки: стем-аудит показал винил и дождь
+        // brightest после тёмных клавиш — убавляем подложки, не музыку.
         let vinyl = RoleGuide {
             duration_mult: 300.0,
-            vel_base: 0.3,
+            vel_base: 0.15,
             vel_jitter: 0.05,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 300.0, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, 300.0, 0.15)
         };
         let vocal = RoleGuide {
             energy_response: 1.2,
@@ -320,12 +328,12 @@ impl Style for LofiStyle {
             follow_motif: true,
             ..RoleGuide::pitched(GUITAR_W, 0, 1, 0, 1.8, 0.6)
         };
-        // Дождь: ровная пелена во все фразы.
+        // Дождь: ровная пелена во все фразы. Тише винила и музыки.
         let rain = RoleGuide {
             duration_mult: 150.0,
-            vel_base: 0.25,
+            vel_base: 0.18,
             vel_jitter: 0.05,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.25)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.18)
         };
         // Чужой крэш: тихий, только на стыках секций.
         // Фазз вне рок-полки: тихий редкий рифф для ручки фронта.
