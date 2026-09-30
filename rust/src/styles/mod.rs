@@ -83,8 +83,9 @@ pub enum Voicing {
 /// Тот же сид — тот же грув такт в такт; другой сид — другой грув.
 /// Квадрат энергии держит куплеты разреженными, а дроп — плотным.
 /// `alt` — второй полюс морфинга (другой грув той же роли).
-/// `poles` — набор из 2–4 готовых грувов (бит!): сид выбирает один
-/// полюс на весь трек. Разные сиды — разный бит при том же стиле.
+/// `poles` — набор из 2–4 готовых грувов (бит!): фраза выбирает один
+/// полюс детерминированно от (сид, слот, фраза). Разные фразы — разный
+/// бит, тот же сид — тот же бесконечный поток грувов.
 /// Если полюса заданы, `weights` игнорируется (морфинг идет к `alt`,
 /// если он есть, иначе полюс статичен).
 /// Направление морфинга — битом хэша сида: сиды дышат по-разному,
@@ -362,10 +363,11 @@ fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
         _ => root,
     }
 }
-/// Детерминированный гейт вероятности: тот же (сид, слот, шаг, секция) —
-/// то же решение, такт в такт, круг в круг. В отличие от кубика на каждый
-/// шаг, грув фиксирован и повторяется идеально (как в электронной музыке),
-/// а разные сиды дают разные зафиксированные грувы.
+/// Детерминированный гейт вероятности: тот же (сид, слот, шаг, соль) —
+/// то же решение. Соль берем от монотонной фразы (растет каждые 2 такта),
+/// поэтому грув держится фразу и пересдается дальше: повторов нет,
+/// но тот же сид всегда дает тот же бесконечный поток (воспроизводимость).
+/// В отличие от кубика на каждый шаг, выбранное играет точно.
 fn fixed_gate(seed_hash: u64, slot_idx: usize, step: usize, salt: u64) -> f32 {
     let h = crate::arranger::splitmix64(
         seed_hash
@@ -390,12 +392,15 @@ fn play_guide(
     slot_idx: usize,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
-    // Полюс грува от сида: один из 2–4 готовых битов на весь трек.
-    // Разные сиды — разный бит при том же стиле.
+    // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
+    // от (сид, слот, фраза). Один сид = один бесконечный неповторяющийся
+    // поток грувов, тот же сид всегда дает тот же поток.
     let base_w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
     let base_w = if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
         let pick = crate::arranger::splitmix64(
-            song.seed_hash ^ (slot_idx as u64).wrapping_mul(0x9E3779B9),
+            song.seed_hash
+                ^ (slot_idx as u64).wrapping_mul(0x9E3779B9)
+                ^ (song.phrase_index as u64).wrapping_mul(0x85EBCA6B),
         ) % poles.len() as u64;
         poles[pick as usize]
             .get(step_in_measure)
@@ -457,11 +462,15 @@ fn play_guide(
         p.clamp(0.0, 1.0)
     };
     // Якоря (1.0) бьют всегда. Остальное — фиксированным гейтом сида:
-    // решение зависит только от (сид, слот, шаг, секция), поэтому грув
-    // повторяется такт в такт, а не рассыпается случайными нотами.
+    // решение зависит от (сид, слот, шаг, фраза), поэтому грув стоит
+    // ровно фразу и никогда не повторяется дословно.
     if probability < 1.0
-        && fixed_gate(song.seed_hash, slot_idx, step_in_measure, song.section as u64)
-            >= probability
+        && fixed_gate(
+            song.seed_hash,
+            slot_idx,
+            step_in_measure,
+            song.phrase_index as u64
+        ) >= probability
     {
         return Vec::new();
     }
@@ -524,14 +533,18 @@ fn play_guide(
                 0
             };
             let (degree, jitter) = if guide.follow_motif {
-                // Тема круга: A на четных, B на нечетных. B — ретроград
-                // со сдвигом: бесконечность чередуется, мотив не замыливается.
+                // Живой мотив: тема круга (A/B) плюс ротация окном фразы.
+                // ДНК сида сохранено, но дословных повторов нет: каждая
+                // фраза начинает тему с нового места. Детерминировано
+                // фразой — тот же сид дает ту же бесконечную эволюцию.
                 let theme = if song.use_alt_motif {
                     &song.motif_b
                 } else {
                     &song.motif
                 };
-                let motif_step = theme[(step_in_measure / 2) % theme.len()] as usize;
+                let rot = song.phrase_index % theme.len();
+                let motif_step =
+                    theme[(step_in_measure / 2 + rot) % theme.len()] as usize;
                 (motif_step + answer, 0)
             } else {
                 let mut d = (degree + prog_shift) % scale.len().max(1);
@@ -547,12 +560,13 @@ fn play_guide(
                 (d, jitter)
             };
             let drift = if jitter > 0 {
-                // Блуждание тоже фиксировано сидом: та же нота в том же
-                // месте каждого такта, у других сидов — другая.
+                // Блуждание тоже фиксировано сидом и фразой: внутри фразы
+                // та же нота в том же месте, дальше — пересдача.
                 (crate::arranger::splitmix64(
                     song.seed_hash
                         ^ (slot_idx as u64).wrapping_mul(0xC0FFEE)
                         ^ (step_in_measure as u64).wrapping_mul(0x9E3779B9)
+                        ^ (song.phrase_index as u64).wrapping_mul(0x85EBCA6B)
                         ^ 0xD1F7,
                 ) % (jitter as u64 + 1)) as usize
             } else {
@@ -566,8 +580,12 @@ fn play_guide(
                 // Потолок регистра лидов: выше D6 (86) — ледяной свист,
                 // а не музыка. Берем минимум из гайда и колпака.
                 && root.saturating_add(12) <= guide.top_pitch.min(86)
-                && fixed_gate(song.seed_hash, slot_idx, step_in_measure, 0x0C74)
-                    < guide.octave_up;
+                && fixed_gate(
+                    song.seed_hash,
+                    slot_idx,
+                    step_in_measure,
+                    0x0C74 ^ (song.phrase_index as u64),
+                ) < guide.octave_up;
             (base, octave + if bump { 1 } else { 0 })
         }
     };
@@ -827,7 +845,7 @@ mod tests {
     const POLE_B: &[f32] = &[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     const POLES: &[&[f32]] = &[POLE_A, POLE_B];
 
-    fn pole_steps(seed_hash: u64, slot_idx: usize) -> Vec<usize> {
+    fn pole_steps(seed_hash: u64, slot_idx: usize, phrase: usize) -> Vec<usize> {
         let guide = RoleGuide {
             weights: &[0.0; 8],
             poles: Some(POLES),
@@ -835,6 +853,7 @@ mod tests {
         };
         let mut song = test_song(0.0);
         song.seed_hash = seed_hash;
+        song.phrase_index = phrase;
         let mut rng = rand::SeedableRng::seed_from_u64(1);
         (0..8)
             .filter(|step| {
@@ -942,17 +961,60 @@ mod tests {
 
     #[test]
     fn poles_pick_groove_by_seed() {
-        // Один полюс на весь трек: шаги только из POLE_A или только из POLE_B.
+        // Внутри одной фразы — один полюс: шаги только из POLE_A
+        // или только из POLE_B. Фраза пересдается детерминированно.
         for seed_hash in [0u64, 1, 7, 42, 1000] {
-            let steps = pole_steps(seed_hash, 1);
+            let steps = pole_steps(seed_hash, 1, 0);
             let in_a = steps.iter().all(|s| POLE_A[*s] > 0.0);
             let in_b = steps.iter().all(|s| POLE_B[*s] > 0.0);
             assert!(in_a || in_b, "seed {seed_hash}: mixed poles {steps:?}");
         }
         // Разные сиды выбирают разные полюса.
         let grooves: std::collections::HashSet<Vec<usize>> =
-            (0..8u64).map(|s| pole_steps(s, 1)).collect();
+            (0..8u64).map(|s| pole_steps(s, 1, 0)).collect();
         assert!(grooves.len() > 1, "pole never varies");
+        // Тот же сид + та же фраза = тот же грув (повторяемость).
+        assert_eq!(pole_steps(42, 1, 3), pole_steps(42, 1, 3));
+        // Фразы меняют грув: за 8 фраз хотя бы два разных полюса.
+        let flow: std::collections::HashSet<Vec<usize>> =
+            (0..8usize).map(|ph| pole_steps(42, 1, ph)).collect();
+        assert!(flow.len() > 1, "groove never evolves: {flow:?}");
+    }
+
+    #[test]
+    fn motif_rotates_by_phrase() {
+        // Живой мотив: соседние фразы дают разную мелодию из той же ДНК,
+        // полный оборот (8 фраз) возвращает тему — эволюция, а не луп.
+        fn phrase_pitches(phrase: usize) -> Vec<u8> {
+            let guide = RoleGuide {
+                weights: &[1.0; 16],
+                follow_motif: true,
+                ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            };
+            let scale = [48, 50, 52, 53, 55, 57, 59];
+            let mut song = test_song(0.5);
+            song.phrase_index = phrase;
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            (0..8)
+                .filter_map(|step| {
+                    play_guide(
+                        &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5,
+                        &mut rng,
+                    )
+                    .into_iter()
+                    .next()
+                    .map(|n| n.midi_pitch)
+                })
+                .collect()
+        }
+        let p0 = phrase_pitches(0);
+        let p1 = phrase_pitches(1);
+        assert_eq!(p0.len(), 8);
+        assert_ne!(p0, p1, "motif stuck across phrases");
+        assert_eq!(p0, phrase_pitches(0), "same phrase must repeat");
+        // Период эволюции = LCM(8 окно, 7 лад, 2 вопрос-ответ) = 56 фраз:
+        // бесконечность возвращается, но не через 5 секунд.
+        assert_eq!(p0, phrase_pitches(56), "evolution period must close");
     }
 
     #[test]
