@@ -122,13 +122,12 @@ pub struct SongContext {
     /// Создается в интро и НЕ меняется весь круг: один сид = одна
     /// узнаваемая тема, развиваемая формой, а не пересочиняемая.
     pub motif: [u8; 8],
-    /// Вторая тема сида: B — вариация A (3 мутации), не вторая пьеса:
-    /// тот же материал, другое дыхание. Блоки по 8 фраз (~16 тактов):
-    /// тема дополнительно ротируется окном фразы, так что дословных
-    /// повторов нет ни внутри блока, ни на стыке. Привязка к фразе,
-    /// а не к кругу формы: длительность блоков одинакова во всех стилях.
+    /// Вторая тема сида: B — вариация A (3 мутации), материал кульминаций.
+    /// Drop и PostChorus поют B, остальное A: куплет/припев различаются
+    /// темой, а не только громкостью. Границы — границы секций (их длины
+    /// от сида), отдельной блочной логики нет.
     pub motif_b: [u8; 8],
-    /// Какой мотив звучит в текущем круге.
+    /// B звучит на кульминациях (Drop/PostChorus), A — везде иначе.
     pub use_alt_motif: bool,
     /// Гармоническая прогрессия сида: сдвиги ступеней 0..4 для аккомпанемента,
     /// меняются каждые 2 такта. Лид держит мотив, гармония движется —
@@ -356,10 +355,13 @@ impl Arranger {
             density: self.density,
             motif: self.motif,
             motif_b: self.motif_b,
-            // Блок A/B по 8 фраз: одинаковые блоки во всех стилях,
-            // без привязки к длине круга формы. Фразовый оффсет сида
-            // сдвигает границы блоков — у разных сидов B входит раньше/позже.
-            use_alt_motif: (phrase_index / 8) % 2 == 1,
+            // Тема секции: кульминации (Drop/PostChorus) поют B,
+            // остальное — A. Энергия и тема усиливают друг друга:
+            // настоящий припев, а не та же мелодия погромче.
+            use_alt_motif: matches!(
+                section,
+                SongSection::Drop | SongSection::PostChorus
+            ),
             prog: self.prog,
         }
     }
@@ -581,37 +583,51 @@ mod tests {
     }
 
     #[test]
-    fn motif_pair_differs_and_alternates_by_phrase_blocks() {
-        // Пара тем: B — родственник A, но другая тема; блоки по 8 фраз чередуют.
+    fn alt_motif_marks_drop_sections() {
+        // B — материал кульминаций: Drop и PostChorus поют B, остальное A.
+        // Куплет/припев различаются темой, а не только громкостью.
         for seed in [0u64, 1, 7, 42, 777, 424242] {
             let mut a = Arranger::new(seed);
             let first = a.advance_measure();
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
-            assert!(!first.use_alt_motif, "track must start with A");
+            assert!(!first.use_alt_motif, "intro must start with A");
             for v in first.motif_b {
                 assert!(v <= 4, "motif_b out of range: {v}");
             }
         }
-        // За ~200 тактов (~100 фраз) видны оба блока; границы детерминированы.
         let mut a = Arranger::new(5);
-        let mut seen_a = false;
-        let mut seen_b = false;
+        let (mut main_a, mut drop_b, mut post_b) = (false, false, false);
         for _ in 0..200 {
             let ctx = a.advance_measure();
-            if ctx.use_alt_motif {
-                seen_b = true;
-            } else {
-                seen_a = true;
+            match ctx.section {
+                SongSection::Drop => {
+                    assert!(ctx.use_alt_motif, "drop must sing B");
+                    drop_b = true;
+                }
+                SongSection::PostChorus => {
+                    assert!(ctx.use_alt_motif, "postchorus must sing B");
+                    post_b = true;
+                }
+                _ => {
+                    assert!(!ctx.use_alt_motif, "{:?} must sing A", ctx.section);
+                    if ctx.section == SongSection::MainMotif {
+                        main_a = true;
+                    }
+                }
+            }
+            if main_a && drop_b && post_b {
+                break;
             }
         }
-        assert!(seen_a && seen_b, "A/B blocks never alternate");
+        assert!(main_a && drop_b && post_b, "sections never complete a cycle");
+        // Границы детерминированы сидом.
         let mut x = Arranger::new(5);
         let mut y = Arranger::new(5);
         for _ in 0..40 {
             assert_eq!(
                 x.advance_measure().use_alt_motif,
                 y.advance_measure().use_alt_motif,
-                "block boundary must be deterministic"
+                "theme boundary must be deterministic"
             );
         }
     }
