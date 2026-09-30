@@ -134,10 +134,18 @@ impl Style for ClubStyle {
         ]
     }
 
-    /// Гости битмейкера: чопы или Rhodes заходят по одному,
-    /// состав зависит от сида.
+    /// Гости битмейкера: чопы или Rhodes заходят по одному-два,
+    /// состав зависит от сида. Rhodes частый, чопы — редкая специя.
     fn flex_pool(&self) -> &'static [Slot] {
         &[Slot::Vocal, Slot::Keys]
+    }
+
+    fn flex_weights(&self) -> &'static [f32] {
+        &[0.4, 1.0]
+    }
+
+    fn flex_range(&self) -> (usize, usize) {
+        (1, 2)
     }
 
     fn flex_count(&self) -> usize {

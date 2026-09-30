@@ -160,8 +160,13 @@ impl Style for LofiStyle {
     }
 
     /// Гость по сиду: пыльные чопы или глубокий саб-толчок.
+    /// Ровно один (низ под контролем лимита плотности), саб чаще чопов.
     fn flex_pool(&self) -> &'static [Slot] {
         &[Slot::Vocal, Slot::Kick808]
+    }
+
+    fn flex_weights(&self) -> &'static [f32] {
+        &[0.5, 1.0]
     }
 
     fn flex_count(&self) -> usize {

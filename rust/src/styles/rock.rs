@@ -129,8 +129,17 @@ impl Style for RockStyle {
     }
 
     /// Гость по сиду: редкое пианино или далекие чопы поверх стены.
+    /// Чопы чаще, пианино — редкая специя. Бюджет 1–2.
     fn flex_pool(&self) -> &'static [Slot] {
         &[Slot::Keys, Slot::Vocal]
+    }
+
+    fn flex_weights(&self) -> &'static [f32] {
+        &[0.6, 1.0]
+    }
+
+    fn flex_range(&self) -> (usize, usize) {
+        (1, 2)
     }
 
     fn flex_count(&self) -> usize {

@@ -227,16 +227,51 @@ pub fn apply_style_mix(style: &dyn Style, mixer: &mut MixerState, seed: u64) {
     }
 }
 
-/// Гости микса: первые N пула, повернутого хэшем сида.
-/// Один сид — один состав, разные сиды — разные (почти всегда).
+/// Гости микса: взвешенная лотерея сида в бюджете стиля.
+/// Число гостей — сидом внутри flex_range; состав — рулеткой по
+/// flex_weights без повторов (вытянутое выбывает). Один сид — один
+/// состав, distribution следует предпочтениям: частые гости и редкие
+/// специи вместо равномерной ротации. Детерминировано полностью.
 fn pick_flex_slots(style: &dyn Style, seed: u64) -> Vec<Slot> {
     let pool = style.flex_pool();
-    let n = style.flex_count().min(pool.len());
-    if n == 0 || pool.is_empty() {
+    if pool.is_empty() {
         return Vec::new();
     }
-    let rot = (crate::arranger::splitmix64(seed ^ 0xF1E9) % pool.len() as u64) as usize;
-    (0..n).map(|k| pool[(rot + k) % pool.len()]).collect()
+    let (lo, hi) = style.flex_range();
+    let max = hi.min(pool.len());
+    let min = lo.min(max);
+    let span = max - min + 1;
+    let n = min + (crate::arranger::splitmix64(seed ^ 0x9E5D) % span as u64) as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    let weights_all = style.flex_weights();
+    let mut weights: Vec<f32> = pool
+        .iter()
+        .enumerate()
+        .map(|(i, _)| weights_all.get(i).copied().unwrap_or(1.0).max(0.0))
+        .collect();
+    let mut out = Vec::with_capacity(n);
+    let mut draw = crate::arranger::splitmix64(seed ^ 0xF1E9);
+    for _ in 0..n {
+        let total: f32 = weights.iter().sum();
+        if total <= 0.0 {
+            break;
+        }
+        draw = crate::arranger::splitmix64(draw);
+        let mut r = (draw >> 32) as f32 / (u32::MAX as f32) * total;
+        let mut pick = 0;
+        for (i, w) in weights.iter().enumerate() {
+            r -= *w;
+            if r <= 0.0 {
+                pick = i;
+                break;
+            }
+        }
+        weights[pick] = 0.0;
+        out.push(pool[pick]);
+    }
+    out
 }
 
 /// Кламп ручки темпа. Неположительное значение = сброс к дефолту стиля.
@@ -1168,7 +1203,7 @@ mod tests {
         assert_eq!(vol(PLUCK_ID), 0.0);
         assert_eq!(vol(VINYL_ID), 0.0);
         assert_eq!(vol(ACID_ID), 0.0);
-        // Гость ровно один из пула, остальные строго в нуле.
+        // Гости из пула (бюджет 1–2): все слышимые вне ядра — из пула.
         let guests: Vec<u64> = tracks
             .iter()
             .filter(|t| {
@@ -1178,7 +1213,10 @@ mod tests {
             })
             .map(|t| t.id)
             .collect();
-        assert_eq!(guests.len(), 1, "guests: {guests:?}");
+        assert!(
+            (1..=2).contains(&guests.len()),
+            "guests: {guests:?}"
+        );
         for id in &guests {
             let slot = Slot::from_id(*id as usize).expect("known slot");
             assert!(
@@ -1644,6 +1682,27 @@ mod tests {
     }
 
     #[test]
+    fn flex_lottery_follows_weights() {
+        // Взвешенная лотерея: детерминирована сидом, покрывает весь пул,
+        // частоты следуют весам (частые гости и редкие специи).
+        let style = styles::make_style("club").expect("club");
+        let mut counts = [0usize; 2];
+        for seed in 0..64u64 {
+            let picked = pick_flex_slots(&*style, seed);
+            assert_eq!(picked, pick_flex_slots(&*style, seed), "not deterministic");
+            let (lo, hi) = style.flex_range();
+            assert!((lo..=hi).contains(&picked.len()), "budget broken");
+            for s in &picked {
+                let i = style.flex_pool().iter().position(|p| p == s).unwrap();
+                counts[i] += 1;
+            }
+        }
+        // Оба гостя выпадают, но с разной частотой (веса 0.4 vs 1.0).
+        assert!(counts[0] > 0 && counts[1] > 0, "pool member never picked");
+        assert_ne!(counts[0], counts[1], "lottery ignores weights: {counts:?}");
+    }
+
+    #[test]
     fn mixes_match_whitelists_with_base_volumes() {
         // Микс = вайтлист + гости сида, громкости канонические.
         // Гости — только из пула стиля, остальные строго в нуле.
@@ -1689,7 +1748,15 @@ mod tests {
                 );
             }
             let guests: Vec<Slot> = audible.difference(&core).copied().collect();
-            assert_eq!(guests.len(), style.flex_count().min(style.flex_pool().len()));
+            // Число гостей — в бюджете стиля, состав — из пула.
+            let (lo, hi) = style.flex_range();
+            let max = hi.min(style.flex_pool().len());
+            let min = lo.min(max);
+            assert!(
+                (min..=max).contains(&guests.len()),
+                "seed {seed}: {} guests outside {min}..={max}",
+                guests.len()
+            );
             variants.insert(guests);
         }
         assert!(variants.len() > 1, "guests never vary");
