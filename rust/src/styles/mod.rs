@@ -304,10 +304,22 @@ pub trait Style: Send + Sync {
 /// Общий движок генерации: один цикл по слотам для всех стилей.
 /// Слот звучит, только если его id в активных треках (громкость > 0) —
 /// выключенные инструменты не грузят ни генерацию, ни DSP.
+/// Состав влияет на генерацию: слоты одной роли делят плотность
+/// (`1/sqrt(n)` на не-якорные вероятности) — выключил второй лид,
+/// оставшийся играет гуще и подхватывает пространство. Якоря жанра
+/// (вес 1.0: бит, фундамент) дележу не подлежат — основа не прерывается.
+/// Детерминировано составом: тот же сид + тот же набор = та же музыка.
 pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent> {
     let guides = style.slot_guides();
     let scale = style.scale();
     let energy = (style.shape_energy(sctx.song.energy) * sctx.intensity).clamp(0.0, 1.5);
+    // Сколько активных носителей у каждой роли — карта дележа плотности.
+    let mut role_n = [0usize; 8];
+    for id in sctx.active_tracks {
+        if let Some(s) = Slot::from_id(*id) {
+            role_n[s.role().index()] += 1;
+        }
+    }
     let mut notes = Vec::new();
     for (i, slot) in Slot::ALL.iter().enumerate() {
         if !sctx.active_tracks.contains(&slot.id()) {
@@ -320,6 +332,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         // Выбор ритмического варианта — битом хэша сида по номеру слота:
         // детерминирован внутри сида, независим между слотами.
         let alt_pick = ((sctx.song.seed_hash >> i) & 1) == 1;
+        let n = role_n[slot.role().index()].max(1) as f32;
         notes.extend(play_guide(
             guide,
             scale,
@@ -331,6 +344,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             sctx.base_step_secs,
             slot.id(),
             i,
+            1.0 / n.sqrt(),
             sctx.rng,
         ));
     }
@@ -390,6 +404,9 @@ fn play_guide(
     base_step_secs: f32,
     instrument_id: usize,
     slot_idx: usize,
+    // Доля плотности роли (1/sqrt(n) носителей): 1.0 = единственный
+    // носитель, играет в полную силу. Якоря (вес 1.0) не масштабируются.
+    role_share: f32,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
     // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
@@ -454,8 +471,11 @@ fn play_guide(
         1.0
     } else {
         // Плотность сида масштабирует все вероятности: разреженные
-        // и густые сиды одного стиля. Якоря (1.0) не трогаем.
-        let mut p = weight * energy * energy * guide.energy_response * song.density;
+        // и густые сиды одного стиля. Доля роли: носителей несколько —
+        // каждый реже (делят пространство), один — в полную силу.
+        // Якоря (1.0) не трогаем ни тем, ни другим.
+        let mut p =
+            weight * energy * energy * guide.energy_response * song.density * role_share;
         if climax {
             p += guide.climax_boost;
         }
@@ -683,7 +703,7 @@ mod tests {
         (0..16)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, &mut rng,
+                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, &mut rng,
                 )
                 .is_empty()
             })
@@ -777,6 +797,7 @@ mod tests {
                     0.1,
                     6,
                     5,
+                    1.0,
                     &mut rng,
                 )
                 .into_iter()
@@ -815,6 +836,7 @@ mod tests {
                     0.1,
                     6,
                     5,
+                    1.0,
                     &mut rng,
                 )
                 .into_iter()
@@ -856,7 +878,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, &mut rng,
+                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, &mut rng,
                 )
                 .is_empty()
             })
@@ -874,7 +896,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -901,7 +923,7 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -996,7 +1018,7 @@ mod tests {
             (0..8)
                 .filter_map(|step| {
                     play_guide(
-                        &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5,
+                        &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0,
                         &mut rng,
                     )
                     .into_iter()
@@ -1030,7 +1052,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -1040,5 +1062,64 @@ mod tests {
         assert_ne!(degree_at(1, false), degree_at(2, false));
         // Мотив от такта не зависит.
         assert_eq!(degree_at(1, true), degree_at(2, true));
+    }
+
+    fn shared_hits(share: f32) -> usize {
+        // Не-якорный лид (вес 0.5): считаем срабатывания по сетке
+        // 16 шагов × 8 фраз. Доля 1.0 = единственный носитель роли.
+        let guide = RoleGuide {
+            weights: &[0.5; 16],
+            ..RoleGuide::kit(&[0.5; 16], 60, 0.8)
+        };
+        let mut total = 0;
+        for phrase in 0..8usize {
+            let mut song = test_song(0.5);
+            song.phrase_index = phrase;
+            let mut rng = rand::SeedableRng::seed_from_u64(11);
+            total += (0..16)
+                .filter(|step| {
+                    !play_guide(
+                        &guide, &[48], &song, 1.0, false, *step, 16, 0.1, 6, 5, share,
+                        &mut rng,
+                    )
+                    .is_empty()
+                })
+                .count();
+        }
+        total
+    }
+
+    #[test]
+    fn role_sharing_thins_crowded_roles_but_spares_anchors() {
+        // Два носителя роли (share 1/sqrt(2)) — каждый реже одиночки,
+        // вместе покрывают пространство без каши. Детерминировано.
+        let alone = shared_hits(1.0);
+        let shared = shared_hits(1.0 / 2.0f32.sqrt());
+        assert!(alone > 0, "lead never plays");
+        assert!(
+            shared < alone,
+            "sharing must thin: shared={shared} alone={alone}"
+        );
+        assert_eq!(shared, shared_hits(1.0 / 2.0f32.sqrt()), "must repeat");
+        // Якоря (вес 1.0) дележу не подлежат: бьют всегда при любой доле.
+        let anchor = RoleGuide {
+            weights: &[1.0; 8],
+            ..RoleGuide::kit(&[1.0; 8], 36, 0.9)
+        };
+        for share in [1.0, 1.0 / 2.0f32.sqrt(), 0.2] {
+            let mut song = test_song(0.5);
+            song.phrase_index = 3;
+            let mut rng = rand::SeedableRng::seed_from_u64(4);
+            for step in 0..8 {
+                assert!(
+                    !play_guide(
+                        &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0, share,
+                        &mut rng,
+                    )
+                    .is_empty(),
+                    "anchor dropped at share={share}"
+                );
+            }
+        }
     }
 }
