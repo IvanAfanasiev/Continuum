@@ -449,6 +449,28 @@ fn fixed_gate(seed_hash: u64, slot_idx: usize, step: usize, salt: u64) -> f32 {
     (h >> 32) as f32 / (u32::MAX as f32)
 }
 
+/// Детерминированное блуждание тоники по фразам: префикс-сумма шагов
+/// −1/0/+1 из битов хэша (сид, фраза). Шаг не больше ступени за фразу
+/// (музыкально связно), путь непериодичен (период потока 2^64 —
+/// скелет не замыкается никогда). Тот же сид — тот же путь.
+/// Сложность O(фраза): на суточной сессии ~микросекунды на ноту.
+fn melodic_drift(seed_hash: u64, phrase: usize, span: usize) -> usize {
+    let mut pos: i64 = 0;
+    for p in 0..phrase {
+        let h = crate::arranger::splitmix64(
+            seed_hash
+                ^ (p as u64).wrapping_mul(0x9E3779B97F4A7C15)
+                ^ 0xD21F7,
+        );
+        pos += match h % 3 {
+            0 => 0,
+            1 => 1,
+            _ => -1,
+        };
+    }
+    pos.rem_euclid(span.max(1) as i64) as usize
+}
+
 #[allow(clippy::too_many_arguments)]
 fn play_guide(
     guide: &RoleGuide,
@@ -656,7 +678,12 @@ fn play_guide(
             } else {
                 0
             };
-            let base = song.phrase_index + degree + drift + rotation;
+            // Тоника блуждает детерминированно (−1/0/+1 по битам хэша фраз):
+            // локально связно (стоит или шаг на ступень), глобально
+            // непериодично — скелет мелодии не замыкается в цикл длиной
+            // в лад, как раньше (там было +1 каждую фразу: период = лад).
+            let tonic = melodic_drift(song.seed_hash, song.phrase_index, scale.len());
+            let base = tonic + degree + drift + rotation;
             // Октава общая для тонов аккорда; подъем проверяем по корню.
             let root_idx = base % scale.len();
             let root = modal_tone(scale, root_idx, song.seed_hash);
@@ -1074,9 +1101,33 @@ mod tests {
     }
 
     #[test]
-    fn motif_rotates_by_phrase() {
-        // Живой мотив: соседние фразы дают разную мелодию из той же ДНК,
-        // полный оборот (8 фраз) возвращает тему — эволюция, а не луп.
+    fn tonic_walk_is_bounded_and_never_loops() {
+        // Тоника: старт в нуле, детерминизм, шаг ≤ ступень между фразами.
+        assert_eq!(melodic_drift(42, 0, 7), 0);
+        assert_eq!(melodic_drift(42, 5, 7), melodic_drift(42, 5, 7));
+        for seed in [0u64, 1, 42, 777] {
+            for ph in 0..200usize {
+                let a = melodic_drift(seed, ph, 7) as i64;
+                let b = melodic_drift(seed, ph + 1, 7) as i64;
+                let d = (b - a).rem_euclid(7).min((a - b).rem_euclid(7));
+                assert!(d <= 1, "seed {seed} phrase {ph}: jump {d}");
+            }
+        }
+        // Непериодичность: на окне 200 фраз нет периода ≤ 32
+        // (линейное +1/фраза дало бы период 7 — цикл длиной в лад).
+        for seed in [5u64, 12345] {
+            let path: Vec<usize> = (0..200).map(|ph| melodic_drift(seed, ph, 7)).collect();
+            let loops = (1..=32)
+                .any(|t| path.iter().zip(path.iter().skip(t)).all(|(a, b)| a == b));
+            assert!(!loops, "seed {seed}: walk loops");
+        }
+    }
+
+    #[test]
+    fn motif_skeleton_outgrows_rotation_templates() {
+        // Линия мотива: та же фраза — та же линия; соседние фразы разные;
+        // за 64 фразы различных линий больше 16 (потолок ротации 8 ×
+        // вопрос-ответ 2) — блуждание тоники рвет шаблонный цикл.
         fn phrase_pitches(phrase: usize) -> Vec<u8> {
             let guide = RoleGuide {
                 weights: &[1.0; 16],
@@ -1104,9 +1155,15 @@ mod tests {
         assert_eq!(p0.len(), 8);
         assert_ne!(p0, p1, "motif stuck across phrases");
         assert_eq!(p0, phrase_pitches(0), "same phrase must repeat");
-        // Период эволюции = LCM(8 окно, 7 лад, 2 вопрос-ответ) = 56 фраз:
-        // бесконечность возвращается, но не через 5 секунд.
-        assert_eq!(p0, phrase_pitches(56), "evolution period must close");
+        // Блуждание рвет шаблон: различных линий за 64 фразы больше,
+        // чем может дать ротация без него.
+        let distinct: std::collections::HashSet<Vec<u8>> =
+            (0..64).map(phrase_pitches).collect();
+        assert!(
+            distinct.len() > 16,
+            "skeleton loops: {} distinct",
+            distinct.len()
+        );
     }
 
     #[test]
