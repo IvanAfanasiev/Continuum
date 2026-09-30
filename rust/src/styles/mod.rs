@@ -310,6 +310,11 @@ pub trait Style: Send + Sync {
 /// (вес 1.0: бит, фундамент) дележу не подлежат — основа не прерывается.
 /// Мотив не пропадает от мьюта: если все носители темы выключены, ее
 /// подхватывает первый мелодический питчевый слот (Lead→Vocal→Chords→Bass).
+/// Гармония не пропадает от мьюта: если выключены все аккордовые
+/// (пэды/клавиши), лиды и чопы сгущаются в диады (корень+терция) —
+/// гармонизованная мелодия вместо пустоты. Бас и кик не покрываем:
+/// выключенный низ — воля пользователя, а не дыра (и чужой артикуляцией
+/// его не заменить — выйдет грязь, а не фундамент).
 /// Детерминировано составом: тот же сид + тот же набор = та же музыка.
 pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent> {
     let guides = style.slot_guides();
@@ -328,6 +333,10 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         .iter()
         .enumerate()
         .any(|(i, s)| is_active(*s) && guides[i].follow_motif && !guides[i].is_silent());
+    // Гармония жива, пока жив хоть один аккордовый слот.
+    let has_chords = Slot::ALL.iter().enumerate().any(|(i, s)| {
+        is_active(*s) && Slot::ALL[i].role() == InstrumentRole::Chords && !guides[i].is_silent()
+    });
     // Резервный носитель: первый питчевый мелодический по рангу роли.
     // Ударные тему петь не могут — только Scale-голоса.
     let fallback: Option<usize> = if has_carrier {
@@ -358,6 +367,14 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         // детерминирован внутри сида, независим между слотами.
         let alt_pick = ((sctx.song.seed_hash >> i) & 1) == 1;
         let n = role_n[slot.role().index()].max(1) as f32;
+        // Сгущение в диады — только мелодическим питчевым при пустых
+        // аккордовых. Остальные играют как написано.
+        let thicken = !has_chords
+            && matches!(
+                slot.role(),
+                InstrumentRole::Lead | InstrumentRole::Vocal
+            )
+            && matches!(guide.voice, Voicing::Scale { .. });
         notes.extend(play_guide(
             guide,
             scale,
@@ -371,6 +388,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             i,
             1.0 / n.sqrt(),
             fallback == Some(slot.id()),
+            thicken,
             sctx.rng,
         ));
     }
@@ -450,6 +468,9 @@ fn play_guide(
     // берется из мотива сида. Озвучка (трезвучия пэдов) и октава гайда
     // сохраняются: пэд играет аккорд от ступени темы, а не мелодию.
     force_motif: bool,
+    // Сгущение в диаду: пустые аккордовые — лид поет корень+терцию.
+    // Гармония без мути трезвучий и без смены голоса.
+    force_chords: bool,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
     // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
@@ -654,10 +675,12 @@ fn play_guide(
     };
 
     // Аккордовая озвучка: пэды и клавиши берут трезвучие (или интервалы
-    // из гайда), мелодия — одиночные ноты. Все тоны в ладу по построению.
+    // из гайда), мелодия — одиночные ноты. Сгущение (пустые аккордовые) —
+    // диада корень+терция у лидов: гармония без мути. Все тоны в ладу.
     let intervals: &[i8] = match guide.chord {
         Some(iv) => iv,
         None if matches!(role, Some(InstrumentRole::Chords)) && !guide.follow_motif => &[0, 2, 4],
+        None if force_chords => &[0, 2],
         _ => &[0],
     };
     let mut out = Vec::with_capacity(intervals.len());
@@ -748,7 +771,7 @@ mod tests {
         (0..16)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, &mut rng,
+                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -844,6 +867,7 @@ mod tests {
                     5,
                     1.0,
                     false,
+                    false,
                     &mut rng,
                 )
                 .into_iter()
@@ -883,6 +907,7 @@ mod tests {
                     6,
                     5,
                     1.0,
+                    false,
                     false,
                     &mut rng,
                 )
@@ -925,7 +950,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, &mut rng,
+                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -943,7 +968,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, false, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -970,7 +995,7 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, false, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -1066,7 +1091,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0, false,
-                        &mut rng,
+                        false, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1106,7 +1131,7 @@ mod tests {
             .map(|step| {
                 play_guide(
                     &anchor_motif, scale, &song, 1.0, false, step, spm, 0.1, 6, 5, 1.0,
-                    false, &mut rng,
+                    false, false, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1121,7 +1146,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guides[ki], scale, &song, 1.0, false, step, spm, 0.1,
-                        Slot::Keys.id(), ki, 1.0, force, &mut rng,
+                        Slot::Keys.id(), ki, 1.0, force, false, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1172,6 +1197,63 @@ mod tests {
     }
 
     #[test]
+    fn empty_chords_thicken_leads_into_dyads() {
+        // Пустые аккордовые: гитара соло поет диадами (корень+терция),
+        // та же гитара при живом пэде — одиночными. Те же шаги звучат:
+        // состав меняет озвучку, а не ритм.
+        use crate::instruments::Slot;
+        let style = make_style("lofi").expect("known style");
+        let song = test_song(0.5);
+        let gid = Slot::Guitar.id();
+        let render = |active: &Vec<usize>| -> Vec<(usize, Vec<u8>)> {
+            let mut rng = rand::SeedableRng::seed_from_u64(31);
+            let mut sctx = StepContext {
+                step: 0,
+                step_in_measure: 0,
+                base_step_secs: style.base_step_secs(),
+                active_tracks: active,
+                song: &song,
+                rng: &mut rng,
+                intensity: 1.0,
+            };
+            (0..16)
+                .map(|sim| {
+                    sctx.step = sim;
+                    sctx.step_in_measure = sim;
+                    let pitches: Vec<u8> = render_style(&*style, &mut sctx)
+                        .into_iter()
+                        .filter(|n| n.instrument_id == gid)
+                        .map(|n| n.midi_pitch)
+                        .collect();
+                    (sim, pitches)
+                })
+                .collect()
+        };
+        let solo = render(&vec![gid]);
+        let with_pad = render(&vec![gid, Slot::Pad.id()]);
+        let solo_sounding: Vec<_> = solo.iter().filter(|(_, p)| !p.is_empty()).collect();
+        assert!(!solo_sounding.is_empty(), "guitar alone silent");
+        for (sim, pitches) in &solo_sounding {
+            assert_eq!(
+                pitches.len(),
+                2,
+                "solo step {sim}: expected dyad, got {pitches:?}"
+            );
+            assert_ne!(pitches[0], pitches[1], "dyad in unison");
+        }
+        // Тот же сид, те же шаги — при пэде одиночные ноты.
+        for ((sim, dyad), (_, single)) in solo.iter().zip(with_pad.iter()) {
+            if dyad.is_empty() {
+                assert!(single.is_empty(), "step {sim}: gate moved with mix");
+            } else {
+                assert_eq!(single.len(), 1, "step {sim}: no thinning with pad");
+                assert_eq!(single[0], dyad[0], "step {sim}: root moved");
+            }
+        }
+        assert_eq!(solo, render(&vec![gid]), "must repeat");
+    }
+
+    #[test]
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные такты — разные ступени),
         // мотив при той же прогрессии стабилен.
@@ -1186,7 +1268,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, false, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -1214,7 +1296,7 @@ mod tests {
                 .filter(|step| {
                     !play_guide(
                         &guide, &[48], &song, 1.0, false, *step, 16, 0.1, 6, 5, share,
-                        false, &mut rng,
+                        false, false, &mut rng,
                     )
                     .is_empty()
                 })
@@ -1248,7 +1330,7 @@ mod tests {
                 assert!(
                     !play_guide(
                         &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0, share,
-                        false, &mut rng,
+                        false, false, &mut rng,
                     )
                     .is_empty(),
                     "anchor dropped at share={share}"
