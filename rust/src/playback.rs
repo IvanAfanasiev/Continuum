@@ -1545,11 +1545,13 @@ mod tests {
 
         let lofi = ensemble_of("lofi");
         for s in [
-            Bass, Kick, Pad, Snare, Hat, Pluck, Keys, Vinyl, Flute, Guitar, Rain,
+            Bass, Kick, Pad, Snare, Hat, Keys, Vinyl, Flute, Guitar, Rain,
         ] {
             assert!(lofi.contains(&s), "lofi: {s:?} missing");
         }
-        for s in [Kick808, Laser, Vocal, Festival] {
+        // Плак вне дефолта: поверх Rhodes и гитары дает кашу —
+        // включается вручную. Остальные чужие — тоже вне набора.
+        for s in [Pluck, Kick808, Laser, Vocal, Festival] {
             assert!(!lofi.contains(&s), "lofi: {s:?} should be off");
         }
 

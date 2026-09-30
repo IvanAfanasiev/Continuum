@@ -44,8 +44,10 @@ const KICK_ALT_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.35, 0.0, 0.2, 0.0, 0.0, 0.0,
 ];
 // Синкопированный фанк-кик (ref: Redbone — без прямой бочки).
+// Разреженный и заякоренный на 1: бум-бэп, а не пулемет.
+// (7 частых кандидатов давали кашу на высокой энергии/интенсивности.)
 const KICK_SYNCOP_W: &[f32] = &[
-    0.5, 0.9, 0.9, 0.6, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.8, 0.0, 0.4, 0.0,
+    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.4, 0.0,
 ];
 const KICK_POLES: &[&[f32]] = &[KICK_W, KICK_ALT_W, KICK_SYNCOP_W];
 const BASS_ALT_W: &[f32] = &[
@@ -134,14 +136,15 @@ impl Style for LofiStyle {
 
     fn ensemble(&self) -> &'static [Slot] {
         // Классика: барабаны + бас + Rhodes + гитара + флейта + винил + дождь.
-        // Лазера, 808, вокала и фестиваля нет слышно даже рядом.
+        // Нарезок-плака нет: поверх Rhodes и гитары они дают кашу —
+        // включить можно вручную, дефолт чистый. Лазера, 808, вокала
+        // и фестиваля нет слышно даже рядом.
         &[
             Slot::Bass,
             Slot::Kick,
             Slot::Pad,
             Slot::Snare,
             Slot::Hat,
-            Slot::Pluck,
             Slot::Keys,
             Slot::Vinyl,
             Slot::Flute,
@@ -162,9 +165,10 @@ impl Style for LofiStyle {
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         // Саб-ковер: мягко и длинно, без резких атак. Тише драйва —
         // акцент на гитаре и клавишах, бас только держит низ.
+        // Сустейн умеренный (4 шага): длинные ноты слоями давали кашу.
         let bass = RoleGuide {
             energy_response: 0.8,
-            duration_mult: 6.0,
+            duration_mult: 4.0,
             vel_base: 0.55,
             vel_jitter: 0.05,
             voice: Voicing::Scale {
@@ -174,7 +178,7 @@ impl Style for LofiStyle {
             },
             vel_high_cut: 0.6,
             alt: Some(BASS_ALT_W),
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 6.0, 0.55)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 4.0, 0.55)
         };
         let kick = RoleGuide {
             energy_response: 0.8,
@@ -185,14 +189,14 @@ impl Style for LofiStyle {
             ..RoleGuide::kit(KICK_W, 36, 0.9)
         };
         let pad = RoleGuide {
-            duration_mult: 12.0,
+            duration_mult: 8.0,
             vel_base: 0.35,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 0,
                 jitter: 0,
             },
-            ..RoleGuide::pitched(PAD_W, 0, 0, 0, 12.0, 0.35)
+            ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.35)
         };
         let snare = RoleGuide {
             vel_base: 0.8,
@@ -225,7 +229,7 @@ impl Style for LofiStyle {
             ..RoleGuide::pitched(PLUCK_W, 0, 1, 0, 2.0, 0.5)
         };
         let keys = RoleGuide {
-            duration_mult: 6.0,
+            duration_mult: 4.0,
             vel_base: 0.6,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -234,13 +238,19 @@ impl Style for LofiStyle {
                 jitter: 2,
             },
             alt: Some(KEYS_ALT_W),
-            ..RoleGuide::pitched(KEYS_W, 0, 1, 2, 6.0, 0.6)
+            ..RoleGuide::pitched(KEYS_W, 0, 1, 2, 4.0, 0.6)
         };
         // Чужие слоты: приглушенные рабочие направляющие — включаются
         // только ручкой фронта, дефолтный характер не ломают.
+        // Гость-808 в lofi — саб-дроп на 1, а не дабл паттерна кика:
+        // удвоение давало flam и наслоение низа.
+        const SUB_DROP_W: &[f32] = &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0,
+        ];
         let kick808 = RoleGuide {
             vel_base: 0.8,
-            ..RoleGuide::kit(KICK_W, 36, 0.8)
+            ..RoleGuide::kit(SUB_DROP_W, 36, 0.8)
         };
         let laser = RoleGuide {
             energy_response: 1.2,

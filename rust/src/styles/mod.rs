@@ -1311,6 +1311,57 @@ mod tests {
     }
 
     #[test]
+    fn lofi_kick_stays_sparse() {
+        // Бум-бэп: кик на 1 + пара синкоп, не пулемет. Не больше 4 ударов
+        // кика и не больше 6 низовых атак (кик+808+бас) на такт — в любых
+        // фразах, сидах и при госте-808 (удвоение паттерна запрещено).
+        // Худший случай: полный дефолтный микс сида + пик энергии формы.
+        use crate::instruments::Slot;
+        let style = make_style("lofi").expect("known style");
+        for seed in [11u64, 12, 42, 777, 424242] {
+            let mut mixer = crate::mixer::MixerState::new();
+            crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+            let n = mixer.active_ids(&mut buf);
+            let active = buf[..n].to_vec();
+            let mut rng = rand::SeedableRng::seed_from_u64(seed);
+            let mut arranger = crate::arranger::Arranger::new(seed);
+            let mut song = arranger.advance_measure();
+            for _bar in 0..24 {
+                let (mut kicks, mut lowend) = (0, 0);
+                {
+                    let mut sctx = StepContext {
+                        step: 0,
+                        step_in_measure: 0,
+                        base_step_secs: style.base_step_secs(),
+                        active_tracks: &active,
+                        song: &song,
+                        rng: &mut rng,
+                        intensity: 1.0,
+                    };
+                    for sim in 0..16 {
+                        sctx.step = sim;
+                        sctx.step_in_measure = sim;
+                        for note in render_style(&*style, &mut sctx) {
+                            if note.instrument_id == Slot::Kick.id() {
+                                kicks += 1;
+                                lowend += 1;
+                            } else if note.instrument_id == Slot::Kick808.id()
+                                || note.instrument_id == Slot::Bass.id()
+                            {
+                                lowend += 1;
+                            }
+                        }
+                    }
+                }
+                assert!(kicks <= 4, "seed {seed}: {kicks} kicks/bar");
+                assert!(lowend <= 6, "seed {seed}: {lowend} low-end/bar");
+                song = arranger.advance_measure();
+            }
+        }
+    }
+
+    #[test]
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные такты — разные ступени),
         // мотив при той же прогрессии стабилен.
