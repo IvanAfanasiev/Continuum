@@ -76,7 +76,7 @@ pub enum Voicing {
 /// Направляющая одного слота: тенденции, а не инструкции.
 ///
 /// `weights` — веса шагов такта (длина = steps_per_measure стиля):
-/// 1.0 — якорь (звучит всегда, формирует лицо жанра),
+/// 1.0 — якорь (почти всегда играет: приоритет 0.95, даунбит дышит),
 /// 0.0 — никогда, между — порог фиксированного гейта сида.
 /// Итоговая вероятность: `w * energy² * energy_response (+ climax_boost)`.
 /// Гейт НЕ кубик: шаг звучит, если хэш(сид, слот, шаг, секция) ниже порога.
@@ -415,6 +415,13 @@ fn carrier_rank(role: InstrumentRole) -> Option<u8> {
     }
 }
 
+/// Приоритет якоря: даже даунбит иногда дышит (1 из 20 ударов
+/// пропускается гейтом сида). Лицо жанра держится статистически,
+/// абсолюта «звучит всегда» больше нет нигде.
+const ANCHOR_PRIOR: f32 = 0.95;
+/// Соль якорного гейта: независимый бросок от остальных гейтов слота.
+const ANCHOR_SALT: u64 = 0xA11CE;
+
 /// Затухание тонов аккорда: корень в полную силу, верх тише.
 const CHORD_ATTEN: [f32; 4] = [1.0, 0.75, 0.65, 0.6];
 
@@ -574,12 +581,13 @@ fn play_guide(
     }
 
     let probability = if weight >= 1.0 {
-        1.0
+        // Якорь — сильный приоритет, а не гарантия: даунбит дышит.
+        ANCHOR_PRIOR
     } else {
         // Плотность сида масштабирует все вероятности: разреженные
         // и густые сиды одного стиля. Доля роли: носителей несколько —
         // каждый реже (делят пространство), один — в полную силу.
-        // Якоря (1.0) не трогаем ни тем, ни другим.
+        // Якоря идут своим приоритетом и не масштабируются.
         let mut p =
             weight * energy * energy * guide.energy_response * song.density * role_share;
         if climax {
@@ -587,16 +595,17 @@ fn play_guide(
         }
         p.clamp(0.0, 1.0)
     };
-    // Якоря (1.0) бьют всегда. Остальное — фиксированным гейтом сида:
-    // решение зависит от (сид, слот, шаг, фраза), поэтому грув стоит
-    // ровно фразу и никогда не повторяется дословно.
+    // Гейт сида: решение зависит от (сид, слот, шаг, фраза), поэтому грув
+    // стоит ровно фразу и никогда не повторяется дословно. Якоря идут
+    // отдельным броском (своя соль) — пропуск якоря не влечет пропуски
+    // остальных шагов и наоборот.
+    let salt = if weight >= 1.0 {
+        ANCHOR_SALT ^ (song.phrase_index as u64)
+    } else {
+        song.phrase_index as u64
+    };
     if probability < 1.0
-        && fixed_gate(
-            song.seed_hash,
-            slot_idx,
-            step_in_measure,
-            song.phrase_index as u64
-        ) >= probability
+        && fixed_gate(song.seed_hash, slot_idx, step_in_measure, salt) >= probability
     {
         return Vec::new();
     }
@@ -1634,25 +1643,41 @@ mod tests {
             "sharing must thin: shared={shared} alone={alone}"
         );
         assert_eq!(shared, shared_hits(1.0 / 2.0f32.sqrt()), "must repeat");
-        // Якоря (вес 1.0) дележу не подлежат: бьют всегда при любой доле.
+        // Якоря (вес 1.0) дележу не подлежат, но дышат приоритетом 0.95:
+        // рисунок ударов не зависит от доли, пропуски редки и те же
+        // при любой доле (гейт не знает о дележе).
         let anchor = RoleGuide {
             weights: &[1.0; 8],
             ..RoleGuide::kit(&[1.0; 8], 36, 0.9)
         };
-        for share in [1.0, 1.0 / 2.0f32.sqrt(), 0.2] {
+        let pattern = |share: f32| -> Vec<bool> {
             let mut song = test_song(0.5);
-            song.phrase_index = 3;
-            let mut rng = rand::SeedableRng::seed_from_u64(4);
-            for step in 0..8 {
-                assert!(
-                    !play_guide(
-                        &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0, share,
-                        false, false, &mut rng,
-                    )
-                    .is_empty(),
-                    "anchor dropped at share={share}"
-                );
+            let mut out = Vec::new();
+            for phrase in 0..16usize {
+                song.phrase_index = phrase;
+                let mut rng = rand::SeedableRng::seed_from_u64(4);
+                for step in 0..8 {
+                    out.push(
+                        !play_guide(
+                            &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0,
+                            share, false, false, &mut rng,
+                        )
+                        .is_empty(),
+                    );
+                }
             }
-        }
+            out
+        };
+        let full = pattern(1.0);
+        let hits = full.iter().filter(|h| **h).count();
+        // Приоритет 0.95: бьет почти всегда (потери в пределах ~1/10).
+        assert!(
+            hits * 10 >= full.len() * 9,
+            "anchors lost face: {hits}/{}",
+            full.len()
+        );
+        // Дележ на якоря не действует: рисунок тот же при любой доле.
+        assert_eq!(full, pattern(1.0 / 2.0f32.sqrt()), "share moved anchors");
+        assert_eq!(full, pattern(0.2), "share moved anchors");
     }
 }

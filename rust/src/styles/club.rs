@@ -422,6 +422,19 @@ mod tests {
     }
 
     #[test]
+    fn downbeat_breathes_but_holds() {
+        // Якорь 1: пропуск возможен (приоритет 0.95), но даунбит держится
+        // в подавляющем большинстве тактов — лицо жанра цело.
+        let notes = render(11, 1024);
+        let downs = 1024 / 16;
+        let hits = notes
+            .iter()
+            .filter(|(step, n)| n.instrument_id == KICK_ID && step % 16 == 0)
+            .count();
+        assert!(hits * 10 >= downs * 9, "downbeat lost: {hits}/{downs}");
+    }
+
+    #[test]
     fn same_seed_same_notes() {
         let a = render(1234, 32);
         let b = render(1234, 32);
