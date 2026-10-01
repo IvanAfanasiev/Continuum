@@ -139,6 +139,15 @@ pub struct RoleGuide {
     /// синуса. Club-бас глубокий и плавный, рок — струнный (0.0).
     /// Читает только бас-голос.
     pub sub_bias: f32,
+    /// Emergent-пульс в долях (0.0 = выкл, сеточный путь).
+    /// Слот бьет по собственной решетке с периодом из сида, а не по весам:
+    /// несоизмеримость с тактом дает вечно дрейфующий грув без повторов
+    /// (фэйзинг вместо паттерна). Период дышит энергией секции
+    /// (в дропе чаще) и варьируется сидом ±25%. Приоритет над
+    /// weights/poles/gates; структура (every_n, climax, акценты) и баланс
+    /// партий действуют как обычно. Чистая функция глобального шага —
+    /// состояния нет, тот же сид дает тот же поток.
+    pub emergent_beats: f32,
 }
 
 impl RoleGuide {
@@ -166,6 +175,7 @@ impl RoleGuide {
         chord: None,
         bass_fifth: false,
         sub_bias: 0.0,
+        emergent_beats: 0.0,
     };
 
     pub fn is_silent(&self) -> bool {
@@ -198,6 +208,7 @@ impl RoleGuide {
             chord: None,
             bass_fifth: false,
             sub_bias: 0.0,
+            emergent_beats: 0.0,
         }
     }
 
@@ -237,6 +248,7 @@ impl RoleGuide {
             chord: None,
             bass_fifth: false,
             sub_bias: 0.0,
+            emergent_beats: 0.0,
         }
     }
 }
@@ -410,6 +422,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             1.0 / n.sqrt(),
             fallback == Some(slot.id()),
             thicken,
+            sctx.step,
             sctx.rng,
         ));
     }
@@ -470,6 +483,40 @@ fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
         (5, 1) if idx == 3 => root.saturating_add(1),
         _ => root,
     }
+}
+/// Emergent-пульс: бьет ли глобальный шаг `step`.
+/// Решетка с периодом P шагов из сида: звучит, если в шаг попадает
+/// очередной тик. P несоизмерим с тактом (дробный, свой у каждого сида),
+/// поэтому рисунок дрейфует и не повторяется — фэйзинг вместо паттерна.
+/// P дышит энергией (в дропе чаще) и варьируется сидом ±25%.
+/// Возвращает (fire, accent): акцент сильнее у четвертей.
+/// Чистая функция — состояния нет, тот же сид дает тот же поток.
+fn emergent_fire(
+    seed_hash: u64,
+    slot_idx: usize,
+    step: usize,
+    step_in_measure: usize,
+    steps_per_measure: usize,
+    energy: f32,
+    beats: f32,
+) -> (bool, f32) {
+    let h = crate::arranger::splitmix64(
+        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xE9E9E9,
+    );
+    let span = 0.75 + 0.5 * ((h >> 32) as f32 / (u32::MAX as f32));
+    let e = energy.clamp(0.0, 1.5);
+    let mut p = beats * span * steps_per_measure as f32 / 4.0 / (0.85 + 0.3 * e);
+    p = p.clamp(1.25, 16.0);
+    let s = step as f32;
+    let fire = ((s + 1.0) / p).floor() > (s / p).floor();
+    let q = steps_per_measure / 4;
+    let accent = if q > 0 {
+        let d = (step_in_measure % q).min(q - step_in_measure % q) as f32;
+        1.0 + 0.35 * (1.0 - d / (q.max(2) / 2) as f32).max(0.0)
+    } else {
+        1.0
+    };
+    (fire, accent)
 }
 /// Детерминированный гейт вероятности: тот же (сид, слот, шаг, соль) —
 /// то же решение. Соль берем от монотонной фразы (растет каждые 2 такта),
@@ -543,6 +590,9 @@ fn play_guide(
     // Сгущение в диаду: пустые аккордовые — лид поет корень+терцию.
     // Гармония без мути трезвучий и без смены голоса.
     force_chords: bool,
+    // Глобальный шаг композиции (монотонный счетчик): emergent-пульс
+    // строит решетку от него. Сеточный путь его не читает.
+    global_step: usize,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
     // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
@@ -603,40 +653,66 @@ fn play_guide(
         return Vec::new();
     }
 
-    let probability = if weight >= 1.0 {
-        // Якорь — сильный приоритет, а не гарантия: даунбит дышит.
-        ANCHOR_PRIOR
-    } else {
-        // Плотность сида масштабирует все вероятности: разреженные
-        // и густые сиды одного стиля. Доля роли: носителей несколько —
-        // каждый реже (делят пространство), один — в полную силу.
-        // Якоря идут своим приоритетом и не масштабируются.
-        let mut p =
-            weight * energy * energy * guide.energy_response * song.density * role_share;
-        if climax {
-            p += guide.climax_boost;
+    // Emergent-пульс вместо сетки: бьет ли глобальный шаг.
+    // Веса/морфинг/гейты пропускаем; структура выше уже отработала.
+    // Акцент у четвертей — барабанщик выделяет доли (грув, а не стук).
+    let emergent_accent = if guide.emergent_beats > 0.0 {
+        let (fire, accent) = emergent_fire(
+            song.seed_hash,
+            slot_idx,
+            global_step,
+            step_in_measure,
+            steps_per_measure,
+            energy,
+            guide.emergent_beats,
+        );
+        if !fire {
+            return Vec::new();
         }
-        p.clamp(0.0, 1.0)
-    };
-    // Гейт сида: решение зависит от (сид, слот, шаг, фраза), поэтому грув
-    // стоит ровно фразу и никогда не повторяется дословно. Якоря идут
-    // отдельным броском (своя соль) — пропуск якоря не влечет пропуски
-    // остальных шагов и наоборот.
-    let salt = if weight >= 1.0 {
-        ANCHOR_SALT ^ (song.phrase_index as u64)
+        accent
     } else {
-        song.phrase_index as u64
+        1.0
     };
-    if probability < 1.0
-        && fixed_gate(song.seed_hash, slot_idx, step_in_measure, salt) >= probability
-    {
-        return Vec::new();
+
+    // Сеточный путь: вероятности + гейт сида. Emergent-слот его
+    // пропускает (решение уже принято пульсом выше).
+    if guide.emergent_beats <= 0.0 {
+        let probability = if weight >= 1.0 {
+            // Якорь — сильный приоритет, а не гарантия: даунбит дышит.
+            ANCHOR_PRIOR
+        } else {
+            // Плотность сида масштабирует все вероятности: разреженные
+            // и густые сиды одного стиля. Доля роли: носителей несколько —
+            // каждый реже (делят пространство), один — в полную силу.
+            // Якоря идут своим приоритетом и не масштабируются.
+            let mut p =
+                weight * energy * energy * guide.energy_response * song.density * role_share;
+            if climax {
+                p += guide.climax_boost;
+            }
+            p.clamp(0.0, 1.0)
+        };
+        // Гейт сида: решение зависит от (сид, слот, шаг, фраза), поэтому грув
+        // стоит ровно фразу и никогда не повторяется дословно. Якоря идут
+        // отдельным броском (своя соль) — пропуск якоря не влечет пропуски
+        // остальных шагов и наоборот.
+        let salt = if weight >= 1.0 {
+            ANCHOR_SALT ^ (song.phrase_index as u64)
+        } else {
+            song.phrase_index as u64
+        };
+        if probability < 1.0
+            && fixed_gate(song.seed_hash, slot_idx, step_in_measure, salt) >= probability
+        {
+            return Vec::new();
+        }
     }
 
     let mut velocity = (guide.vel_base
         + energy * guide.vel_energy
         + rng.gen_range(-guide.vel_jitter..=guide.vel_jitter))
-    .clamp(0.1, 1.0);
+    .clamp(0.1, 1.0)
+        * emergent_accent;
 
     // Артикуляция сида для мягких голосов: та же нота тем же голосом —
     // с разной мягкостью у разных сидов. Ударные идут как есть.
@@ -876,7 +952,7 @@ mod tests {
         (0..16)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, false, &mut rng,
+                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, false, 0, &mut rng,
                 )
                 .is_empty()
             })
@@ -973,7 +1049,7 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    &mut rng,
+                    0, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1014,7 +1090,7 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    &mut rng,
+                    0, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1055,7 +1131,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, &mut rng,
+                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, &mut rng,
                 )
                 .is_empty()
             })
@@ -1073,7 +1149,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, false, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -1100,7 +1176,7 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, false, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -1268,7 +1344,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0, false,
-                        false, &mut rng,
+                        false, 0, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1314,7 +1390,7 @@ mod tests {
             .map(|step| {
                 play_guide(
                     &anchor_motif, scale, &song, 1.0, false, step, spm, 0.1, 6, 5, 1.0,
-                    false, false, &mut rng,
+                    false, false, 0, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1329,7 +1405,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guides[ki], scale, &song, 1.0, false, step, spm, 0.1,
-                        Slot::Keys.id(), ki, 1.0, force, false, &mut rng,
+                        Slot::Keys.id(), ki, 1.0, force, false, 0, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1528,7 +1604,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 3,
-            2, 1.0, false, false, &mut rng,
+            2, 1.0, false, false, 0, &mut rng,
         );
         assert!(!notes.is_empty());
         let (a, r) = envelope_shape(42, 2);
@@ -1552,7 +1628,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
-            0, 1.0, false, false, &mut rng,
+            0, 1.0, false, false, 0, &mut rng,
         );
         assert!(!notes.is_empty());
         assert_eq!(notes[0].sub_bias, 0.8);
@@ -1560,7 +1636,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
-            0, 1.0, false, false, &mut rng,
+            0, 1.0, false, false, 0, &mut rng,
         );
         assert_eq!(notes[0].sub_bias, 0.0);
     }
@@ -1707,7 +1783,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
                 &guide, &scale, &song, 1.0, false, step, 16, 0.1, 6, 5, 1.0,
-                false, false, &mut rng,
+                false, false, 0, &mut rng,
             )
             .into_iter()
             .next()
@@ -1796,7 +1872,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             if let Some(n) = play_guide(
                 &guide, &scale, &song, 1.0, false, 0, 8, 0.1, 1, 0, 1.0, false,
-                false, &mut rng,
+                false, 0, &mut rng,
             )
             .into_iter()
             .next()
@@ -1807,6 +1883,39 @@ mod tests {
         assert!(pitches.len() >= 6, "bass gone: {pitches:?}");
         let spread = pitches.iter().max().unwrap() - pitches.iter().min().unwrap();
         assert!(spread <= 3, "bass wanders: {pitches:?}");
+    }
+
+    #[test]
+    fn emergent_pulse_phases_without_repeating() {
+        // Пульс: детерминирован, варьируется сидом, дышит энергией,
+        // такты не клонируются (фэйзинг: ≥3 разных рисунка на 8 тактов).
+        let ticks = |seed: u64, energy: f32| -> Vec<Vec<usize>> {
+            (0..8)
+                .map(|bar| {
+                    (0..16)
+                        .filter(|sim| {
+                            let s = *sim;
+                            emergent_fire(seed, 4, bar * 16 + s, s, 16, energy, 0.45).0
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let a = ticks(11, 1.0);
+        assert_eq!(a, ticks(11, 1.0), "must repeat");
+        assert!(a.iter().any(|b| !b.is_empty()), "pulse silent");
+        let bars: std::collections::HashSet<Vec<usize>> = a.into_iter().collect();
+        assert!(bars.len() >= 3, "bars cloned: {bars:?}");
+        // Другой сид — другой грув; высокая энергия — гуще.
+        let b = ticks(42, 1.0);
+        assert_ne!(
+            ticks(11, 1.0).concat(),
+            b.concat(),
+            "seeds share groove"
+        );
+        let sparse: usize = ticks(11, 0.3).iter().map(|v| v.len()).sum();
+        let dense: usize = ticks(11, 1.0).iter().map(|v| v.len()).sum();
+        assert!(dense > sparse, "energy ignored: {dense} vs {sparse}");
     }
 
     #[test]
@@ -1824,7 +1933,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, false, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, false, 0, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -1852,7 +1961,7 @@ mod tests {
                 .filter(|step| {
                     !play_guide(
                         &guide, &[48], &song, 1.0, false, *step, 16, 0.1, 6, 5, share,
-                        false, false, &mut rng,
+                        false, false, 0, &mut rng,
                     )
                     .is_empty()
                 })
@@ -1890,7 +1999,7 @@ mod tests {
                     out.push(
                         !play_guide(
                             &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0,
-                            share, false, false, &mut rng,
+                            share, false, false, 0, &mut rng,
                         )
                         .is_empty(),
                     );

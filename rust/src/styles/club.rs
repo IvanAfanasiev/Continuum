@@ -205,6 +205,9 @@ impl Style for ClubStyle {
             vel_jitter: 0.1,
             alt: Some(HAT_ALT_W),
             poles: Some(HAT_POLES),
+            // Первый emergent-слот: хэт бьет собственным пульсом из сида
+            // (фэйзинг вместо паттерна), веса/полюса — запасной путь.
+            emergent_beats: 0.45,
             ..RoleGuide::kit(HAT_W, 42, 0.65)
         };
         let pluck = RoleGuide {
