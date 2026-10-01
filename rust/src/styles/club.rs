@@ -123,14 +123,15 @@ impl Style for ClubStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Битмейкер: только биты, ударные и бас —
-        // бочка, снейр, хэты и глубокий саб. Без клавишных,
-        // синтезаторов, верхов и шумовых подложек.
+        // Битмейкер: биты, ударные, бас и сквозной плак темы —
+        // у бита есть мелодическое лицо. Без клавишных стен,
+        // синтезаторов-верхов и шумовых подложек.
         &[
             Slot::Bass,
             Slot::Kick,
             Slot::Snare,
             Slot::Hat,
+            Slot::Pluck,
         ]
     }
 
@@ -210,6 +211,9 @@ impl Style for ClubStyle {
             emergent_beats: 0.45,
             ..RoleGuide::kit(HAT_W, 42, 0.65)
         };
+        // Сквозная тема битмейкера: плак ведет мотив сида через секции —
+        // у бита есть мелодическое лицо, а не только грув. Гости (клавиши,
+        // чопы) — текстура вокруг темы, а не замена ей.
         let pluck = RoleGuide {
             energy_response: 1.5,
             climax_boost: 0.2,
@@ -222,10 +226,13 @@ impl Style for ClubStyle {
                 octave: 2,
                 jitter: 4,
             },
+            follow_motif: true,
             ..RoleGuide::pitched(LEAD_W, 0, 2, 4, 0.9, 0.45)
         };
         let keys = RoleGuide {
-            energy_response: 2.0,
+            // Гость-текучка, а не рубильник: ровное присутствие
+            // через секции вместо «то нет, то стена».
+            energy_response: 1.2,
             duration_mult: 1.5,
             vel_base: 0.55,
             vel_jitter: 0.08,
@@ -268,8 +275,9 @@ impl Style for ClubStyle {
         };
         // Вокальные чопы из deep-наследия: задранные, короткие, в эхе.
         // Только для ручного включения: в битмейкере вокала нет.
+        // Текут через секции, а не мигают (отклик сглажен).
         let vocal = RoleGuide {
-            energy_response: 1.5,
+            energy_response: 1.2,
             climax_boost: 0.4,
             duration_mult: 1.6,
             vel_base: 0.55,

@@ -1200,7 +1200,7 @@ mod tests {
         assert!(vol(HAT_ID) > 0.0);
         assert_eq!(vol(KICK808_ID), 0.0);
         assert_eq!(vol(LASER_ID), 0.0);
-        assert_eq!(vol(PLUCK_ID), 0.0);
+        assert!(vol(PLUCK_ID) > 0.0);
         assert_eq!(vol(VINYL_ID), 0.0);
         assert_eq!(vol(ACID_ID), 0.0);
         // Гости из пула (бюджет 1–2): все слышимые вне ядра — из пула.
@@ -1208,7 +1208,7 @@ mod tests {
             .iter()
             .filter(|t| {
                 t.volume > 0.0
-                    && ![BASS_ID, KICK_ID, SNARE_ID, HAT_ID]
+                    && ![BASS_ID, KICK_ID, SNARE_ID, HAT_ID, PLUCK_ID]
                         .contains(&(t.id as usize))
             })
             .map(|t| t.id)
@@ -1640,11 +1640,11 @@ mod tests {
         use Slot::*;
 
         let club = ensemble_of("club");
-        for s in [Bass, Kick, Snare, Hat] {
+        for s in [Bass, Kick, Snare, Hat, Pluck] {
             assert!(club.contains(&s), "club: {s:?} missing");
         }
         for s in [
-            Pad, Keys, Pluck, Laser, Vocal, Flute, Guitar, Rain, Festival, Fuzz,
+            Pad, Keys, Laser, Vocal, Flute, Guitar, Rain, Festival, Fuzz,
             Kick808, Acid, Vinyl,
         ] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
