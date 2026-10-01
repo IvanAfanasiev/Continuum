@@ -241,7 +241,8 @@ impl Style for LofiStyle {
             poles: Some(HAT_POLES),
             ..RoleGuide::kit(HAT_W, 42, 0.34)
         };
-        // Нарезки гитары: редкие щипки по мотиву сида поверх Rhodes.
+        // Нарезки гитары: тот же план боя, что у гитары (общий скелет
+        // роли), своим тембром и своим броском гейта. Гетерофония.
         let pluck = RoleGuide {
             duration_mult: 2.0,
             vel_base: 0.5,
@@ -253,7 +254,7 @@ impl Style for LofiStyle {
             },
             follow_motif: true,
             alt: Some(PLUCK_ALT_W),
-            ..RoleGuide::pitched(PLUCK_W, 0, 1, 0, 2.0, 0.5)
+            ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 2.0, 0.5)
         };
         let keys = RoleGuide {
             duration_mult: 4.0,

@@ -75,6 +75,14 @@ pub enum Voicing {
 
 /// Направляющая одного слота: тенденции, а не инструкции.
 ///
+/// Архитектура «план роли → исполнители» (см. vision):
+/// `weights` — это ПЛАН РОЛИ, общий для всех ее исполнителей
+/// (один и тот же `&'static` срез на несколько слотов). Слоты одной роли
+/// играют один ритмический скелет, но каждый — своим голосом, своей
+/// октавой и своим броском гейта (слот входит в хэш): гетерофония,
+/// а не робот-унисон. Громкости взвешивают исполнителей.
+/// `alt`/`poles` — индивидуальные краски поверх плана (пока).
+///
 /// `weights` — веса шагов такта (длина = steps_per_measure стиля):
 /// 1.0 — якорь (почти всегда играет: приоритет 0.95, даунбит дышит),
 /// 0.0 — никогда, между — порог фиксированного гейта сида.
@@ -1923,6 +1931,36 @@ mod tests {
         let sparse: usize = ticks(11, 0.3).iter().map(|v| v.len()).sum();
         let dense: usize = ticks(11, 1.0).iter().map(|v| v.len()).sum();
         assert!(dense > sparse, "energy ignored: {dense} vs {sparse}");
+    }
+
+    #[test]
+    fn role_plans_are_shared_by_performers() {
+        // План роли — один срез на всех исполнителей (ptr-равенство,
+        // не совпадение значений): lofi плак+гитара делят бой,
+        // rock фазз+гитара делят рифф и его полюса.
+        use crate::instruments::Slot;
+        let lofi = make_style("lofi").expect("lofi");
+        let guides = lofi.slot_guides();
+        let at = |s: Slot| {
+            Slot::ALL.iter().position(|x| *x == s).map(|i| &guides[i]).unwrap()
+        };
+        assert!(std::ptr::eq(
+            at(Slot::Pluck).weights.as_ptr(),
+            at(Slot::Guitar).weights.as_ptr()
+        ));
+        let rock = make_style("rock").expect("rock");
+        let guides = rock.slot_guides();
+        let at = |s: Slot| {
+            Slot::ALL.iter().position(|x| *x == s).map(|i| &guides[i]).unwrap()
+        };
+        assert!(std::ptr::eq(
+            at(Slot::Fuzz).weights.as_ptr(),
+            at(Slot::Guitar).weights.as_ptr()
+        ));
+        assert!(std::ptr::eq(
+            at(Slot::Fuzz).poles.unwrap().as_ptr(),
+            at(Slot::Guitar).poles.unwrap().as_ptr()
+        ));
     }
 
     #[test]
