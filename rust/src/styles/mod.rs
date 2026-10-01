@@ -139,6 +139,9 @@ pub struct RoleGuide {
     /// синуса. Club-бас глубокий и плавный, рок — струнный (0.0).
     /// Читает только бас-голос.
     pub sub_bias: f32,
+    /// Потолок баса: уползшее выше складывается октавой вниз.
+    /// Дефолт 45 (A2, саб). Рок-бас риффует с гитарой выше (52).
+    pub bass_top: u8,
     /// Emergent-пульс в долях (0.0 = выкл, сеточный путь).
     /// Слот бьет по собственной решетке с периодом из сида, а не по весам:
     /// несоизмеримость с тактом дает вечно дрейфующий грув без повторов
@@ -175,6 +178,7 @@ impl RoleGuide {
         chord: None,
         bass_fifth: false,
         sub_bias: 0.0,
+        bass_top: 45,
         emergent_beats: 0.0,
     };
 
@@ -208,6 +212,7 @@ impl RoleGuide {
             chord: None,
             bass_fifth: false,
             sub_bias: 0.0,
+            bass_top: 45,
             emergent_beats: 0.0,
         }
     }
@@ -248,6 +253,7 @@ impl RoleGuide {
             chord: None,
             bass_fifth: false,
             sub_bias: 0.0,
+            bass_top: 45,
             emergent_beats: 0.0,
         }
     }
@@ -858,11 +864,11 @@ fn play_guide(
         let mut tone = modal_tone(scale, idx, song.seed_hash)
             .saturating_add_signed(tonic_shift_for(song.seed_hash))
             .saturating_add_signed(octaves.saturating_mul(12));
-        // Бас держим внизу: уползшее выше A2 (45) складываем октавой вниз.
-        // Гармония та же (тот же питч-класс), глубина — как надо сабу.
-        // Нижняя граница недостижима: вычитаем только из tone > 45.
+        // Бас держим внизу: уползшее выше капа складываем октавой вниз.
+        // Гармония та же (тот же питч-класс). Кап от гайда: саб 45,
+        // рок риффует выше (52) вслед за гитарой.
         if matches!(role, Some(InstrumentRole::Bass)) {
-            while tone > 45 {
+            while tone > guide.bass_top {
                 tone -= 12;
             }
         }
@@ -1234,10 +1240,10 @@ mod tests {
 
     #[test]
     fn bass_stays_deep() {
-        // Саб внизу: ноты баса всех стилей в 24..=45 (C1..A2).
-        // Уползшие вверх складываются октавой вниз, гармония та же.
+        // Саб внизу: ноты баса в регистре капа стиля (саб 45,
+        // рок риффует выше — 52). Уползшие складываются октавой вниз.
         use crate::instruments::{InstrumentRole, Slot};
-        for name in style_names() {
+        for (name, cap) in [("club", 45), ("rock", 52), ("lofi", 45)] {
             let style = make_style(name).expect("known style");
             let ensemble = style.ensemble();
             let active: Vec<usize> = Slot::ALL
@@ -1268,8 +1274,8 @@ mod tests {
                     let role = Slot::from_id(note.instrument_id).map(|s| s.role());
                     if matches!(role, Some(InstrumentRole::Bass)) {
                         assert!(
-                            (24..=45).contains(&note.midi_pitch),
-                            "{name}: bass out of sub range: {}",
+                            (24..=cap).contains(&note.midi_pitch),
+                            "{name}: bass out of range: {}",
                             note.midi_pitch
                         );
                         heard += 1;

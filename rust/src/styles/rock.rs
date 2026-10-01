@@ -49,6 +49,13 @@ const RIFF_P1: &[f32] = &[
     0.8, 0.0, 0.0, 0.6, 0.0, 0.8, 0.0, 0.0, 0.6, 0.0, 0.8, 0.0, 0.0, 0.6, 0.8, 0.0,
 ];
 const RIFF_POLES: &[&[f32]] = &[RIFF_W, RIFF_P1];
+// Пулеметные 16-е медиатором (ref: Thunderstruck): скорый перебор
+// по ступеням темы. Полюс гитары.
+const RIFF16_W: &[f32] = &[
+    0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7,
+    0.6,
+];
+const RIFF_POLES_G: &[&[f32]] = &[RIFF_W, RIFF16_W];
 
 const BED_W: &[f32] = &[
     0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -162,6 +169,9 @@ impl Style for RockStyle {
             top_pitch: 52,
             vel_high_cut: 0.6,
             poles: Some(BASS_POLES),
+            // Бас риффует вслед за гитарой (ref: doubling вплоть до D3),
+            // а не лежит сабом: кап выше.
+            bass_top: 52,
             ..RoleGuide::pitched(BASS_W, 0, -1, 0, 0.6, 0.8)
         };
         // Вдавленная бочка: якоря в пол, компрессия — в миксе.
@@ -275,6 +285,7 @@ impl Style for RockStyle {
         };
         // Чистая гитара риффом по мотиву: чоппирующие восьмые поверх
         // рева, без перегруза (он у фазза). Коротко и перкуссивно.
+        // Второй полюс — пулеметные 16-е медиатором (ref: Thunderstruck).
         let guitar = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.7,
@@ -285,6 +296,7 @@ impl Style for RockStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            poles: Some(RIFF_POLES_G),
             ..RoleGuide::pitched(RIFF_W, 0, 0, 1, 0.7, 0.5)
         };
         let rain = RoleGuide {
