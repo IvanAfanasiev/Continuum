@@ -1,19 +1,25 @@
 use std::f32::consts::TAU;
 
 use super::{
-    dsp::{release_fade, saw_blep, Svf},
+    dsp::{release_fade, saw_blep, Noise, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
 
-/// Вокальный чоп «ah»: пара пил с вибрато через две формантные полосы.
-/// Половину узнаваемости дает сильный дилэй на мастере (сенд роли Vocal).
+/// Вокальный чоп: пара пил с вибрато через формантные полосы.
+/// Гласная — от ноты (ah/oh/eh): каждый чоп свой слог, а не один
+/// вечный «ah» (статичная гласная = половина синтетичности).
+/// Дыхание добавляет воздуха сибилянтам. Половину узнаваемости дает
+/// сильный дилэй на мастере (сенд роли Vocal).
 const DETUNE: f32 = 1.004;
 const VIBRATO_HZ: f32 = 5.2;
 const VIBRATO_DEPTH: f32 = 0.006;
-const FORMANT_F1_HZ: f32 = 730.0;
-const FORMANT_F2_HZ: f32 = 1090.0;
+/// Гласные (F1, F2): ah, oh, eh. Выбор — сидом ноты.
+const VOWELS: [(f32, f32); 3] = [(730.0, 1090.0), (500.0, 860.0), (610.0, 1900.0)];
 const FORMANT_Q: f32 = 3.5;
+/// Доля дыхательного шума: слышно воздух, не шипение.
+const BREATH_GAIN: f32 = 0.06;
+const BREATH_HZ: f32 = 2400.0;
 const ATTACK_SECS: f32 = 0.008;
 const AMP_DECAY_RATE: f32 = 5.0;
 const MAX_RING_SECS: f32 = 0.8;
@@ -28,10 +34,14 @@ pub struct VocalVoice {
     vib_phase: f32,
     form1: Svf,
     form2: Svf,
+    breath_bp: Svf,
+    noise: Noise,
     frequency: f32,
     gain: f32,
     t: f32,
     samples_left: usize,
+    pub(crate) f1_hz: f32,
+    pub(crate) f2_hz: f32,
 }
 
 impl Voice for VocalVoice {
@@ -49,6 +59,14 @@ impl Voice for VocalVoice {
         self.phase2 = 0.0;
         self.form1.reset();
         self.form2.reset();
+        self.breath_bp.reset();
+        // Гласная чопа — от сида ноты: разные ноты поют разные слоги.
+        // Детерминировано: та же нота — тот же слог.
+        let seed = super::dsp::note_seed(note, 0xB0CA);
+        let (f1, f2) = VOWELS[(seed % VOWELS.len() as u32) as usize];
+        self.f1_hz = f1;
+        self.f2_hz = f2;
+        self.noise = Noise::new(seed);
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -75,13 +93,17 @@ impl Voice for VocalVoice {
 
         let (_, vow1, _) = self
             .form1
-            .process(raw, FORMANT_F1_HZ, FORMANT_Q, sample_rate);
+            .process(raw, self.f1_hz, FORMANT_Q, sample_rate);
         let (_, vow2, _) = self
             .form2
-            .process(raw, FORMANT_F2_HZ, FORMANT_Q, sample_rate);
+            .process(raw, self.f2_hz, FORMANT_Q, sample_rate);
+        // Дыхание: шум через полосу 2.4 кГц поверх гласных.
+        let (_, breath, _) = self
+            .breath_bp
+            .process(self.noise.sample(), BREATH_HZ, 1.2, sample_rate);
 
         self.t += 1.0 / sample_rate;
-        (vow1 + vow2) * self.gain * amp * attack * fade * VOICE_GAIN
+        (vow1 + vow2 + breath * BREATH_GAIN) * self.gain * amp * attack * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -94,6 +116,7 @@ impl Voice for VocalVoice {
         self.gain = 0.0;
         self.form1.reset();
         self.form2.reset();
+        self.breath_bp.reset();
     }
 }
 
@@ -123,5 +146,30 @@ mod tests {
         }
         assert!(peak > 0.15, "vocal too quiet: {peak}");
         assert!(second < first, "vocal does not decay");
+    }
+
+    #[test]
+    fn chops_sing_different_vowels() {
+        // Слоги различаются от ноты к ноте, но детерминированы:
+        // та же нота — та же гласная. Все гласные из таблицы.
+        use std::collections::HashSet;
+        let sr = 44_100.0;
+        let mut seen = HashSet::new();
+        for pitch in 60..72u8 {
+            let mut v = VocalVoice::default();
+            v.set_sample_rate(sr);
+            v.trigger(&NoteEvent::new(11, pitch, 0.9, 0.5));
+            assert!([730.0, 500.0, 610.0].contains(&v.f1_hz));
+            assert!([1090.0, 860.0, 1900.0].contains(&v.f2_hz));
+            seen.insert((v.f1_hz.to_bits(), v.f2_hz.to_bits()));
+            let out: Vec<f32> = (0..2000).map(|_| v.next_sample()).collect();
+            assert!(out.iter().all(|s| s.is_finite()));
+            // Та же нота — та же гласная.
+            let mut v2 = VocalVoice::default();
+            v2.set_sample_rate(sr);
+            v2.trigger(&NoteEvent::new(11, pitch, 0.9, 0.5));
+            assert_eq!((v.f1_hz, v.f2_hz), (v2.f1_hz, v2.f2_hz));
+        }
+        assert!(seen.len() > 1, "one eternal vowel: {seen:?}");
     }
 }
