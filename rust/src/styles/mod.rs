@@ -370,6 +370,8 @@ pub trait Style: Send + Sync {
 /// выключенный низ — воля пользователя, а не дыра (и чужой артикуляцией
 /// его не заменить — выйдет грязь, а не фундамент).
 /// Детерминировано составом: тот же сид + тот же набор = та же музыка.
+/// Порядок рендера: сначала кики (фундамент объявляет заливки),
+/// затем остальные — бас уже знает, даунбит это или заливка.
 pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent> {
     let guides = style.slot_guides();
     let scale = style.scale();
@@ -409,7 +411,58 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             .map(|(_, s)| s.id())
     };
     let mut notes = Vec::new();
+    // Фаза 1: кики. Заливка (сработал не якорь) запоминается —
+    // бас во второй фазе под нее пригнется.
+    let mut kick_fill = false;
     for (i, slot) in Slot::ALL.iter().enumerate() {
+        if slot.role() != InstrumentRole::Kick {
+            continue;
+        }
+        if !sctx.active_tracks.contains(&slot.id()) {
+            continue;
+        }
+        let guide = &guides[i];
+        if guide.is_silent() {
+            continue;
+        }
+        let alt_pick = ((sctx.song.seed_hash >> i) & 1) == 1;
+        let n = role_n[slot.role().index()].max(1) as f32;
+        let slot_notes = play_guide(
+            guide,
+            scale,
+            sctx.song,
+            energy,
+            alt_pick,
+            sctx.step_in_measure,
+            style.steps_per_measure(),
+            sctx.base_step_secs,
+            slot.id(),
+            i,
+            1.0 / n.sqrt(),
+            fallback == Some(slot.id()),
+            false,
+            sctx.step,
+            false,
+            sctx.rng,
+        );
+        if !slot_notes.is_empty()
+            && !is_anchor_step(
+                guide,
+                sctx.song,
+                alt_pick,
+                i,
+                sctx.step_in_measure,
+            )
+        {
+            kick_fill = true;
+        }
+        notes.extend(slot_notes);
+    }
+    // Фаза 2: остальные. Порядок внутри стабилен (Slot::ALL).
+    for (i, slot) in Slot::ALL.iter().enumerate() {
+        if slot.role() == InstrumentRole::Kick {
+            continue;
+        }
         if !sctx.active_tracks.contains(&slot.id()) {
             continue;
         }
@@ -444,6 +497,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             fallback == Some(slot.id()),
             thicken,
             sctx.step,
+            kick_fill,
             sctx.rng,
         ));
     }
@@ -469,6 +523,35 @@ fn carrier_rank(role: InstrumentRole) -> Option<u8> {
 const ANCHOR_PRIOR: f32 = 0.95;
 /// Соль якорного гейта: независимый бросок от остальных гейтов слота.
 const ANCHOR_SALT: u64 = 0xA11CE;
+
+/// Якорный ли шаг для гайда: вес после выбора полюса и морфинга ≥ 1.0.
+/// Та же формула, что в play_guide (без гейтов): бас по ней узнает,
+/// даунбит это (играем вместе) или заливка (пригибаемся).
+/// Emergent-слоты якорей не имеют по построению.
+fn is_anchor_step(
+    guide: &RoleGuide,
+    song: &SongContext,
+    alt_pick: bool,
+    slot_idx: usize,
+    step_in_measure: usize,
+) -> bool {
+    if guide.emergent_beats > 0.0 {
+        return false;
+    }
+    let mut w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
+    if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
+        let pick = crate::arranger::splitmix64(
+            song.seed_hash
+                ^ (slot_idx as u64).wrapping_mul(0x9E3779B9)
+                ^ (song.phrase_index as u64).wrapping_mul(0x85EBCA6B),
+        ) % poles.len() as u64;
+        w = poles[pick as usize].get(step_in_measure).copied().unwrap_or(0.0);
+    }
+    let alt_w = guide.alt.and_then(|a| a.get(step_in_measure).copied()).unwrap_or(w);
+    let (from_w, to_w) = if alt_pick { (alt_w, w) } else { (w, alt_w) };
+    let morph = song.progress.clamp(0.0, 1.0);
+    from_w + (to_w - from_w) * morph >= 1.0
+}
 
 /// Затухание тонов аккорда: корень в полную силу, верх тише.
 const CHORD_ATTEN: [f32; 4] = [1.0, 0.75, 0.65, 0.6];
@@ -614,6 +697,9 @@ fn play_guide(
     // Глобальный шаг композиции (монотонный счетчик): emergent-пульс
     // строит решетку от него. Сеточный путь его не читает.
     global_step: usize,
+    // Заливка кика на этом шаге (не якорь): бас пригибается вдвое,
+    // чтобы не наслаиваться. Даунбит играют вместе в полную.
+    kick_fill: bool,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
     // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
@@ -911,6 +997,11 @@ fn play_guide(
         if let Some(r) = role {
             v *= song.stage_gain(r);
         }
+        // Оркестровка: бас знает роль кика — под заливки пригибается
+        // вдвое, даунбит держит вместе. Инструменты не наслаиваются.
+        if matches!(role, Some(InstrumentRole::Bass)) && kick_fill {
+            v *= 0.5;
+        }
         if v >= 0.05 {
             let mut note = NoteEvent::new(instrument_id, tone, v, duration)
                 .shaped(attack_mul, release_mul);
@@ -981,7 +1072,7 @@ mod tests {
         (0..16)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, false, 0, &mut rng,
+                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, false, 0, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -1078,7 +1169,7 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    0, &mut rng,
+                    0, false, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1119,7 +1210,7 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    0, &mut rng,
+                    0, false, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1160,7 +1251,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, &mut rng,
+                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -1178,7 +1269,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, false, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -1205,7 +1296,7 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -1373,7 +1464,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0, false,
-                        false, 0, &mut rng,
+                        false, 0, false, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1419,7 +1510,7 @@ mod tests {
             .map(|step| {
                 play_guide(
                     &anchor_motif, scale, &song, 1.0, false, step, spm, 0.1, 6, 5, 1.0,
-                    false, false, 0, &mut rng,
+                    false, false, 0, false, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1434,7 +1525,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guides[ki], scale, &song, 1.0, false, step, spm, 0.1,
-                        Slot::Keys.id(), ki, 1.0, force, false, 0, &mut rng,
+                        Slot::Keys.id(), ki, 1.0, force, false, 0, false, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1633,7 +1724,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 3,
-            2, 1.0, false, false, 0, &mut rng,
+            2, 1.0, false, false, 0, false, &mut rng,
         );
         assert!(!notes.is_empty());
         let (a, r) = envelope_shape(42, 2);
@@ -1657,7 +1748,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
-            0, 1.0, false, false, 0, &mut rng,
+            0, 1.0, false, false, 0, false, &mut rng,
         );
         assert!(!notes.is_empty());
         assert_eq!(notes[0].sub_bias, 0.8);
@@ -1665,7 +1756,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
-            0, 1.0, false, false, 0, &mut rng,
+            0, 1.0, false, false, 0, false, &mut rng,
         );
         assert_eq!(notes[0].sub_bias, 0.0);
     }
@@ -1852,7 +1943,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
                 &guide, &scale, &song, 1.0, false, step, 16, 0.1, 6, 5, 1.0,
-                false, false, 0, &mut rng,
+                false, false, 0, false, &mut rng,
             )
             .into_iter()
             .next()
@@ -1943,7 +2034,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             if let Some(n) = play_guide(
                 &guide, &scale, &song, 1.0, false, 0, 8, 0.1, 1, 0, 1.0, false,
-                false, 0, &mut rng,
+                false, 0, false, &mut rng,
             )
             .into_iter()
             .next()
@@ -2020,6 +2111,105 @@ mod tests {
     }
 
     #[test]
+    fn seed_divergence_stays_high() {
+        // Сиды обязаны различаться: питч-наборы пар (шаг%64, слот,
+        // питч-класс) далеки (Жаккар ≥ 0.4), ритм-наборы не совпадают.
+        // Замеры: pitch min 0.50–0.62, rhythm min 0.26–0.32.
+        use std::collections::HashSet;
+        type PitchSig = HashSet<(usize, usize, u8)>;
+        type RhythmSig = HashSet<(usize, usize)>;
+        fn signature(style_name: &str, seed: u64) -> (PitchSig, RhythmSig) {
+            let style = make_style(style_name).expect("style");
+            let mut mixer = crate::mixer::MixerState::new();
+            crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+            let n = mixer.active_ids(&mut buf);
+            let active = buf[..n].to_vec();
+            let mut rng = rand::SeedableRng::seed_from_u64(seed);
+            let mut arranger = crate::arranger::Arranger::new(seed);
+            let mut song = arranger.advance_measure();
+            let mut pitches = HashSet::new();
+            let mut rhythm = HashSet::new();
+            for step in 0..256 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for note in render_style(&*style, &mut sctx) {
+                    pitches.insert((note.instrument_id, step % 64, note.midi_pitch % 12));
+                    rhythm.insert((note.instrument_id, step % 64));
+                }
+            }
+            (pitches, rhythm)
+        }
+        for name in ["club", "lofi"] {
+            let sigs: Vec<_> = (0..8u64).map(|s| signature(name, s)).collect();
+            for i in 0..8 {
+                for j in (i + 1)..8 {
+                    let jac = |a: &PitchSig, b: &PitchSig| {
+                        1.0 - a.intersection(b).count() as f32 / a.union(b).count().max(1) as f32
+                    };
+                    let rjac = |a: &RhythmSig, b: &RhythmSig| {
+                        1.0 - a.intersection(b).count() as f32 / a.union(b).count().max(1) as f32
+                    };
+                    let pd = jac(&sigs[i].0, &sigs[j].0);
+                    let rd = rjac(&sigs[i].1, &sigs[j].1);
+                    assert!(pd >= 0.4, "{name}: seeds {i}/{j} share pitch ({pd:.2})");
+                    assert!(rd > 0.0, "{name}: seeds {i}/{j} share rhythm");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bass_ducks_kick_fills_not_downbeats() {
+        // Бас знает роль кика: даунбит вместе в полную, под заливку —
+        // вдвое тише (та же нота, тот же velocity-джиттер).
+        let guide = RoleGuide {
+            weights: &[1.0; 8],
+            ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, 1.0, 0.8)
+        };
+        let scale = [48, 51, 53, 55, 58];
+        let song = test_song(0.5);
+        let call = |fill: bool| {
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            play_guide(
+                &guide, &scale, &song, 1.0, false, 0, 8, 0.1, 1, 0, 1.0, false,
+                false, 0, fill, &mut rng,
+            )
+            .into_iter()
+            .next()
+            .map(|n| n.velocity)
+            .unwrap()
+        };
+        let full = call(false);
+        assert_eq!(call(true), full * 0.5, "bass ignores kick fill");
+    }
+
+    #[test]
+    fn anchor_detection_mirrors_weights() {
+        // Детектор якорей повторяет формулу весов: якорь, склон, тишина.
+        let song = test_song(0.5);
+        let guide = RoleGuide {
+            weights: &[1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ..RoleGuide::kit(&[1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 36, 0.9)
+        };
+        assert!(is_anchor_step(&guide, &song, false, 0, 0));
+        assert!(!is_anchor_step(&guide, &song, false, 0, 1));
+        assert!(!is_anchor_step(&guide, &song, false, 0, 2));
+    }
+
+    #[test]
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные такты — разные ступени),
         // мотив при той же прогрессии стабилен.
@@ -2034,7 +2224,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, false, 0, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, false, 0, false, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -2062,7 +2252,7 @@ mod tests {
                 .filter(|step| {
                     !play_guide(
                         &guide, &[48], &song, 1.0, false, *step, 16, 0.1, 6, 5, share,
-                        false, false, 0, &mut rng,
+                        false, false, 0, false, &mut rng,
                     )
                     .is_empty()
                 })
@@ -2100,7 +2290,7 @@ mod tests {
                     out.push(
                         !play_guide(
                             &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0,
-                            share, false, false, 0, &mut rng,
+                            share, false, false, 0, false, &mut rng,
                         )
                         .is_empty(),
                     );
