@@ -5,13 +5,14 @@ use super::{
 use crate::core::midi_to_freq;
 
 /// Фазз-синт: два расстроенных пилообразных осциллятора (PolyBLEP)
-/// плюс суб-октава — через tanh-перегруз и тембровый lowpass.
+/// плюс жирная суб-октава — через tanh-перегруз и темный lowpass.
 /// Рев гитар без гитары: механический рок, индастриал-слои, жирные хуки.
+/// Темный и злой — в противовес светлой стене фестиваля.
 /// Короткие ноты звучат чопами, длинные — стеной.
 const DETUNE_UP: f32 = 1.00463;
 const DETUNE_DOWN: f32 = 0.99539;
-const DRIVE: f32 = 4.0;
-const TONE_HZ: f32 = 2600.0;
+const DRIVE: f32 = 4.5;
+const TONE_HZ: f32 = 1900.0;
 const TONE_Q: f32 = 0.8;
 const ATTACK_SECS: f32 = 0.004;
 const VOICE_GAIN: f32 = 0.32;
@@ -63,7 +64,8 @@ impl Voice for FuzzVoice {
         self.phase_sub = (self.phase_sub + self.frequency * 0.5 / sample_rate) % 1.0;
 
         // Перегруз вместо громкости: гармоники растут, пик — нет.
-        let driven = ((a + b) * 0.5 + s * 0.6) * DRIVE;
+        // Суб жирный: стена давит низом, а не визжит верхом.
+        let driven = ((a + b) * 0.5 + s * 0.9) * DRIVE;
         let shaped = driven.tanh();
         let (warm, _, _) = self.filter.process(shaped, TONE_HZ, TONE_Q, sample_rate);
 

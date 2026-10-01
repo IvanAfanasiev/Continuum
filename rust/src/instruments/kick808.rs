@@ -17,7 +17,8 @@ const AMP_DECAY: f32 = 5.0;
 const CLICK_DECAY: f32 = 300.0;
 const CLICK_GAIN: f32 = 0.3;
 const GLIDE_SECS: f32 = 0.045;
-const DRIVE: f32 = 1.4;
+/// Драйв сдержанный: перегруженный 808 пердит, а не гудит.
+const DRIVE: f32 = 1.15;
 const ATTACK_SECS: f32 = 0.0015;
 const FADE_SECS: f32 = 0.02;
 
@@ -32,6 +33,9 @@ struct Kick808Voice {
     glide_coeff: f32,
     samples_left: usize,
     noise: Noise,
+    /// Первый удар после тишины: слайдить не с чего — стартуем с ноты.
+    /// Иначе первый хит чирикает снизу вверх.
+    snap: bool,
 }
 
 impl Voice for Kick808Voice {
@@ -42,13 +46,23 @@ impl Voice for Kick808Voice {
 
     fn set_glide_start(&mut self, freq_hz: f32) {
         // Слайд стартует с высоты прошлой ноты (ставит обертка).
-        self.base_smooth = freq_hz.max(30.0);
+        // Прошлой нет (тишина) — флаг: trigger поставит базу на ноту.
+        if freq_hz <= 0.0 {
+            self.snap = true;
+        } else {
+            self.snap = false;
+            self.base_smooth = freq_hz.max(30.0);
+        }
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
         self.samples_left = (LEN_SECS * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.target = midi_to_freq(note.midi_pitch).max(TARGET_MIN_HZ);
+        if self.snap {
+            self.base_smooth = self.target;
+            self.snap = false;
+        }
         self.t = 0.0;
         self.phase = 0.0;
         self.noise = Noise::new(super::dsp::note_seed(note, 0x808));
@@ -138,6 +152,22 @@ impl Instrument for Kick808 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_hit_starts_in_tune() {
+        // Первый удар после тишины: база = нота сразу, без чирика снизу.
+        let sr = 44_100.0;
+        let mut v = Kick808Voice::default();
+        v.set_sample_rate(sr);
+        v.set_glide_start(0.0);
+        v.trigger(&NoteEvent::new(8, 36, 1.0, 0.5));
+        let target = crate::core::midi_to_freq(36).max(32.0);
+        assert!((v.base_smooth - target).abs() < 0.01, "chirp: {}", v.base_smooth);
+        // Второй удар слайдится с прошлого, а не снэпается.
+        v.set_glide_start(40.0);
+        v.trigger(&NoteEvent::new(8, 43, 1.0, 0.5));
+        assert!((v.base_smooth - 40.0).abs() < 0.01, "glide broken");
+    }
 
     #[test]
     fn rings_long_finite_and_round() {

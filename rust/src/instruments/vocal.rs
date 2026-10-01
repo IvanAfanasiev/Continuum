@@ -83,7 +83,10 @@ impl Voice for VocalVoice {
 
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sample_rate) % 1.0;
         let wobble = 1.0 + VIBRATO_DEPTH * (self.vib_phase * TAU).sin();
-        let freq = self.frequency * wobble;
+        // Scoop: голос въезжает снизу (−4% за 30 мс), как живой onset.
+        // Плак так не делает — голоса расходятся с первой миллисекунды.
+        let scoop = 1.0 - 0.04 * (-self.t / 0.03).exp();
+        let freq = self.frequency * wobble * scoop;
 
         self.phase1 = (self.phase1 + freq / sample_rate) % 1.0;
         self.phase2 = (self.phase2 + (freq * DETUNE) / sample_rate) % 1.0;
@@ -124,6 +127,43 @@ impl Voice for VocalVoice {
 mod tests {
     use super::super::{Instrument, VoicePool};
     use super::*;
+
+    #[test]
+    fn onset_scoops_up_to_pitch() {
+        // Scoop: первые 30 мс ниже строя, дальше — строй. Плак так
+        // не делает (резкий щелчок среза): голоса расходятся сразу.
+        fn peak_near(samples: &[f32], sr: f32, lo: f32, hi: f32) -> f32 {
+            let mut best = (0.0f32, 0.0f32);
+            let mut f = lo;
+            while f <= hi {
+                let n = samples.len() as f32;
+                let k = f / sr * n;
+                let om = 2.0 * std::f32::consts::PI * k / n;
+                let c = 2.0 * om.cos();
+                let (mut s1, mut s2) = (0.0f32, 0.0f32);
+                for &v in samples {
+                    let s0 = v + c * s1 - s2;
+                    s2 = s1;
+                    s1 = s0;
+                }
+                let mag = (s1 * s1 + s2 * s2 - c * s1 * s2).sqrt() / n;
+                if mag > best.1 {
+                    best = (f, mag);
+                }
+                f += 2.0;
+            }
+            best.0
+        }
+        let sr = 44_100.0;
+        let mut v = VocalVoice::default();
+        v.set_sample_rate(sr);
+        v.trigger(&NoteEvent::new(11, 57, 0.9, 0.5));
+        let out: Vec<f32> = (0..9000).map(|_| v.next_sample()).collect();
+        let early = peak_near(&out[0..1323], sr, 200.0, 240.0);
+        let late = peak_near(&out[4410..6615], sr, 200.0, 240.0);
+        assert!(early < late, "no scoop: early={early} late={late}");
+        assert!((late - 220.0).abs() < 12.0, "out of tune: {late}");
+    }
 
     #[test]
     fn vocal_chop_sings_and_decays() {
