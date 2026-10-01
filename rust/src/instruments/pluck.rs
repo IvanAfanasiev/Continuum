@@ -6,15 +6,15 @@ use crate::core::midi_to_freq;
 
 /// Голос электро-плака: BLEP-пилы + BLEP суб-квадрат через резонансный
 /// SVF с быстрым «щелчком» среза и мягким насыщением. Чистый современный
-/// плак вместо резкого чиптюна. Хвост ограничен 0.6 с.
+/// плак вместо резкого чиптюна. Короткий блип (хвост 0.35 с, как референс).
 const SUB_GAIN: f32 = 0.35;
 const DETUNE: f32 = 1.004;
 const FILTER_FLOOR_HZ: f32 = 350.0;
 const FILTER_SNAP_HZ: f32 = 3800.0;
 const FILTER_SNAP_RATE: f32 = 18.0;
 const FILTER_Q: f32 = 1.15;
-const AMP_DECAY_RATE: f32 = 7.0;
-const MAX_RING_SECS: f32 = 0.6;
+const AMP_DECAY_RATE: f32 = 10.0;
+const MAX_RING_SECS: f32 = 0.35;
 const ATTACK_SECS: f32 = 0.002;
 const FADE_SECS: f32 = 0.02;
 const VOICE_GAIN: f32 = 0.7;
@@ -117,5 +117,18 @@ mod tests {
             }
         }
         assert!(second < first, "pluck does not decay");
+    }
+
+    #[test]
+    fn pluck_is_a_short_blip() {
+        // Референс — блип 0.1 с: нота 0.6 с обязана затихнуть к 0.45 с.
+        let sr = 44_100.0;
+        let mut pluck = VoicePool::plucks(6, 1);
+        pluck.set_sample_rate(sr);
+        pluck.trigger(&NoteEvent::new(6, 72, 1.0, 0.6));
+        for _ in 0..(0.45 * sr) as usize {
+            pluck.next_sample();
+        }
+        assert!(!pluck.is_active(), "pluck rings too long");
     }
 }

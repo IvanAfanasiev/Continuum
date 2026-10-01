@@ -16,9 +16,9 @@ const BODY_DECAY: f32 = 38.0;
 const NOISE_CENTER_HZ: f32 = 2200.0;
 const NOISE_Q: f32 = 0.9;
 const NOISE_DECAY: f32 = 22.0;
-const NOISE_GAIN: f32 = 0.8;
+const NOISE_GAIN: f32 = 1.0;
 const SNAP_DECAY: f32 = 300.0;
-const SNAP_GAIN: f32 = 0.8;
+const SNAP_GAIN: f32 = 1.0;
 const ATTACK_SECS: f32 = 0.0005;
 const FADE_SECS: f32 = 0.008;
 

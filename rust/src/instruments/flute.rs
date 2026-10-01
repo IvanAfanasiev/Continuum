@@ -8,15 +8,16 @@ use crate::core::midi_to_freq;
 
 /// Духовая флейта: чистый синус + дыхание через полосу + позднее
 /// вибрато (раскачивается после атаки, как у живого дыхания).
-/// Для лоуфай-мелодий поверх Rhodes. Мягкая атака — без язычка.
+/// Для лоуфай-мелодий поверх Rhodes. Атака быстрая (12 мс, как язычок
+/// референса), но без щелчка; дыхание тихое (фон, не шипение).
 const SHIMMER_GAIN: f32 = 0.15;
 const BREATH_HZ: f32 = 2500.0;
 const BREATH_Q: f32 = 1.5;
-const BREATH_GAIN: f32 = 0.12;
+const BREATH_GAIN: f32 = 0.05;
 const VIBRATO_HZ: f32 = 5.5;
 const VIBRATO_DEPTH: f32 = 0.008;
 const VIBRATO_BLOOM_SECS: f32 = 0.15;
-const ATTACK_SECS: f32 = 0.08;
+const ATTACK_SECS: f32 = 0.012;
 const AMP_DECAY_RATE: f32 = 1.2;
 const SUSTAIN_LEVEL: f32 = 0.8;
 const MAX_RING_SECS: f32 = 2.0;
@@ -112,7 +113,7 @@ mod tests {
         let mut flute = flutes();
         flute.set_sample_rate(sr);
         flute.trigger(&NoteEvent::new(13, 72, 0.8, 1.5));
-        // Мягкая атака: первые 5 мс тише, чем дальше.
+        // Быстрая, но мягкая атака: первые 5 мс тише, чем дальше.
         let mut early = 0.0;
         for _ in 0..220 {
             early += flute.next_sample().abs();
@@ -125,5 +126,27 @@ mod tests {
         }
         assert!(later / 5000.0 > early / 220.0, "no soft attack");
         assert!(later > 1.0, "flute too quiet");
+    }
+
+    #[test]
+    fn flute_tongues_fast() {
+        // Язычок референса: 90% пика быстрее 25 мс (было 80+).
+        let sr = 44_100.0;
+        let mut flute = flutes();
+        flute.set_sample_rate(sr);
+        flute.trigger(&NoteEvent::new(13, 72, 0.8, 1.5));
+        let mut peak: f32 = 0.0;
+        let buf: Vec<f32> = (0..(0.2 * sr) as usize)
+            .map(|_| {
+                let s = flute.next_sample();
+                peak = peak.max(s.abs());
+                s
+            })
+            .collect();
+        let t90 = buf.iter().position(|s| s.abs() >= peak * 0.9).unwrap();
+        assert!(
+            t90 < (0.025 * sr) as usize,
+            "tongue too slow: {t90} samples"
+        );
     }
 }

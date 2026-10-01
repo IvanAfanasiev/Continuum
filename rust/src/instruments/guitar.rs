@@ -10,10 +10,10 @@ use crate::core::midi_to_freq;
 /// сам по себе) и живой раздрай атаки. Для лоуфай-боя поверх Rhodes
 /// и рок-риффов. Полифония 6.
 /// Длительность сустейна струны (открытые струны звенят, глушеные — нет).
-const RING_T60_SECS: f32 = 1.1;
+const RING_T60_SECS: f32 = 1.4;
 const RING_T60_MUTED_SECS: f32 = 0.12;
 const MAX_KS_LEN: usize = 2048;
-const LP_HZ: f32 = 3400.0;
+const LP_HZ: f32 = 3800.0;
 const LP_MUTED_HZ: f32 = 1800.0;
 const LP_Q: f32 = 0.7;
 const ATTACK_SECS: f32 = 0.006;
