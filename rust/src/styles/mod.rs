@@ -451,6 +451,15 @@ fn accent_prior(instrument_id: usize) -> f32 {
     }
 }
 
+/// Хроматический сдвиг тоники от сида (−2..=+2 полутона).
+/// Стиль задает лад (семейство интервалов), сид — абсолютную высоту:
+/// разные сиды звучат в разных тональностях. Диапазон узкий сознательно:
+/// регистры голосов рассчитаны с запасом (бас не уходит в инфраниз,
+/// лиды не вылезают за D6). Детерминировано сидом полностью.
+pub(crate) fn tonic_shift_for(seed_hash: u64) -> i8 {
+    (crate::arranger::splitmix64(seed_hash ^ 0x701C) % 5) as i8 - 2
+}
+
 /// Модальный вариант от сида: дорийская секста / фригийская секунда /
 /// блюзовая нота. Та же гамма с другим характером.
 fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
@@ -733,7 +742,9 @@ fn play_guide(
             let base = tonic + degree + drift + rotation;
             // Октава общая для тонов аккорда; подъем проверяем по корню.
             let root_idx = base % scale.len();
-            let root = modal_tone(scale, root_idx, song.seed_hash);
+            // Абсолютная высота — от сида (тон семейства + сдвиг тоники).
+            let shift = tonic_shift_for(song.seed_hash);
+            let root = modal_tone(scale, root_idx, song.seed_hash).saturating_add_signed(shift);
             let bump = guide.octave_up > 0.0
                 // Потолок регистра лидов: выше D6 (86) — ледяной свист,
                 // а не музыка. Берем минимум из гайда и колпака.
@@ -761,6 +772,7 @@ fn play_guide(
     for (ti, iv) in intervals.iter().enumerate() {
         let idx = (tone_base as i32 + *iv as i32).rem_euclid(scale.len() as i32) as usize;
         let tone = modal_tone(scale, idx, song.seed_hash)
+            .saturating_add_signed(tonic_shift_for(song.seed_hash))
             .saturating_add_signed(octaves.saturating_mul(12));
         let atten = if ti < CHORD_ATTEN.len() {
             CHORD_ATTEN[ti]
@@ -1591,6 +1603,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn tonic_shift_spans_five_semitones() {
+        // Тоника: диапазон ±2, детерминизм, все 5 значений встречаются.
+        for h in [0u64, 1, 42, 777, 424242, u64::MAX] {
+            let s = tonic_shift_for(h);
+            assert!((-2..=2).contains(&s), "shift out of range: {s}");
+            assert_eq!(s, tonic_shift_for(h), "not deterministic");
+        }
+        let keys: std::collections::HashSet<i8> =
+            (0..64u64).map(tonic_shift_for).collect();
+        assert_eq!(keys.len(), 5, "tonics missing: {keys:?}");
+    }
+
+    #[test]
+    fn tonic_shift_transposes_line_intact() {
+        // Сдвиг транспонирует линию целиком: контур тот же, высота — нет.
+        // Два хэша из одного %21-класса: ротация (%7) и модус (%3)
+        // совпадают, отличается только сдвиг. Гейты разные — сравниваем
+        // только шаги, звучащие в обеих линиях.
+        let guide = RoleGuide {
+            weights: &[1.0; 16],
+            follow_motif: true,
+            ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, 1.0, 0.8)
+        };
+        let scale = [48, 50, 52, 53, 55, 57, 59];
+        let pitch = |hash: u64, step: usize| -> Option<u8> {
+            let mut song = test_song(0.5);
+            song.seed_hash = hash;
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            play_guide(
+                &guide, &scale, &song, 1.0, false, step, 16, 0.1, 6, 5, 1.0,
+                false, false, &mut rng,
+            )
+            .into_iter()
+            .next()
+            .map(|n| n.midi_pitch)
+        };
+        let mut pair = None;
+        'search: for h1 in 0..200u64 {
+            for h2 in (h1 + 1)..200u64 {
+                if h1 % 21 != h2 % 21 {
+                    continue;
+                }
+                if tonic_shift_for(h1) == tonic_shift_for(h2) {
+                    continue;
+                }
+                pair = Some((h1, h2));
+                break 'search;
+            }
+        }
+        let (h1, h2) = pair.expect("no pair in range");
+        let delta = tonic_shift_for(h2) as i16 - tonic_shift_for(h1) as i16;
+        let mut checked = 0;
+        for step in (0..16).step_by(2) {
+            if let (Some(x), Some(y)) = (pitch(h1, step), pitch(h2, step)) {
+                assert_eq!(y as i16 - x as i16, delta, "contour broken");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "too few common steps");
     }
 
     #[test]
