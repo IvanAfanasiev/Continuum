@@ -8,12 +8,21 @@ use crate::core::midi_to_freq;
 
 /// Чистая электрогитара: легкое расгеадо (три удара веером),
 /// тихие ноты — с глушением струн (коротко, темно, перкуссивно).
-/// Теплое тело (синус с мягкими гармониками) через прикрытый lowpass.
-/// Для лоуфай-фингерпикинга поверх Rhodes. Полифония 6.
+/// Струнное тело: 5 гармоник с разной скоростью спада (верх гаснет
+/// быстрее — подпись щипка, а не органный сустейн). Для лоуфай-боя
+/// поверх Rhodes и рок-риффов. Полифония 6.
 const PICK_DECAY: f32 = 250.0;
-const PICK_GAIN: f32 = 0.35;
-const PICK_LP_HZ: f32 = 3200.0;
-const BODY_HARMONICS: [(f32, f32); 3] = [(1.0, 1.0), (2.0, 0.25), (3.0, 0.1)];
+const PICK_GAIN: f32 = 0.45;
+const PICK_LP_HZ: f32 = 3800.0;
+/// (множитель частоты, амплитуда, скорость спада): чем выше частица,
+/// тем короче живет — атака струнная, сустейн теплый.
+const BODY_HARMONICS: [(f32, f32, f32); 5] = [
+    (1.0, 1.0, 4.0),
+    (2.0, 0.4, 6.5),
+    (3.0, 0.22, 9.5),
+    (4.0, 0.1, 13.0),
+    (5.0, 0.05, 18.0),
+];
 const LP_HZ: f32 = 3400.0;
 const LP_MUTED_HZ: f32 = 1800.0;
 const LP_Q: f32 = 0.7;
@@ -24,8 +33,10 @@ const MUTE_DECAY_RATE: f32 = 28.0;
 /// Тише этого — ghost-нота с приглушенными струнами.
 const MUTE_VELOCITY: f32 = 0.6;
 /// Расгеадо: сдвиги ударов и их акценты (сумма нормируется).
-const STRUM_GAP_SECS: f32 = 0.009;
-const STRUM_GAP_MUTED_SECS: f32 = 0.005;
+/// 16 мс между струнами — штрихи слышны раздельно, как бой,
+/// а не один удар с тремоло.
+const STRUM_GAP_SECS: f32 = 0.016;
+const STRUM_GAP_MUTED_SECS: f32 = 0.008;
 const STRUM_ACCENTS: [f32; 3] = [1.0, 0.7, 0.5];
 const STRUM_NORM: f32 = 1.0 / (1.0 + 0.7 + 0.5);
 const MAX_RING_SECS: f32 = 1.5;
@@ -35,7 +46,7 @@ const VOICE_GAIN: f32 = 0.55;
 #[derive(Clone, Default)]
 pub struct GuitarVoice {
     sample_rate: f32,
-    phases: [f32; 3],
+    phases: [f32; 5],
     filter: Svf,
     pick_lp: Svf,
     noise: Noise,
@@ -59,7 +70,7 @@ impl Voice for GuitarVoice {
         // Тихие ghost-ноты играются с глушением струн.
         self.muted = note.velocity < MUTE_VELOCITY;
         self.t = 0.0;
-        self.phases = [0.0; 3];
+        self.phases = [0.0; 5];
         self.filter.reset();
         self.pick_lp.reset();
         self.noise = Noise::new(super::dsp::note_seed(note, 0x6174));
@@ -98,11 +109,13 @@ impl Voice for GuitarVoice {
         }
         strum *= STRUM_NORM;
 
-        // Тело: три синуса-обертона вместо пилы — тепло без дребезга.
+        // Тело: гармоники с собственным спадом — верх умирает первым.
+        // Так звучит щипок струны, а не орган: атака струнная, хвост теплый.
         let mut body = 0.0;
-        for (phase, (mult, amp_h)) in self.phases.iter_mut().zip(BODY_HARMONICS) {
+        for (phase, (mult, amp_h, rate_h)) in self.phases.iter_mut().zip(BODY_HARMONICS) {
             *phase = (*phase + (self.frequency * mult) / sample_rate) % 1.0;
-            body += (*phase * TAU).sin() * amp_h;
+            let sustain_h = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-rate_h * self.t).exp();
+            body += (*phase * TAU).sin() * amp_h * sustain_h;
         }
         // Щипок медиатора: короткий шум через верх.
         let pick_raw = self.noise.sample() * (-PICK_DECAY * self.t).exp() * PICK_GAIN;
