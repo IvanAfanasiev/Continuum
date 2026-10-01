@@ -1741,35 +1741,41 @@ mod tests {
     #[test]
     fn lofi_guitar_strums_partial_chords() {
         // Бой: гитара озвучивает трезвучие от ступени темы, sounding step = 3 ноты.
+        // Полюса: синкопы и ровные восьмые (ref: Coming Home — ~8 ударов/такт).
         use crate::instruments::Slot;
         let style = lofi::LofiStyle::new();
+        assert!((1.4..=1.8).contains(&style.swing_ratio()), "swing out of dusty band");
         let guides = style.slot_guides();
         let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();
         let iv = guides[gi].chord.expect("strum voicing");
         assert_eq!(iv.to_vec(), vec![0i8, 2, 4]);
-        let song = test_song(0.5);
         let active = vec![Slot::Guitar.id()];
         let mut rng = rand::SeedableRng::seed_from_u64(17);
-        let mut sctx = StepContext {
-            step: 0,
-            step_in_measure: 0,
-            base_step_secs: style.base_step_secs(),
-            active_tracks: &active,
-            song: &song,
-            rng: &mut rng,
-            intensity: 1.0,
-        };
-        let mut heard = 0;
-        for sim in 0..16 {
-            sctx.step = sim;
-            sctx.step_in_measure = sim;
-            let notes = render_style(&style, &mut sctx);
-            if !notes.is_empty() {
-                assert_eq!(notes.len(), 3, "step {sim}: not a strum");
-                heard += 1;
+        let mut onsets = 0;
+        for phrase in 0..8usize {
+            let mut song = test_song(0.5);
+            song.phrase_index = phrase;
+            let mut sctx = StepContext {
+                step: 0,
+                step_in_measure: 0,
+                base_step_secs: style.base_step_secs(),
+                active_tracks: &active,
+                song: &song,
+                rng: &mut rng,
+                intensity: 1.0,
+            };
+            for sim in 0..16 {
+                sctx.step = sim;
+                sctx.step_in_measure = sim;
+                let notes = render_style(&style, &mut sctx);
+                if !notes.is_empty() {
+                    assert_eq!(notes.len(), 3, "phrase {phrase} step {sim}: not a strum");
+                    onsets += 1;
+                }
             }
         }
-        assert!(heard > 0, "guitar never strums");
+        // Пол против исчезновения боя (плотность задана полюсами выше).
+        assert!(onsets >= 8, "strumming gone: {onsets}/8 bars");
     }
 
     #[test]

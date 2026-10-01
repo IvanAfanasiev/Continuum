@@ -43,6 +43,13 @@ const FLUTE_W: &[f32] = &[
 const GUITAR_W: &[f32] = &[
     0.7, 0.0, 0.0, 0.4, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.5, 0.0, 0.6, 0.0, 0.0, 0.3,
 ];
+// Ровный бой восьмыми (ref: Coming Home — ~8 ударов на такт,
+// даун- и ап-страоки). Второй полюс к синкопам.
+const GUITAR_STRUM8_W: &[f32] = &[
+    0.7, 0.0, 0.5, 0.0, 0.7, 0.0, 0.5, 0.0, 0.7, 0.0, 0.5, 0.0, 0.7, 0.0, 0.5,
+    0.3,
+];
+const GUITAR_POLES: &[&[f32]] = &[GUITAR_W, GUITAR_STRUM8_W];
 // Второй бум-бэп: синкопа уехала с 7 на 6, ответ с 10 на 12.
 const KICK_ALT_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.35, 0.0, 0.2, 0.0, 0.0, 0.0,
@@ -105,7 +112,9 @@ impl Style for LofiStyle {
     }
 
     fn swing_ratio(&self) -> f32 {
-        1.45
+        // Тяжелый свинг референсов (Coming Home 1.69, Autumn ~1.5):
+        // бой качается, а не тикает.
+        1.55
     }
 
     fn scale(&self) -> &'static [u8] {
@@ -179,10 +188,12 @@ impl Style for LofiStyle {
         // Легато вместо чмоканья: длинные ноты (6 шагов) + частичный
         // саб-перекос против дребезга презенса. Тепло оставлено (0.4,
         // не 1.0) — глухой синус вместо баса не нужен.
+        // Уровень ниже гитары: замер спектра (Coming Home) — у нас доля
+        // низа 0.38 против 0.25 у референса.
         let bass = RoleGuide {
             energy_response: 0.8,
             duration_mult: 6.0,
-            vel_base: 0.55,
+            vel_base: 0.5,
             vel_jitter: 0.05,
             voice: Voicing::Scale {
                 degree: 0,
@@ -192,7 +203,7 @@ impl Style for LofiStyle {
             vel_high_cut: 0.6,
             alt: Some(BASS_ALT_W),
             sub_bias: 0.4,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 6.0, 0.55)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 6.0, 0.5)
         };
         let kick = RoleGuide {
             energy_response: 0.8,
@@ -337,6 +348,7 @@ impl Style for LofiStyle {
             },
             follow_motif: true,
             chord: Some(STRUM_IV),
+            poles: Some(GUITAR_POLES),
             ..RoleGuide::pitched(GUITAR_W, 0, 1, 0, 1.8, 0.6)
         };
         // Дождь: ровная пелена во все фразы. Тише винила и музыки.
