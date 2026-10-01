@@ -20,15 +20,15 @@ const DRIVE_BASE: f32 = 1.5;
 const DRIVE_VEL: f32 = 2.5;
 const PRESENCE_Q: f32 = 0.7;
 /// Легкое проседание питча в атаке — аналоговая «плотность» удара.
+/// Перекосом гасится вместе с презенсом: чирп = часть дребезга.
 const PITCH_DROP: f32 = 0.025;
 const PITCH_DROP_RATE: f32 = 80.0;
-/// Дефолтная атака 6 мс: короче — резкий щелчок в миксе (замер lofi
-/// против референсов), сиды умножают сверху свою мягкость.
-const ATTACK_SECS: f32 = 0.006;
+/// Атака с фейдом вместо щелчка: 10 мс + мягкость сида сверху.
+/// Релиз длинный (35 мс): бас допевает, а не чмокает.
+const ATTACK_SECS: f32 = 0.010;
 const AMP_DECAY_RATE: f32 = 8.0;
 const SUSTAIN_LEVEL: f32 = 0.85;
-/// Релиз чуть длиннее атаки-щелчка: бас должен допевать, а не чмокать.
-const FADE_SECS: f32 = 0.016;
+const FADE_SECS: f32 = 0.035;
 
 #[derive(Clone, Default)]
 struct BassVoice {
@@ -82,7 +82,8 @@ impl Voice for BassVoice {
         let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
         let fade = release_fade(self.samples_left, fade_len);
 
-        let freq = self.frequency * (1.0 - PITCH_DROP * (-PITCH_DROP_RATE * t).exp());
+        let freq = self.frequency
+            * (1.0 - PITCH_DROP * (1.0 - 0.7 * self.sub_bias) * (-PITCH_DROP_RATE * t).exp());
         self.phase = (self.phase + freq / sample_rate) % 1.0;
         let wave = (self.phase * std::f32::consts::TAU).sin();
         // Четная октава строго в фазе с фундаментом (та же фаза ×2):
