@@ -27,7 +27,8 @@ const PITCH_DROP_RATE: f32 = 80.0;
 const ATTACK_SECS: f32 = 0.006;
 const AMP_DECAY_RATE: f32 = 8.0;
 const SUSTAIN_LEVEL: f32 = 0.85;
-const FADE_SECS: f32 = 0.012;
+/// Релиз чуть длиннее атаки-щелчка: бас должен допевать, а не чмокать.
+const FADE_SECS: f32 = 0.016;
 
 #[derive(Clone, Default)]
 struct BassVoice {

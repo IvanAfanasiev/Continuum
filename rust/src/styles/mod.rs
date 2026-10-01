@@ -771,9 +771,17 @@ fn play_guide(
     let mut out = Vec::with_capacity(intervals.len());
     for (ti, iv) in intervals.iter().enumerate() {
         let idx = (tone_base as i32 + *iv as i32).rem_euclid(scale.len() as i32) as usize;
-        let tone = modal_tone(scale, idx, song.seed_hash)
+        let mut tone = modal_tone(scale, idx, song.seed_hash)
             .saturating_add_signed(tonic_shift_for(song.seed_hash))
             .saturating_add_signed(octaves.saturating_mul(12));
+        // Бас держим внизу: уползшее выше A2 (45) складываем октавой вниз.
+        // Гармония та же (тот же питч-класс), глубина — как надо сабу.
+        // Нижняя граница недостижима: вычитаем только из tone > 45.
+        if matches!(role, Some(InstrumentRole::Bass)) {
+            while tone > 45 {
+                tone -= 12;
+            }
+        }
         let atten = if ti < CHORD_ATTEN.len() {
             CHORD_ATTEN[ti]
         } else {
@@ -1137,6 +1145,54 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn bass_stays_deep() {
+        // Саб внизу: ноты баса всех стилей в 24..=45 (C1..A2).
+        // Уползшие вверх складываются октавой вниз, гармония та же.
+        use crate::instruments::{InstrumentRole, Slot};
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let ensemble = style.ensemble();
+            let active: Vec<usize> = Slot::ALL
+                .iter()
+                .filter(|s| ensemble.contains(s))
+                .map(|s| s.id())
+                .collect();
+            let mut rng = rand::SeedableRng::seed_from_u64(424242);
+            let mut arranger = crate::arranger::Arranger::new(424242);
+            let mut song = arranger.advance_measure();
+            let mut heard = 0;
+            for step in 0..256 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for note in render_style(&*style, &mut sctx) {
+                    let role = Slot::from_id(note.instrument_id).map(|s| s.role());
+                    if matches!(role, Some(InstrumentRole::Bass)) {
+                        assert!(
+                            (24..=45).contains(&note.midi_pitch),
+                            "{name}: bass out of sub range: {}",
+                            note.midi_pitch
+                        );
+                        heard += 1;
+                    }
+                }
+            }
+            assert!(heard > 0, "{name}: bass never plays");
         }
     }
 
