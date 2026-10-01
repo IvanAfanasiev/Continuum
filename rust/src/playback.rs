@@ -1671,12 +1671,12 @@ mod tests {
             }
         }
 
-        // Rock: механика без переборов — рев фазза вместо гитары.
+        // Rock: механика — чистая гитара риффом плюс рев фазза.
         let rock = ensemble_of("rock");
-        for s in [Bass, Kick, Snare, Hat, Fuzz] {
+        for s in [Bass, Kick, Snare, Hat, Guitar, Fuzz] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [Guitar, Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Acid] {
+        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Acid] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
     }

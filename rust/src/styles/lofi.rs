@@ -176,10 +176,12 @@ impl Style for LofiStyle {
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         // Саб-ковер: мягко и длинно, без резких атак. Тише драйва —
         // акцент на гитаре и клавишах, бас только держит низ.
-        // Сустейн умеренный (4 шага): длинные ноты слоями давали кашу.
+        // Легато вместо чмоканья: длинные ноты (6 шагов) + частичный
+        // саб-перекос против дребезга презенса. Тепло оставлено (0.4,
+        // не 1.0) — глухой синус вместо баса не нужен.
         let bass = RoleGuide {
             energy_response: 0.8,
-            duration_mult: 4.0,
+            duration_mult: 6.0,
             vel_base: 0.55,
             vel_jitter: 0.05,
             voice: Voicing::Scale {
@@ -189,7 +191,8 @@ impl Style for LofiStyle {
             },
             vel_high_cut: 0.6,
             alt: Some(BASS_ALT_W),
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 4.0, 0.55)
+            sub_bias: 0.4,
+            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 6.0, 0.55)
         };
         let kick = RoleGuide {
             energy_response: 0.8,
@@ -318,8 +321,10 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(PLUCK_W, 0, 2, 3, 1.2, 0.4)
         };
-        // Гитара: синкопированный фингерпикинг по мотиву сида.
-        // Ведущий голос lofi — чуть громче саба.
+        // Гитара: легкий бой неполными аккордами по мотиву сида.
+        // Ведущий голос lofi — чуть громче саба. Трезвучие вместо
+        // одиночных щипков: уют открытых струн, атака мягкая (голос).
+        const STRUM_IV: &[i8] = &[0, 2, 4];
         let guitar = RoleGuide {
             energy_response: 1.0,
             duration_mult: 1.8,
@@ -331,6 +336,7 @@ impl Style for LofiStyle {
                 jitter: 0,
             },
             follow_motif: true,
+            chord: Some(STRUM_IV),
             ..RoleGuide::pitched(GUITAR_W, 0, 1, 0, 1.8, 0.6)
         };
         // Дождь: ровная пелена во все фразы. Тише винила и музыки.

@@ -687,7 +687,15 @@ fn play_guide(
             let prog_shift = if use_motif {
                 0
             } else {
-                song.prog[(song.measure_index / 2) % song.prog.len()] as usize
+                // Аккомпанемент ползет за прогрессией вдвое медленнее баса:
+                // бас держит корни почти стоя (иначе гуляет по грифу
+                // и ощущается то высоким, то низким). Остальные — в полную.
+                let shift = song.prog[(song.measure_index / 2) % song.prog.len()] as usize;
+                if matches!(role, Some(InstrumentRole::Bass)) {
+                    shift / 2
+                } else {
+                    shift
+                }
             };
             // Вопрос-ответ: нечетные фразы отвечают транспозицией темы
             // на терцию вверх — та же тема, другое дыхание.
@@ -1373,26 +1381,32 @@ mod tests {
 
     #[test]
     fn empty_chords_thicken_leads_into_dyads() {
-        // Пустые аккордовые: гитара соло поет диадами (корень+терция),
-        // та же гитара при живом пэде — одиночными. Те же шаги звучат:
-        // состав меняет озвучку, а не ритм.
+        // Пустые аккордовые: плак соло поет диадами (корень+терция),
+        // тот же плак при живом пэде — одиночными. Те же шаги звучат:
+        // состав меняет озвучку, а не ритм. (Гитара теперь всегда
+        // трезвучиями по своему гайду — ее фолбэк не касается.)
         use crate::instruments::Slot;
         let style = make_style("lofi").expect("known style");
-        let song = test_song(0.5);
-        let gid = Slot::Guitar.id();
+        let gid = Slot::Pluck.id();
+        // По фразам, как живой движок: якоря иногда дышат мимо.
         let render = |active: &Vec<usize>| -> Vec<(usize, Vec<u8>)> {
             let mut rng = rand::SeedableRng::seed_from_u64(31);
-            let mut sctx = StepContext {
-                step: 0,
-                step_in_measure: 0,
-                base_step_secs: style.base_step_secs(),
-                active_tracks: active,
-                song: &song,
-                rng: &mut rng,
-                intensity: 1.0,
-            };
-            (0..16)
-                .map(|sim| {
+            let mut out = Vec::new();
+            for phrase in 0..4usize {
+                let mut song = test_song(0.5);
+                song.phrase_index = phrase;
+                let mut sctx = StepContext {
+                    step: 0,
+                    step_in_measure: 0,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: active,
+                    song: &song,
+                    rng: &mut rng,
+                    // Погромче: тихий плак проверяем на озвучку, не на гейты
+                    // (они от intensity не зависят — сравнение честное).
+                    intensity: 2.0,
+                };
+                for sim in 0..16 {
                     sctx.step = sim;
                     sctx.step_in_measure = sim;
                     let pitches: Vec<u8> = render_style(&*style, &mut sctx)
@@ -1400,14 +1414,15 @@ mod tests {
                         .filter(|n| n.instrument_id == gid)
                         .map(|n| n.midi_pitch)
                         .collect();
-                    (sim, pitches)
-                })
-                .collect()
+                    out.push((phrase * 16 + sim, pitches));
+                }
+            }
+            out
         };
         let solo = render(&vec![gid]);
         let with_pad = render(&vec![gid, Slot::Pad.id()]);
         let solo_sounding: Vec<_> = solo.iter().filter(|(_, p)| !p.is_empty()).collect();
-        assert!(!solo_sounding.is_empty(), "guitar alone silent");
+        assert!(!solo_sounding.is_empty(), "pluck alone silent");
         for (sim, pitches) in &solo_sounding {
             assert_eq!(
                 pitches.len(),
@@ -1721,6 +1736,70 @@ mod tests {
             }
         }
         assert!(checked >= 3, "too few common steps");
+    }
+
+    #[test]
+    fn lofi_guitar_strums_partial_chords() {
+        // Бой: гитара озвучивает трезвучие от ступени темы, sounding step = 3 ноты.
+        use crate::instruments::Slot;
+        let style = lofi::LofiStyle::new();
+        let guides = style.slot_guides();
+        let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();
+        let iv = guides[gi].chord.expect("strum voicing");
+        assert_eq!(iv.to_vec(), vec![0i8, 2, 4]);
+        let song = test_song(0.5);
+        let active = vec![Slot::Guitar.id()];
+        let mut rng = rand::SeedableRng::seed_from_u64(17);
+        let mut sctx = StepContext {
+            step: 0,
+            step_in_measure: 0,
+            base_step_secs: style.base_step_secs(),
+            active_tracks: &active,
+            song: &song,
+            rng: &mut rng,
+            intensity: 1.0,
+        };
+        let mut heard = 0;
+        for sim in 0..16 {
+            sctx.step = sim;
+            sctx.step_in_measure = sim;
+            let notes = render_style(&style, &mut sctx);
+            if !notes.is_empty() {
+                assert_eq!(notes.len(), 3, "step {sim}: not a strum");
+                heard += 1;
+            }
+        }
+        assert!(heard > 0, "guitar never strums");
+    }
+
+    #[test]
+    fn bass_line_stays_near_roots() {
+        // Бас почти стоит: по первым долям прог-цикла разброс ≤ 3 полутонов.
+        // Было: прогрессия таскала бас на ±ступени (то высоко, то низко).
+        let guide = RoleGuide {
+            weights: &[1.0; 8],
+            ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, 1.0, 0.8)
+        };
+        let scale = [48, 51, 53, 55, 58];
+        let mut pitches = Vec::new();
+        for measure in 0..8usize {
+            let mut song = test_song(0.5);
+            song.measure_index = measure;
+            song.prog = [0, 3, 1, 2];
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            if let Some(n) = play_guide(
+                &guide, &scale, &song, 1.0, false, 0, 8, 0.1, 1, 0, 1.0, false,
+                false, &mut rng,
+            )
+            .into_iter()
+            .next()
+            {
+                pitches.push(n.midi_pitch);
+            }
+        }
+        assert!(pitches.len() >= 6, "bass gone: {pitches:?}");
+        let spread = pitches.iter().max().unwrap() - pitches.iter().min().unwrap();
+        assert!(spread <= 3, "bass wanders: {pitches:?}");
     }
 
     #[test]

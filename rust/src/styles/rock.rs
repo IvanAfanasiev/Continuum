@@ -116,7 +116,7 @@ impl Style for RockStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Механика: бочка, снейр, хэт, бас и рев фазза.
+        // Механика: бочка, снейр, хэт, бас, чистая гитара риффом и рев фазза.
         // Без тарелок: металлический звон не к месту даже на стыках.
         // Без гитарных переборов, клавиш и текстур.
         &[
@@ -124,6 +124,7 @@ impl Style for RockStyle {
             Slot::Kick,
             Slot::Snare,
             Slot::Hat,
+            Slot::Guitar,
             Slot::Fuzz,
         ]
     }
@@ -272,16 +273,19 @@ impl Style for RockStyle {
             follow_motif: true,
             ..RoleGuide::pitched(RIFF_W, 0, 1, 0, 0.8, 0.3)
         };
+        // Чистая гитара риффом по мотиву: чоппирующие восьмые поверх
+        // рева, без перегруза (он у фазза). Коротко и перкуссивно.
         let guitar = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.2,
-            vel_base: 0.3,
+            duration_mult: 0.7,
+            vel_base: 0.5,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 0,
                 jitter: 1,
             },
-            ..RoleGuide::pitched(RIFF_W, 0, 0, 1, 1.2, 0.3)
+            follow_motif: true,
+            ..RoleGuide::pitched(RIFF_W, 0, 0, 1, 0.7, 0.5)
         };
         let rain = RoleGuide {
             duration_mult: 150.0,

@@ -156,7 +156,7 @@ impl Style for ClubStyle {
         let bass = RoleGuide {
             energy_response: 2.2,
             duration_mult: 1.8,
-            vel_base: 0.7,
+            vel_base: 0.78,
             vel_energy: 0.25,
             vel_jitter: 0.06,
             voice: Voicing::Scale {
@@ -171,8 +171,9 @@ impl Style for ClubStyle {
             bass_fifth: true,
             // Глубокий ровный саб вместо струны: презенс-цепь придавлена,
             // фундамент — чистый синус. Рок держит струну (0.0).
+            // Громкость с запасом: саб без презенса тише струнного.
             sub_bias: 0.8,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 1.8, 0.7)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 1.8, 0.78)
         };
         let kick = RoleGuide {
             climax_boost: 0.85,
