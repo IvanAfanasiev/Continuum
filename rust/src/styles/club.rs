@@ -53,11 +53,15 @@ const KICK_SYNCOP_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 1.0, 0.0, 0.6, 0.0,
 ];
 const KICK_DRIVE8_W: &[f32] = &[
-    1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.8, 0.6,
+    // Вдох перед единицей: 15-й шаг пустой всегда, иначе связка
+    // 14-15-0 дает фламовую очередь вместо грува.
+    1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.8,
+    0.0,
 ];
 // Драйв с оффбитными толчками: четверка плюс синкопа на слабых.
 const KICK_PUSH_W: &[f32] = &[
-    1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0, 0.6, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0, 0.5,
+    1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0, 0.6, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0,
+    0.0,
 ];
 const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W, KICK_PUSH_W];
 const BASS_ALT_W: &[f32] = &[
@@ -186,7 +190,9 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(BASS_W, 0, -1, 0, 1.8, 0.78)
         };
         let kick = RoleGuide {
-            climax_boost: 0.85,
+            // Заливка перед дропом умеренная: пулемет вместо брейка
+            // ломает бит (связка с даунбитом).
+            climax_boost: 0.4,
             vel_base: 0.95,
             vel_energy: 0.05,
             alt: Some(KICK_ALT_W),
@@ -200,7 +206,7 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.5)
         };
         let snare = RoleGuide {
-            climax_boost: 0.7,
+            climax_boost: 0.45,
             vel_base: 0.95,
             poles: Some(SNARE_POLES),
             ..RoleGuide::kit(CLAP_W, 38, 0.95)
@@ -256,7 +262,7 @@ impl Style for ClubStyle {
         // 808 следует за баслайном (слайды между фразами), тот же four-floor.
         // Перед дропом — саб-ролл: удар вместо звона тарелки.
         let kick808 = RoleGuide {
-            climax_boost: 0.8,
+            climax_boost: 0.4,
             vel_base: 0.95,
             vel_energy: 0.05,
             voice: Voicing::Scale {

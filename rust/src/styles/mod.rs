@@ -2280,6 +2280,53 @@ mod tests {
     }
 
     #[test]
+    fn kick_leaves_breath_before_downbeat() {
+        // Фламы на стыке такта запрещены: 15-й шаг киковых направляющих
+        // тише 0.3 во всех стилях (связка 14-15-0 ломала бит очередью).
+        // Проверяются веса, альтернативы и все полюса кик-слотов.
+        use crate::instruments::Slot;
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let guides = style.slot_guides();
+            for slot in [Slot::Kick, Slot::Kick808] {
+                let gi = Slot::ALL.iter().position(|s| *s == slot).unwrap();
+                let g = &guides[gi];
+                let mut arrs: Vec<&[f32]> = vec![g.weights];
+                if let Some(alt) = g.alt {
+                    arrs.push(alt);
+                }
+                if let Some(poles) = g.poles {
+                    arrs.extend(poles.iter().copied());
+                }
+                for (ai, arr) in arrs.iter().enumerate() {
+                    if arr.len() == style.steps_per_measure() {
+                        assert!(
+                            arr[15] < 0.3,
+                            "{name} {slot:?} arr {ai}: pickup {v} before downbeat",
+                            v = arr[15]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn climax_fills_stay_moderate() {
+        // Заливки перед дропом — подъем, а не пулемет: буст ≤ 0.45 везде.
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            for (i, guide) in style.slot_guides().iter().enumerate() {
+                assert!(
+                    guide.climax_boost <= 0.45,
+                    "{name} slot {i}: fill {v} breaks the beat",
+                    v = guide.climax_boost
+                );
+            }
+        }
+    }
+
+    #[test]
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные такты — разные ступени),
         // мотив при той же прогрессии стабилен.
