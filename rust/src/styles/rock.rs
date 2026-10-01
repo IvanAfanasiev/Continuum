@@ -285,20 +285,21 @@ impl Style for RockStyle {
         };
         // Чистая гитара риффом по мотиву: тот же план, что у фазза
         // (общий скелет риффа), своим тембром и броском гейта.
+        // Унисон с фаззом октава в октаву: стена риффа, а не фон.
         // Чоппирующие восьмые поверх рева, без перегруза (он у фазза).
         // Второй полюс — пулеметные 16-е медиатором (ref: Thunderstruck).
         let guitar = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.7,
-            vel_base: 0.5,
+            duration_mult: 1.0,
+            vel_base: 0.75,
             voice: Voicing::Scale {
                 degree: 0,
-                octave: 0,
+                octave: 1,
                 jitter: 1,
             },
             follow_motif: true,
             poles: Some(RIFF_POLES),
-            ..RoleGuide::pitched(RIFF_W, 0, 0, 1, 0.7, 0.5)
+            ..RoleGuide::pitched(RIFF_W, 0, 1, 1, 1.0, 0.75)
         };
         let rain = RoleGuide {
             duration_mult: 150.0,

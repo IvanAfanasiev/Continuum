@@ -143,6 +143,10 @@ pub struct RoleGuide {
     /// Квинтовый бас: оффбитные восьмые ходят на квинту — баслайн
     /// движется, а не топчется. Только роль Bass, только по флагу.
     pub bass_fifth: bool,
+    /// Арпеджио: интервалы аккорда играются по одному вкруговую
+    /// (фингерпикинг), а не стеком. Источник интервалов — `chord`.
+    /// Одна струна за раз вместо щелкающей каши аккордов.
+    pub arp: bool,
     /// Саб-перекос 0..1: гасит струну/щелчок/презенс в пользу чистого
     /// синуса. Club-бас глубокий и плавный, рок — струнный (0.0).
     /// Читает только бас-голос.
@@ -187,6 +191,7 @@ impl RoleGuide {
         bass_fifth: false,
         sub_bias: 0.0,
         bass_top: 45,
+        arp: false,
         emergent_beats: 0.0,
     };
 
@@ -221,6 +226,7 @@ impl RoleGuide {
             bass_fifth: false,
             sub_bias: 0.0,
             bass_top: 45,
+            arp: false,
             emergent_beats: 0.0,
         }
     }
@@ -262,6 +268,7 @@ impl RoleGuide {
             bass_fifth: false,
             sub_bias: 0.0,
             bass_top: 45,
+            arp: false,
             emergent_beats: 0.0,
         }
     }
@@ -860,11 +867,19 @@ fn play_guide(
     // Аккордовая озвучка: пэды и клавиши берут трезвучие (или интервалы
     // из гайда), мелодия — одиночные ноты. Сгущение (пустые аккордовые) —
     // диада корень+терция у лидов: гармония без мути. Все тоны в ладу.
+    // Арпеджио: один интервал за удар, вкруговую (фингерпикинг).
     let intervals: &[i8] = match guide.chord {
         Some(iv) => iv,
         None if matches!(role, Some(InstrumentRole::Chords)) && !guide.follow_motif => &[0, 2, 4],
         None if force_chords => &[0, 2],
         _ => &[0],
+    };
+    let arp_one;
+    let intervals: &[i8] = if guide.arp && intervals.len() > 1 {
+        arp_one = [intervals[(step_in_measure / 2) % intervals.len()]];
+        &arp_one
+    } else {
+        intervals
     };
     let mut out = Vec::with_capacity(intervals.len());
     for (ti, iv) in intervals.iter().enumerate() {
@@ -1656,6 +1671,45 @@ mod tests {
     }
 
     #[test]
+    fn rock_guitar_cuts_through_mix() {
+        // Рифф слышно: гитара дает не меньше 24 нот за 24 такта дефолта.
+        // Было: в 40 раз тише баса (замолчена фаззом, октавой и уровнем).
+        use crate::instruments::Slot;
+        let style = make_style("rock").expect("rock");
+        let seed = 5u64;
+        let mut mixer = crate::mixer::MixerState::new();
+        crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+        let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+        let n = mixer.active_ids(&mut buf);
+        let active = buf[..n].to_vec();
+        let mut rng = rand::SeedableRng::seed_from_u64(seed);
+        let mut arranger = crate::arranger::Arranger::new(seed);
+        let mut song = arranger.advance_measure();
+        let mut heard = 0;
+        for _bar in 0..24 {
+            let mut sctx = StepContext {
+                step: 0,
+                step_in_measure: 0,
+                base_step_secs: style.base_step_secs(),
+                active_tracks: &active,
+                song: &song,
+                rng: &mut rng,
+                intensity: 1.0,
+            };
+            for sim in 0..16 {
+                sctx.step = sim;
+                sctx.step_in_measure = sim;
+                heard += render_style(&*style, &mut sctx)
+                    .into_iter()
+                    .filter(|nn| nn.instrument_id == Slot::Guitar.id())
+                    .count();
+            }
+            song = arranger.advance_measure();
+        }
+        assert!(heard >= 24, "riff inaudible: {heard}/24 bars");
+    }
+
+    #[test]
     fn style_contract_holds_across_styles() {
         // Контракт фазы 1: лицо каждого стиля как измеримые свойства
         // дефолтного микса за 24 такта. Свобода реализации внутри —
@@ -1830,19 +1884,21 @@ mod tests {
     }
 
     #[test]
-    fn lofi_guitar_strums_partial_chords() {
-        // Бой: гитара озвучивает трезвучие от ступени темы, sounding step = 3 ноты.
-        // Полюса: синкопы и ровные восьмые (ref: Coming Home — ~8 ударов/такт).
+    fn lofi_guitar_fingerpicks_arp() {
+        // Фигнерпикинг: один интервал за удар, вкруговую по трезвучию
+        // (sounding step = 1 нота). Бой-аккорды стеком давали щелкающую
+        // кашу вместо струны.
         use crate::instruments::Slot;
         let style = lofi::LofiStyle::new();
         assert!((1.4..=1.8).contains(&style.swing_ratio()), "swing out of dusty band");
         let guides = style.slot_guides();
         let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();
-        let iv = guides[gi].chord.expect("strum voicing");
+        assert!(guides[gi].arp, "guitar must fingerpick");
+        let iv = guides[gi].chord.expect("arp source");
         assert_eq!(iv.to_vec(), vec![0i8, 2, 4]);
         let active = vec![Slot::Guitar.id()];
         let mut rng = rand::SeedableRng::seed_from_u64(17);
-        let mut onsets = 0;
+        let mut heard: Vec<u8> = Vec::new();
         for phrase in 0..8usize {
             let mut song = test_song(0.5);
             song.phrase_index = phrase;
@@ -1859,15 +1915,15 @@ mod tests {
                 sctx.step = sim;
                 sctx.step_in_measure = sim;
                 let notes = render_style(&style, &mut sctx);
-                if !notes.is_empty() {
-                    assert_eq!(notes.len(), 3, "phrase {phrase} step {sim}: not a strum");
-                    onsets += 1;
-                }
+                // Один интервал за удар, не стек.
+                assert!(notes.len() <= 1, "phrase {phrase} step {sim}: stack");
+                heard.extend(notes.iter().map(|n| n.midi_pitch));
             }
         }
-        // Пол против исчезновения боя: даунстроуки-якоря держат
-        // минимум 3 удара на такт в среднем.
-        assert!(onsets >= 24, "strumming gone: {onsets}/8 bars");
+        // Перебор гуляет по струнам, а не топчется на одной ноте.
+        let distinct: std::collections::HashSet<u8> = heard.iter().copied().collect();
+        assert!(heard.len() >= 24, "strumming gone: {}/8 bars", heard.len());
+        assert!(distinct.len() > 2, "arp stuck: {distinct:?}");
     }
 
     #[test]

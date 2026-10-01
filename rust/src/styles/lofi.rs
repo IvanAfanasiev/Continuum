@@ -355,6 +355,7 @@ impl Style for LofiStyle {
             follow_motif: true,
             chord: Some(STRUM_IV),
             alt: Some(GUITAR_W),
+            arp: true,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 1.8, 0.85)
         };
         // Дождь: ровная пелена во все фразы. Тише винила и музыки.
