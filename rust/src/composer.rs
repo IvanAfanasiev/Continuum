@@ -276,7 +276,9 @@ impl Composer {
         apply_leader_balance(&mut notes, effective);
 
         self.step_count += 1;
-        let duration = swing_step_secs(base_step_secs, style.swing_ratio(), step_in_measure);
+        // Свинг сида поверх стиля: у каждого сида свой кач.
+        let swing = style.swing_ratio() * crate::styles::swing_var(self.song.seed_hash);
+        let duration = swing_step_secs(base_step_secs, swing, step_in_measure);
         (notes, duration)
     }
 

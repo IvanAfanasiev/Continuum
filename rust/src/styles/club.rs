@@ -31,6 +31,11 @@ const LEAD_W: &[f32] = &[
 const STAB_W: &[f32] = &[
     0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0,
 ];
+// Клэп с гостами: бэкбит держат якоря, между — шепот шестнадцатых.
+const CLAP_GHOST_W: &[f32] = &[
+    0.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.4,
+];
+const SNARE_POLES: &[&[f32]] = &[CLAP_W, CLAP_GHOST_W];
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
@@ -50,7 +55,11 @@ const KICK_SYNCOP_W: &[f32] = &[
 const KICK_DRIVE8_W: &[f32] = &[
     1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.8, 0.6,
 ];
-const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W];
+// Драйв с оффбитными толчками: четверка плюс синкопа на слабых.
+const KICK_PUSH_W: &[f32] = &[
+    1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0, 0.6, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0, 0.5,
+];
+const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W, KICK_PUSH_W];
 const BASS_ALT_W: &[f32] = &[
     0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0,
 ];
@@ -193,6 +202,7 @@ impl Style for ClubStyle {
         let snare = RoleGuide {
             climax_boost: 0.7,
             vel_base: 0.95,
+            poles: Some(SNARE_POLES),
             ..RoleGuide::kit(CLAP_W, 38, 0.95)
         };
         let hat = RoleGuide {

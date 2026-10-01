@@ -577,6 +577,13 @@ pub(crate) fn tonic_shift_for(seed_hash: u64) -> i8 {
     (crate::arranger::splitmix64(seed_hash ^ 0x701C) % 5) as i8 - 2
 }
 
+/// Свинг сида: множитель 0.95..1.05 к свингу стиля — у каждого сида
+/// свой кач (слышно!), жанр цел (отклонение ±5%). Детерминирован.
+pub(crate) fn swing_var(seed_hash: u64) -> f32 {
+    let h = crate::arranger::splitmix64(seed_hash ^ 0x5716);
+    0.95 + 0.1 * ((h >> 32) as f32 / (u32::MAX as f32))
+}
+
 /// Модальный вариант от сида: дорийская секста / фригийская секунда /
 /// блюзовая нота. Та же гамма с другим характером.
 fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
@@ -2207,6 +2214,69 @@ mod tests {
         assert!(is_anchor_step(&guide, &song, false, 0, 0));
         assert!(!is_anchor_step(&guide, &song, false, 0, 1));
         assert!(!is_anchor_step(&guide, &song, false, 0, 2));
+    }
+
+    #[test]
+    fn swing_varies_by_seed_within_band() {
+        // Свинг сида: 0.95..1.05, детерминирован, реально варьируется
+        // (min ниже 0.98, max выше 1.02) — у сидов разный кач.
+        for h in [0u64, 1, 42, 777, 424242] {
+            let v = swing_var(h);
+            assert!((0.95..=1.05).contains(&v), "swing out of band: {v}");
+            assert_eq!(v, swing_var(h), "not deterministic");
+        }
+        let vals: Vec<f32> = (0..64u64).map(swing_var).collect();
+        assert!(
+            vals.iter().cloned().fold(1.0f32, f32::min) < 0.98
+                && vals.iter().cloned().fold(0.0f32, f32::max) > 1.02,
+            "swing never varies"
+        );
+    }
+
+    #[test]
+    fn kick_vocabularies_differ_by_seed() {
+        // Словарь битов: concatenated kick-рисунки 8 тактов различаются
+        // у разных сидов (у каждого сида свой бит, а не один на стиль).
+        use crate::instruments::Slot;
+        for name in style_names() {
+            let style = make_style(name).expect("style");
+            let mut pats = std::collections::HashSet::new();
+            for seed in 0..12u64 {
+                let mut mixer = crate::mixer::MixerState::new();
+                crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+                let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+                let n = mixer.active_ids(&mut buf);
+                let active = buf[..n].to_vec();
+                let mut rng = rand::SeedableRng::seed_from_u64(seed);
+                let mut arranger = crate::arranger::Arranger::new(seed);
+                let mut song = arranger.advance_measure();
+                let mut pat = Vec::new();
+                for _bar in 0..8 {
+                    let mut sctx = StepContext {
+                        step: 0,
+                        step_in_measure: 0,
+                        base_step_secs: style.base_step_secs(),
+                        active_tracks: &active,
+                        song: &song,
+                        rng: &mut rng,
+                        intensity: 1.0,
+                    };
+                    for sim in 0..16 {
+                        sctx.step = sim;
+                        sctx.step_in_measure = sim;
+                        if render_style(&*style, &mut sctx)
+                            .into_iter()
+                            .any(|nn| nn.instrument_id == Slot::Kick.id())
+                        {
+                            pat.push(sim);
+                        }
+                    }
+                    song = arranger.advance_measure();
+                }
+                pats.insert(pat);
+            }
+            assert!(pats.len() >= 6, "{name}: one beat per style ({})", pats.len());
+        }
     }
 
     #[test]
