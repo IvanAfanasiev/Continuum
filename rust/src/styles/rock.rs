@@ -183,7 +183,6 @@ impl Style for RockStyle {
         // Вдавленная бочка: якоря в пол, компрессия — в миксе.
         // Заливка умеренная, чтобы не ломать бит очередью.
         let kick = RoleGuide {
-            climax_boost: 0.4,
             vel_base: 1.0,
             vel_energy: 0.0,
             vel_jitter: 0.02,
@@ -197,7 +196,6 @@ impl Style for RockStyle {
         };
         // Хлесткий снейр: транзиент + тело. Заливка умеренная.
         let snare = RoleGuide {
-            climax_boost: 0.45,
             vel_base: 0.9,
             vel_jitter: 0.04,
             poles: Some(SNARE_POLES),
@@ -318,7 +316,6 @@ impl Style for RockStyle {
         // Рев вместо гитар: рифф по мотиву сида, стена на дропе.
         let fuzz = RoleGuide {
             energy_response: 1.6,
-            climax_boost: 0.2,
             duration_mult: 0.7,
             vel_base: 0.65,
             vel_energy: 0.2,

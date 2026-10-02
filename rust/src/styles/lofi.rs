@@ -39,21 +39,14 @@ const BED_W: &[f32] = &[
 const FLUTE_W: &[f32] = &[
     0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0,
 ];
-// Фингерпикинг гитары: синкопы между долями, даунстроуки на долях —
-// якоря держат бой сквозь морфинг (иначе начало секций молчит).
-const GUITAR_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.6,
-    0.4,
-];
 // База боя — ровные восьмые (ref: Coming Home); даунстроуки на долях —
-// якоря (бой слышно всегда), апстроуки заполняют. Синкопы приходят
-// морфингом к концу секции (терн-араунд).
+// якоря (бой слышно всегда), апстроуки заполняют.
 const GUITAR_STRUM8_W: &[f32] = &[
     1.0, 0.0, 0.65, 0.0, 1.0, 0.0, 0.65, 0.0, 1.0, 0.0, 0.65, 0.0, 1.0, 0.0,
     0.65, 0.4,
 ];
 // Второй бум-бэп: синкопа уехала с 7 на 6, ответ с 10 на 12.
-const KICK_ALT_W: &[f32] = &[
+const KICK_BOOM_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.35, 0.0, 0.2, 0.0, 0.0, 0.0,
 ];
 // Халф-тайм: бочка на 1 и 2, воздух вместо суеты.
@@ -66,11 +59,8 @@ const KICK_HALF_W: &[f32] = &[
 const KICK_SYNCOP_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.4, 0.0,
 ];
-const KICK_POLES: &[&[f32]] = &[KICK_W, KICK_ALT_W, KICK_SYNCOP_W, KICK_HALF_W];
-const BASS_ALT_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-];
-const HAT_ALT_W: &[f32] = &[
+const KICK_POLES: &[&[f32]] = &[KICK_W, KICK_BOOM_W, KICK_SYNCOP_W, KICK_HALF_W];
+const HAT_EVEN_W: &[f32] = &[
     0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45,
 ];
 // Разреженные оффбиты (ref: Snowman, Redbone — только слабые доли,
@@ -78,13 +68,7 @@ const HAT_ALT_W: &[f32] = &[
 const HAT_SPARSE_W: &[f32] = &[
     0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.4,
 ];
-const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_ALT_W, HAT_SPARSE_W];
-const PLUCK_ALT_W: &[f32] = &[
-    0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0,
-];
-const KEYS_ALT_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0,
-];
+const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_EVEN_W, HAT_SPARSE_W];
 
 pub struct LofiStyle {}
 
@@ -207,7 +191,6 @@ impl Style for LofiStyle {
                 jitter: 0,
             },
             vel_high_cut: 0.6,
-            alt: Some(BASS_ALT_W),
             sub_bias: 0.4,
             ..RoleGuide::pitched(BASS_W, 0, -1, 0, 6.0, 0.5)
         };
@@ -215,7 +198,6 @@ impl Style for LofiStyle {
             energy_response: 0.8,
             vel_base: 0.9,
             vel_jitter: 0.1,
-            alt: Some(KICK_ALT_W),
             poles: Some(KICK_POLES),
             ..RoleGuide::kit(KICK_W, 36, 0.9)
         };
@@ -241,7 +223,6 @@ impl Style for LofiStyle {
             vel_base: 0.34,
             vel_energy: 0.15,
             vel_jitter: 0.08,
-            alt: Some(HAT_ALT_W),
             poles: Some(HAT_POLES),
             // Пульс вместо сетки: пыльные тики дышат, а не тикают.
             emergent_beats: 0.9,
@@ -259,7 +240,6 @@ impl Style for LofiStyle {
                 jitter: 0,
             },
             follow_motif: true,
-            alt: Some(PLUCK_ALT_W),
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 2.0, 0.5)
         };
         let keys = RoleGuide {
@@ -271,7 +251,6 @@ impl Style for LofiStyle {
                 octave: 1,
                 jitter: 2,
             },
-            alt: Some(KEYS_ALT_W),
             ..RoleGuide::pitched(KEYS_W, 0, 1, 2, 4.0, 0.6)
         };
         // Чужие слоты: приглушенные рабочие направляющие — включаются
@@ -342,8 +321,8 @@ impl Style for LofiStyle {
             ..RoleGuide::pitched(PLUCK_W, 0, 2, 3, 1.2, 0.4)
         };
         // Гитара: легкий бой неполными аккордами по мотиву сида.
-        // База — ровные восьмые (бой слышно), к концу секции морфинг
-        // в синкопы (терн-араунд). Ведущий голос lofi — чуть громче саба.
+        // База — ровные восьмые (бой слышно), апстроуки заполняют.
+        // Ведущий голос lofi — чуть громче саба.
         // Громкость выше порога открытых струн (0.6): в теме звонко,
         // в интро глухие ghost-удары. Трезвучие вместо одиночных щипков:
         // уют открытых струн, атака мягкая (голос).
@@ -360,7 +339,6 @@ impl Style for LofiStyle {
             },
             follow_motif: true,
             chord: Some(STRUM_IV),
-            alt: Some(GUITAR_W),
             arp: true,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 1.8, 0.85)
         };

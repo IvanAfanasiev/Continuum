@@ -42,10 +42,6 @@ const BED_W: &[f32] = &[
 const VOCAL_W: &[f32] = &[
     0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-// Вторые варианты скелета: другой грув той же роли, выбор — битом сида.
-const KICK_ALT_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.6, 0.0,
-];
 // Полюса кика (выбор — сидом на весь трек):
 // строгая четверка, синкопа с толчками (ref: Bad Angel),
 // драйв восьмыми (ref: Hysteria).
@@ -64,20 +60,14 @@ const KICK_PUSH_W: &[f32] = &[
     0.0,
 ];
 const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W, KICK_PUSH_W];
-const BASS_ALT_W: &[f32] = &[
-    0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0,
-];
-const HAT_ALT_W: &[f32] = &[
+const HAT_OFF_W: &[f32] = &[
     0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55,
 ];
 // Плотные шестнадцатые (ref: все три трека держат хэт почти весь такт).
 const HAT_BUSY16_W: &[f32] = &[
     0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.4, 0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.5,
 ];
-const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_ALT_W, HAT_BUSY16_W];
-const LASER_ALT_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0,
-];
+const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_OFF_W, HAT_BUSY16_W];
 // Кислота: плотная шестнадцатая линия с акцентами — сквелч течет,
 // а не квакает отдельными пинами. Якоря на оффбитах держат кач.
 const ACID_W: &[f32] = &[
@@ -181,7 +171,6 @@ impl Style for ClubStyle {
             octave_up: 0.15,
             top_pitch: 50,
             vel_high_cut: 0.6,
-            alt: Some(BASS_ALT_W),
             bass_fifth: true,
             // Глубокий ровный саб вместо струны: презенс-цепь придавлена,
             // фундамент — чистый синус. Рок держит струну (0.0).
@@ -192,10 +181,8 @@ impl Style for ClubStyle {
         let kick = RoleGuide {
             // Заливка перед дропом умеренная: пулемет вместо брейка
             // ломает бит (связка с даунбитом).
-            climax_boost: 0.4,
             vel_base: 0.95,
             vel_energy: 0.05,
-            alt: Some(KICK_ALT_W),
             poles: Some(KICK_POLES),
             ..RoleGuide::kit(FOUR_FLOOR, 36, 0.95)
         };
@@ -206,7 +193,6 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.5)
         };
         let snare = RoleGuide {
-            climax_boost: 0.45,
             vel_base: 0.95,
             poles: Some(SNARE_POLES),
             ..RoleGuide::kit(CLAP_W, 38, 0.95)
@@ -220,7 +206,6 @@ impl Style for ClubStyle {
             vel_base: 0.65,
             vel_energy: 0.35,
             vel_jitter: 0.1,
-            alt: Some(HAT_ALT_W),
             poles: Some(HAT_POLES),
             // Первый emergent-слот: хэт бьет собственным пульсом из сида
             // (фэйзинг вместо паттерна), веса/полюса — запасной путь.
@@ -232,7 +217,6 @@ impl Style for ClubStyle {
         // чопы) — текстура вокруг темы, а не замена ей.
         let pluck = RoleGuide {
             energy_response: 1.5,
-            climax_boost: 0.2,
             duration_mult: 0.9,
             vel_base: 0.45,
             vel_energy: 0.3,
@@ -262,7 +246,6 @@ impl Style for ClubStyle {
         // 808 следует за баслайном (слайды между фразами), тот же four-floor.
         // Перед дропом — саб-ролл: удар вместо звона тарелки.
         let kick808 = RoleGuide {
-            climax_boost: 0.4,
             vel_base: 0.95,
             vel_energy: 0.05,
             voice: Voicing::Scale {
@@ -270,12 +253,10 @@ impl Style for ClubStyle {
                 octave: -1,
                 jitter: 0,
             },
-            alt: Some(KICK_ALT_W),
             ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, 1.0, 0.95)
         };
         let laser = RoleGuide {
             energy_response: 2.0,
-            climax_boost: 0.4,
             duration_mult: 1.0,
             vel_base: 0.5,
             vel_energy: 0.3,
@@ -286,7 +267,6 @@ impl Style for ClubStyle {
                 jitter: 2,
             },
             follow_motif: true,
-            alt: Some(LASER_ALT_W),
             ..RoleGuide::pitched(LEAD_W, 0, 2, 2, 1.0, 0.5)
         };
         // Вокальные чопы из deep-наследия: задранные, короткие, в эхе.
@@ -294,7 +274,6 @@ impl Style for ClubStyle {
         // Текут через секции, а не мигают (отклик сглажен).
         let vocal = RoleGuide {
             energy_response: 1.2,
-            climax_boost: 0.4,
             duration_mult: 1.6,
             vel_base: 0.55,
             vel_energy: 0.15,
@@ -327,7 +306,6 @@ impl Style for ClubStyle {
         };
         let festival = RoleGuide {
             energy_response: 2.2,
-            climax_boost: 0.3,
             duration_mult: 0.8,
             vel_base: 0.5,
             vel_energy: 0.3,

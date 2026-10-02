@@ -86,28 +86,19 @@ pub enum Voicing {
 /// `weights` — веса шагов такта (длина = steps_per_measure стиля):
 /// 1.0 — якорь (почти всегда играет: приоритет 0.95, даунбит дышит),
 /// 0.0 — никогда, между — порог фиксированного гейта сида.
-/// Итоговая вероятность: `w * energy² * energy_response (+ climax_boost)`.
-/// Гейт НЕ кубик: шаг звучит, если хэш(сид, слот, шаг, секция) ниже порога.
-/// Тот же сид — тот же грув такт в такт; другой сид — другой грув.
+/// Итоговая вероятность: `w * energy² * energy_response`.
+/// Гейт НЕ кубик: шаг звучит, если хэш(сид, слот, шаг, фраза) ниже порога.
+/// Тот же сид — тот же поток фраз; другой сид — другой.
 /// Квадрат энергии держит куплеты разреженными, а дроп — плотным.
-/// `alt` — второй полюс морфинга (другой грув той же роли).
 /// `poles` — набор из 2–4 готовых грувов (бит!): фраза выбирает один
 /// полюс детерминированно от (сид, слот, фраза). Разные фразы — разный
 /// бит, тот же сид — тот же бесконечный поток грувов.
-/// Если полюса заданы, `weights` игнорируется (морфинг идет к `alt`,
-/// если он есть, иначе полюс статичен).
-/// Направление морфинга — битом хэша сида: сиды дышат по-разному,
-/// внутри сида дыхание стабильно. Нет `alt` = статичный паттерн.
-/// Итоговая вероятность: `w * energy² * energy_response (+ climax_boost)`.
-/// Квадрат энергии держит куплеты разреженными, а дроп — плотным.
+/// Если полюса заданы, `weights` игнорируется.
 #[derive(Clone, Copy)]
 pub struct RoleGuide {
     pub weights: &'static [f32],
-    pub alt: Option<&'static [f32]>,
     pub poles: Option<&'static [&'static [f32]]>,
     pub energy_response: f32,
-    /// Всплеск вероятности в последнем такте секции (роллы, заливки).
-    pub climax_boost: f32,
     /// Молчать во второй половине последнего такта (брейк-пауза).
     pub drop_before_climax: bool,
     /// Играть каждый N-й такт (пэды через такт и т.п.). 1 = всегда.
@@ -169,10 +160,8 @@ impl RoleGuide {
     /// Пустая направляющая: слот молчит и не трогает RNG.
     pub const SILENT: Self = Self {
         weights: &[],
-        alt: None,
         poles: None,
         energy_response: 0.0,
-        climax_boost: 0.0,
         drop_before_climax: false,
         every_n_measures: 1,
         long_offbeats: false,
@@ -204,10 +193,8 @@ impl RoleGuide {
     pub const fn kit(weights: &'static [f32], pitch: u8, vel: f32) -> Self {
         Self {
             weights,
-            alt: None,
             poles: None,
             energy_response: 1.0,
-            climax_boost: 0.0,
             drop_before_climax: false,
             every_n_measures: 1,
             long_offbeats: false,
@@ -242,10 +229,8 @@ impl RoleGuide {
     ) -> Self {
         Self {
             weights,
-            alt: None,
             poles: None,
             energy_response: 1.0,
-            climax_boost: 0.0,
             drop_before_climax: false,
             every_n_measures: 1,
             long_offbeats: false,
@@ -425,14 +410,12 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         if guide.is_silent() {
             continue;
         }
-        let alt_pick = ((sctx.song.seed_hash >> i) & 1) == 1;
         let n = role_n[slot.role().index()].max(1) as f32;
         let slot_notes = play_guide(
             guide,
             scale,
             sctx.song,
             energy,
-            alt_pick,
             sctx.step_in_measure,
             style.steps_per_measure(),
             sctx.base_step_secs,
@@ -449,7 +432,6 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             && !is_anchor_step(
                 guide,
                 sctx.song,
-                alt_pick,
                 i,
                 sctx.step_in_measure,
             )
@@ -470,9 +452,8 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         if guide.is_silent() {
             continue;
         }
-        // Выбор ритмического варианта — битом хэша сида по номеру слота:
-        // детерминирован внутри сида, независим между слотами.
-        let alt_pick = ((sctx.song.seed_hash >> i) & 1) == 1;
+        // Морфинга нет: полюс выбирает фраза, плотность — энергия.
+        // Рисунок внутри секции стабилен, между фразами пересдается.
         let n = role_n[slot.role().index()].max(1) as f32;
         // Сгущение в диады — только мелодическим питчевым при пустых
         // аккордовых. Остальные играют как написано.
@@ -487,7 +468,6 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             scale,
             sctx.song,
             energy,
-            alt_pick,
             sctx.step_in_measure,
             style.steps_per_measure(),
             sctx.base_step_secs,
@@ -524,14 +504,13 @@ const ANCHOR_PRIOR: f32 = 0.95;
 /// Соль якорного гейта: независимый бросок от остальных гейтов слота.
 const ANCHOR_SALT: u64 = 0xA11CE;
 
-/// Якорный ли шаг для гайда: вес после выбора полюса и морфинга ≥ 1.0.
+/// Якорный ли шаг для гайда: вес после выбора полюса ≥ 1.0.
 /// Та же формула, что в play_guide (без гейтов): бас по ней узнает,
 /// даунбит это (играем вместе) или заливка (пригибаемся).
 /// Emergent-слоты якорей не имеют по построению.
 fn is_anchor_step(
     guide: &RoleGuide,
     song: &SongContext,
-    alt_pick: bool,
     slot_idx: usize,
     step_in_measure: usize,
 ) -> bool {
@@ -547,10 +526,7 @@ fn is_anchor_step(
         ) % poles.len() as u64;
         w = poles[pick as usize].get(step_in_measure).copied().unwrap_or(0.0);
     }
-    let alt_w = guide.alt.and_then(|a| a.get(step_in_measure).copied()).unwrap_or(w);
-    let (from_w, to_w) = if alt_pick { (alt_w, w) } else { (w, alt_w) };
-    let morph = song.progress.clamp(0.0, 1.0);
-    from_w + (to_w - from_w) * morph >= 1.0
+    w >= 1.0
 }
 
 /// Затухание тонов аккорда: корень в полную силу, верх тише.
@@ -685,7 +661,6 @@ fn play_guide(
     scale: &[u8],
     song: &SongContext,
     energy: f32,
-    alt_pick: bool,
     step_in_measure: usize,
     steps_per_measure: usize,
     base_step_secs: f32,
@@ -709,11 +684,13 @@ fn play_guide(
     kick_fill: bool,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
+    // Вес шага: полюс фразы или веса такта. Без морфинга и заливок:
+    // плотность секции задают только энергия и структура.
     // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
     // от (сид, слот, фраза). Один сид = один бесконечный неповторяющийся
     // поток грувов, тот же сид всегда дает тот же поток.
     let base_w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
-    let base_w = if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
+    let weight = if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
         let pick = crate::arranger::splitmix64(
             song.seed_hash
                 ^ (slot_idx as u64).wrapping_mul(0x9E3779B9)
@@ -726,21 +703,6 @@ fn play_guide(
     } else {
         base_w
     };
-    // Морфинг паттерна внутри секции: вес плывет от одного полюса
-    // к другому по мере прогресса — партия «раскрывается» к концу,
-    // а не крутится по кругу. Направление (base→alt или alt→base) —
-    // битом сида: сиды дышат по-разному.
-    let alt_w = guide
-        .alt
-        .and_then(|a| a.get(step_in_measure).copied())
-        .unwrap_or(base_w);
-    let (from_w, to_w) = if alt_pick {
-        (alt_w, base_w)
-    } else {
-        (base_w, alt_w)
-    };
-    let morph = song.progress.clamp(0.0, 1.0);
-    let weight = from_w + (to_w - from_w) * morph;
     if weight <= 0.0 {
         return Vec::new();
     }
@@ -799,11 +761,9 @@ fn play_guide(
             // и густые сиды одного стиля. Доля роли: носителей несколько —
             // каждый реже (делят пространство), один — в полную силу.
             // Якоря идут своим приоритетом и не масштабируются.
-            let mut p =
+            // Заливок больше нет: кульминация — это энергия, а не буст.
+            let p =
                 weight * energy * energy * guide.energy_response * song.density * role_share;
-            if climax {
-                p += guide.climax_boost;
-            }
             p.clamp(0.0, 1.0)
         };
         // Гейт сида: решение зависит от (сид, слот, шаг, фраза), поэтому грув
@@ -1064,28 +1024,6 @@ mod tests {
         }
     }
 
-    const MORPH_BASE: &[f32] = &[0.2; 16];
-    const MORPH_ALT: &[f32] = &[0.8; 16];
-
-    fn morph_hits(progress: f32, alt_pick: bool) -> usize {
-        let guide = RoleGuide {
-            weights: MORPH_BASE,
-            alt: Some(MORPH_ALT),
-            ..RoleGuide::kit(MORPH_BASE, 36, 0.9)
-        };
-        let song = test_song(progress);
-        let mut rng = rand::SeedableRng::seed_from_u64(7);
-        // Гейт фиксирован сидом: считаем РАЗНЫЕ шаги (0..16), а не повторы.
-        (0..16)
-            .filter(|step| {
-                !play_guide(
-                    &guide, &[48], &song, 1.0, alt_pick, *step, 16, 0.1, 2, 0, 1.0, false, false, 0, false, &mut rng,
-                )
-                .is_empty()
-            })
-            .count()
-    }
-
     #[test]
     fn energy_shapes_are_sane() {
         // Кривая каждого стиля: монотонна, в разумных пределах,
@@ -1110,7 +1048,7 @@ mod tests {
 
     #[test]
     fn guide_data_matches_grid() {
-        // Веса и альтернативы обязаны совпадать с сеткой стиля,
+        // Веса обязаны совпадать с сеткой стиля,
         // иначе шаги молча гаснут (.get → None → 0.0).
         // Вайтлист — только из известных слотов.
         for name in style_names() {
@@ -1121,9 +1059,6 @@ mod tests {
             }
             for (i, guide) in style.slot_guides().iter().enumerate() {
                 assert_eq!(guide.weights.len(), spm, "{name} slot {i}: weights len");
-                if let Some(alt) = guide.alt {
-                    assert_eq!(alt.len(), spm, "{name} slot {i}: alt len");
-                }
                 if let Some(poles) = guide.poles {
                     assert!(!poles.is_empty(), "{name} slot {i}: empty poles");
                     for (j, pole) in poles.iter().enumerate() {
@@ -1132,21 +1067,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn morph_opens_pattern_toward_section_end() {
-        // base 0.2 → alt 0.8: в начале секции проходит мало шагов,
-        // в конце — почти все. Обратное направление — зеркально.
-        // Гейты детерминированы: числа фиксированы, флейка нет.
-        let early_fwd = morph_hits(0.0, false);
-        let late_fwd = morph_hits(1.0, false);
-        assert!(late_fwd > early_fwd, "{early_fwd} vs {late_fwd}");
-        assert!(late_fwd >= 10, "morph does not open: {late_fwd}");
-        assert!(early_fwd <= 6, "morph leaks early: {early_fwd}");
-        let early_rev = morph_hits(0.0, true);
-        let late_rev = morph_hits(1.0, true);
-        assert!(early_rev > late_rev, "{early_rev} vs {late_rev}");
     }
 
     fn motif_pitches(motif: [u8; 8]) -> Vec<u8> {
@@ -1167,7 +1087,6 @@ mod tests {
                     &scale,
                     &song,
                     1.0,
-                    false,
                     step * 2,
                     16,
                     0.1,
@@ -1208,7 +1127,6 @@ mod tests {
                     &scale,
                     &song_b,
                     1.0,
-                    false,
                     step * 2,
                     16,
                     0.1,
@@ -1258,7 +1176,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, false, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, false, &mut rng,
+                    &guide, &[48], &song, 1.0, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, false, &mut rng,
                 )
                 .is_empty()
             })
@@ -1276,7 +1194,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, false, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, false, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -1303,7 +1221,7 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, false, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -1470,7 +1388,7 @@ mod tests {
             (0..8)
                 .filter_map(|step| {
                     play_guide(
-                        &guide, &scale, &song, 1.0, false, step * 2, 16, 0.1, 6, 5, 1.0, false,
+                        &guide, &scale, &song, 1.0, step * 2, 16, 0.1, 6, 5, 1.0, false,
                         false, 0, false, &mut rng,
                     )
                     .into_iter()
@@ -1516,7 +1434,7 @@ mod tests {
         let full_line: Vec<u8> = (0..16)
             .map(|step| {
                 play_guide(
-                    &anchor_motif, scale, &song, 1.0, false, step, spm, 0.1, 6, 5, 1.0,
+                    &anchor_motif, scale, &song, 1.0, step, spm, 0.1, 6, 5, 1.0,
                     false, false, 0, false, &mut rng,
                 )
                 .into_iter()
@@ -1531,7 +1449,7 @@ mod tests {
             (0..16)
                 .filter_map(|step| {
                     play_guide(
-                        &guides[ki], scale, &song, 1.0, false, step, spm, 0.1,
+                        &guides[ki], scale, &song, 1.0, step, spm, 0.1,
                         Slot::Keys.id(), ki, 1.0, force, false, 0, false, &mut rng,
                     )
                     .into_iter()
@@ -1730,7 +1648,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 3,
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 3,
             2, 1.0, false, false, 0, false, &mut rng,
         );
         assert!(!notes.is_empty());
@@ -1754,7 +1672,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 1,
             0, 1.0, false, false, 0, false, &mut rng,
         );
         assert!(!notes.is_empty());
@@ -1762,7 +1680,7 @@ mod tests {
         guide.sub_bias = 0.0;
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, false, 0, 8, 0.1, 1,
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 1,
             0, 1.0, false, false, 0, false, &mut rng,
         );
         assert_eq!(notes[0].sub_bias, 0.0);
@@ -1949,7 +1867,7 @@ mod tests {
             song.seed_hash = hash;
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
-                &guide, &scale, &song, 1.0, false, step, 16, 0.1, 6, 5, 1.0,
+                &guide, &scale, &song, 1.0, step, 16, 0.1, 6, 5, 1.0,
                 false, false, 0, false, &mut rng,
             )
             .into_iter()
@@ -2040,7 +1958,7 @@ mod tests {
             song.prog = [0, 3, 1, 2];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             if let Some(n) = play_guide(
-                &guide, &scale, &song, 1.0, false, 0, 8, 0.1, 1, 0, 1.0, false,
+                &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false,
                 false, 0, false, &mut rng,
             )
             .into_iter()
@@ -2191,7 +2109,7 @@ mod tests {
         let call = |fill: bool| {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
-                &guide, &scale, &song, 1.0, false, 0, 8, 0.1, 1, 0, 1.0, false,
+                &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false,
                 false, 0, fill, &mut rng,
             )
             .into_iter()
@@ -2211,9 +2129,9 @@ mod tests {
             weights: &[1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             ..RoleGuide::kit(&[1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 36, 0.9)
         };
-        assert!(is_anchor_step(&guide, &song, false, 0, 0));
-        assert!(!is_anchor_step(&guide, &song, false, 0, 1));
-        assert!(!is_anchor_step(&guide, &song, false, 0, 2));
+        assert!(is_anchor_step(&guide, &song, 0, 0));
+        assert!(!is_anchor_step(&guide, &song, 0, 1));
+        assert!(!is_anchor_step(&guide, &song, 0, 2));
     }
 
     #[test]
@@ -2283,7 +2201,7 @@ mod tests {
     fn kick_leaves_breath_before_downbeat() {
         // Фламы на стыке такта запрещены: 15-й шаг киковых направляющих
         // тише 0.3 во всех стилях (связка 14-15-0 ломала бит очередью).
-        // Проверяются веса, альтернативы и все полюса кик-слотов.
+        // Проверяются веса и все полюса кик-слотов.
         use crate::instruments::Slot;
         for name in style_names() {
             let style = make_style(name).expect("known style");
@@ -2292,9 +2210,6 @@ mod tests {
                 let gi = Slot::ALL.iter().position(|s| *s == slot).unwrap();
                 let g = &guides[gi];
                 let mut arrs: Vec<&[f32]> = vec![g.weights];
-                if let Some(alt) = g.alt {
-                    arrs.push(alt);
-                }
                 if let Some(poles) = g.poles {
                     arrs.extend(poles.iter().copied());
                 }
@@ -2307,21 +2222,6 @@ mod tests {
                         );
                     }
                 }
-            }
-        }
-    }
-
-    #[test]
-    fn climax_fills_stay_moderate() {
-        // Заливки перед дропом — подъем, а не пулемет: буст ≤ 0.45 везде.
-        for name in style_names() {
-            let style = make_style(name).expect("known style");
-            for (i, guide) in style.slot_guides().iter().enumerate() {
-                assert!(
-                    guide.climax_boost <= 0.45,
-                    "{name} slot {i}: fill {v} breaks the beat",
-                    v = guide.climax_boost
-                );
             }
         }
     }
@@ -2341,7 +2241,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, false, 0, 8, 0.1, 7, 6, 1.0, false, false, 0, false, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, 0, 8, 0.1, 7, 6, 1.0, false, false, 0, false, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -2368,7 +2268,7 @@ mod tests {
             total += (0..16)
                 .filter(|step| {
                     !play_guide(
-                        &guide, &[48], &song, 1.0, false, *step, 16, 0.1, 6, 5, share,
+                        &guide, &[48], &song, 1.0, *step, 16, 0.1, 6, 5, share,
                         false, false, 0, false, &mut rng,
                     )
                     .is_empty()
@@ -2406,7 +2306,7 @@ mod tests {
                 for step in 0..8 {
                     out.push(
                         !play_guide(
-                            &anchor, &[48], &song, 1.0, false, step, 8, 0.1, 2, 0,
+                            &anchor, &[48], &song, 1.0, step, 8, 0.1, 2, 0,
                             share, false, false, 0, false, &mut rng,
                         )
                         .is_empty(),

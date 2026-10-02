@@ -1430,12 +1430,10 @@ mod tests {
     }
 
     #[test]
-    fn alt_grooves_engage_on_some_seeds() {
-        // 808-й в club: база — чистая four-floor (шага 14 нет),
-        // альтернатива — с пушем на 14-м шаге. Обе ветки обязаны
-        // встречаться: иначе alt-данные мертвы.
-        // (808-й вне дефолта club — тестируем направляющую напрямую,
-        // активны все слоты.)
+    fn pole_grooves_engage_on_some_seeds() {
+        // Полюса реально переключаются: синкопа кика на 14-м шаге
+        // встречается у одних сидов и отсутствует у других.
+        // (Морфинга больше нет — разнообразие только из полюсов и гейтов.)
         fn full_has_push(seed: u64) -> bool {
             let style = styles::make_style("club").expect("club");
             let active: Vec<usize> = Slot::ALL.iter().map(|s| s.id()).collect();
@@ -1458,7 +1456,7 @@ mod tests {
                     intensity: 1.0,
                 };
                 for note in render_style(&*style, &mut sctx) {
-                    if note.instrument_id == KICK808_ID && sim == 14 {
+                    if note.instrument_id == KICK_ID && sim == 14 {
                         return true;
                     }
                 }
@@ -1471,7 +1469,10 @@ mod tests {
                 with_push += 1;
             }
         }
-        assert!(with_push > 0, "alt branch never engages");
+        assert!(
+            with_push > 0 && with_push < 40,
+            "poles never vary: {with_push}/40"
+        );
     }
 
     #[test]
