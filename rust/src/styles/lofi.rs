@@ -69,6 +69,11 @@ const HAT_SPARSE_W: &[f32] = &[
     0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.4,
 ];
 const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_EVEN_W, HAT_SPARSE_W];
+// Шейкер: пыльные оффбиты.
+const SHAKER_LOFI_W: &[f32] = &[
+    0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7,
+    0.0,
+];
 
 pub struct LofiStyle {}
 
@@ -374,9 +379,17 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 0, 1, 1.0, 0.3)
         };
+        // Шейкер вне club: пыльные оффбиты для ручки фронта.
+        let shaker = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 0.4,
+            vel_base: 0.25,
+            vel_jitter: 0.06,
+            ..RoleGuide::kit(SHAKER_LOFI_W, 60, 0.25)
+        };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid,
+            festival, guitar, rain, fuzz, acid, shaker,
         ]
     }
 }

@@ -13,6 +13,7 @@ pub mod laser;
 pub mod pad;
 pub mod pluck;
 pub mod rain;
+pub mod shaker;
 pub mod snare;
 pub mod vinyl;
 pub mod vocal;
@@ -25,6 +26,7 @@ pub use hat::HiHat;
 pub use kick::Kick;
 pub use kick808::Kick808;
 pub use rain::Rain;
+pub use shaker::Shaker;
 pub use snare::SnareDrum;
 pub use vinyl::Vinyl;
 
@@ -144,10 +146,11 @@ pub enum Slot {
     Rain,
     Fuzz,
     Acid,
+    Shaker,
 }
 
 impl Slot {
-    pub const COUNT: usize = 17;
+    pub const COUNT: usize = 18;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -166,6 +169,7 @@ impl Slot {
         Slot::Rain,
         Slot::Fuzz,
         Slot::Acid,
+        Slot::Shaker,
     ];
 
     pub fn id(self) -> usize {
@@ -195,6 +199,7 @@ impl Slot {
             Slot::Rain => "rain",
             Slot::Fuzz => "fuzz",
             Slot::Acid => "acid",
+            Slot::Shaker => "shaker",
         }
     }
 
@@ -202,9 +207,9 @@ impl Slot {
         match self {
             Slot::Bass | Slot::Acid => InstrumentRole::Bass,
             Slot::Kick => InstrumentRole::Kick,
+            Slot::Hat | Slot::Shaker => InstrumentRole::Hat,
             Slot::Pad => InstrumentRole::Chords,
             Slot::Snare => InstrumentRole::Snare,
-            Slot::Hat => InstrumentRole::Hat,
             Slot::Pluck => InstrumentRole::Lead,
             Slot::Keys => InstrumentRole::Chords,
             Slot::Kick808 => InstrumentRole::Kick,
@@ -222,7 +227,7 @@ impl Slot {
             Slot::Bass | Slot::Acid => Group::Bass,
             Slot::Kick | Slot::Kick808 => Group::Kick,
             Slot::Snare => Group::Snare,
-            Slot::Hat => Group::Hat,
+            Slot::Hat | Slot::Shaker => Group::Hat,
             Slot::Pad | Slot::Keys => Group::Chords,
             Slot::Pluck | Slot::Laser => Group::Lead,
             Slot::Vocal => Group::Vocal,
@@ -254,6 +259,7 @@ impl Slot {
             Slot::Rain => 0.2,
             Slot::Fuzz => 0.7,
             Slot::Acid => 0.6,
+            Slot::Shaker => 0.55,
         }
     }
 }

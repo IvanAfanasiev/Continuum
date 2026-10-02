@@ -59,6 +59,12 @@ const KICK_PUSH_W: &[f32] = &[
     1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0, 0.6, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.0,
     0.0,
 ];
+// Шейкер: песок 16-х, оффбитные восьмые — якоря (шейкер ровный),
+// четверти и 16-е заполняют.
+const SHAKER_W: &[f32] = &[
+    0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3,
+    1.0, 0.4,
+];
 const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W, KICK_PUSH_W];
 const HAT_OFF_W: &[f32] = &[
     0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55,
@@ -126,26 +132,28 @@ impl Style for ClubStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Битмейкер: биты, ударные, бас и сквозной плак темы —
-        // у бита есть мелодическое лицо. Без клавишных стен,
-        // синтезаторов-верхов и шумовых подложек.
+        // Deep house: биты, ударные, бас, сквозной плак темы,
+        // Rhodes-стабы и шейкер. Без синтезаторных верхов
+        // и шумовых подложек.
         &[
             Slot::Bass,
             Slot::Kick,
             Slot::Snare,
             Slot::Hat,
             Slot::Pluck,
+            Slot::Keys,
+            Slot::Shaker,
         ]
     }
 
-    /// Гости битмейкера: чопы или Rhodes заходят по одному-два,
-    /// состав зависит от сида. Rhodes частый, чопы — редкая специя.
+    /// Гости deep house: соул-чопы или кислота по одной-две,
+    /// состав зависит от сида. Чопы чаще, кислота — специя.
     fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Vocal, Slot::Keys]
+        &[Slot::Vocal, Slot::Acid]
     }
 
     fn flex_weights(&self) -> &'static [f32] {
-        &[0.4, 1.0]
+        &[1.0, 0.5]
     }
 
     fn flex_range(&self) -> (usize, usize) {
@@ -365,9 +373,18 @@ impl Style for ClubStyle {
             poles: Some(ACID_POLES),
             ..RoleGuide::pitched(ACID_W, 0, 0, 1, 0.4, 0.65)
         };
+        // Шейкер deep house: песок 16-х поверх хэта, акцент на оффбитах.
+        let shaker = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 0.4,
+            vel_base: 0.5,
+            vel_energy: 0.15,
+            vel_jitter: 0.08,
+            ..RoleGuide::kit(SHAKER_W, 60, 0.5)
+        };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid,
+            festival, guitar, rain, fuzz, acid, shaker,
         ]
     }
 }

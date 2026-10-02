@@ -38,6 +38,11 @@ const HAT_P1: &[f32] = &[
     0.6, 0.4, 0.6, 0.4, 0.6, 0.4, 0.6, 0.4, 0.6, 0.4, 0.6, 0.4, 0.6, 0.4, 0.6, 0.4,
 ];
 const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_P1];
+// Шейкер: ровные восьмые, тихо.
+const SHAKER_ROCK_W: &[f32] = &[
+    0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6,
+    0.0,
+];
 
 const BASS_W: &[f32] = &[
     1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.0, 1.0, 0.0, 0.6, 0.5,
@@ -341,9 +346,17 @@ impl Style for RockStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 0, 1, 1.0, 0.3)
         };
+        // Шейкер вне club: тихий ровный слой для ручки фронта.
+        let shaker = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 0.4,
+            vel_base: 0.3,
+            vel_jitter: 0.06,
+            ..RoleGuide::kit(SHAKER_ROCK_W, 60, 0.3)
+        };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid,
+            festival, guitar, rain, fuzz, acid, shaker,
         ]
     }
 }
