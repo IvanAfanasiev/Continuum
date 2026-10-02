@@ -722,14 +722,21 @@ fn play_guide(
     if guide.climax_only && !climax {
         return Vec::new();
     }
-    // Акценты звучат не в каждой секции, а в некоторых ее визитах:
+    // Акценты звучат не в каждой фразе, а в некоторых:
     // крэш — каждый второй стык, лазеры/гимны/чопы — чаще, но тоже
-    // с пропусками. Конкретный выбор — гейтом сида от номера визита,
+    // с пропусками. Шаг — фраза (2 такта), а не визит: дырки короткие,
+    // инструменты дышат, а не пропадают на всю секцию.
+    // Конкретный выбор — гейтом сида от номера фразы,
     // поэтому это вариация сида, а не долбежка из раза в раз.
     // Фундамент (барабаны, бас, пэды, гитара) играет всегда.
     let prior = accent_prior(instrument_id);
     if prior < 1.0
-        && fixed_gate(song.seed_hash, slot_idx, song.stage % 64, 0xA66E47) >= prior
+        && fixed_gate(
+            song.seed_hash,
+            slot_idx,
+            song.phrase_index % 64,
+            0xA66E47
+        ) >= prior
     {
         return Vec::new();
     }
@@ -1221,17 +1228,17 @@ mod tests {
 
     #[test]
     fn accents_skip_some_visits() {
-        // Крэш с prior 0.5: за 17 визитов он есть не везде и не нигде —
-        // вариация сида, а не долбежка и не тишина.
+        // Акценты с prior звучат не в каждой фразе, но и не никогда:
+        // вариация сида, а не долбежка и не тишина. Шаг — фраза.
         let guide = RoleGuide {
             climax_only: true,
             ..RoleGuide::kit(&[1.0; 8], 74, 0.8)
         };
         let mut hits = 0;
-        for stage in 0..17 {
+        for phrase in 0..17usize {
             let mut song = test_song(0.9);
             song.is_last_measure = true;
-            song.stage = stage;
+            song.phrase_index = phrase;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
             if !play_guide(&guide, &[48], &song, 1.0, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, &mut rng)
@@ -1240,7 +1247,7 @@ mod tests {
                 hits += 1;
             }
         }
-        assert!(hits > 0 && hits < 17, "laser visits: {hits}/17");
+        assert!(hits > 0 && hits < 17, "laser phrases: {hits}/17");
     }
 
     #[test]

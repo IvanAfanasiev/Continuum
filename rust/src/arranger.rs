@@ -157,6 +157,9 @@ pub struct Arranger {
     motif: [u8; 8],
     motif_b: [u8; 8],
     prog: [u8; 4],
+    /// Сглаженные громкости ролей: едут к таблице полпути за такт,
+    /// а не прыгают на стыках (инструменты не гаснут/не врываются).
+    prev_gains: [f32; 8],
 }
 
 /// Детерминированный 64-битный хэш (splitmix64).
@@ -278,8 +281,12 @@ impl Arranger {
             motif,
             motif_b,
             prog: PROGS[(seed_hash % PROGS.len() as u64) as usize],
+            prev_gains: [1.0; 8],
         };
         a.enter_section();
+        // Старт без лага: сглаживание начинается с цели первого такта,
+        // глиссандо работает только на СМЕНАХ таблицы.
+        a.prev_gains = stage_gains_for(a.section(), 1.0 / a.section_len as f32, seed_hash);
         a
     }
 
@@ -334,6 +341,14 @@ impl Arranger {
         let phrase_index = self.total_measures / PHRASE_LENGTH_MEASURES
             + self.phrase_offset
             + (self.cycle as usize).wrapping_mul(CYCLE_PHRASE_JUMP);
+        // Глиссандо громкостей: полпути к таблице за такт. Стыки секций
+        // текут, а не щелкают — никто не гаснет и не врывается внезапно.
+        let target = stage_gains_for(section, progress, self.seed_hash);
+        let mut gains = self.prev_gains;
+        for (g, t) in gains.iter_mut().zip(target) {
+            *g += (t - *g) * 0.5;
+        }
+        self.prev_gains = gains;
 
         SongContext {
             section,
@@ -350,7 +365,7 @@ impl Arranger {
             is_last_measure: is_last,
             stage: self.stages_done as usize,
             cycle: self.cycle,
-            stage_gains: stage_gains_for(section, progress, self.seed_hash),
+            stage_gains: gains,
             seed_hash: self.seed_hash,
             density: self.density,
             motif: self.motif,
@@ -491,22 +506,18 @@ mod tests {
 
     #[test]
     fn main_gains_stable_across_visits() {
-        // Без реприз: все визиты темы в круге звучат одним балансом,
-        // мотив при этом неизменен.
+        // Без реприз: устоявшийся баланс темы одинаков во всех визитах.
+        // Сравниваем последние такты визитов (глиссандо уже доехало).
         let mut a = Arranger::new(1);
         let mut mains = Vec::new();
-        let mut last = SongSection::PostChorus;
-        let mut first = true;
         for _ in 0..200 {
             let ctx = a.advance_measure();
             if ctx.cycle > 0 {
                 break;
             }
-            if ctx.section == SongSection::MainMotif && (first || last != SongSection::MainMotif) {
+            if ctx.section == SongSection::MainMotif && ctx.is_last_measure {
                 mains.push(ctx.stage_gains);
             }
-            last = ctx.section;
-            first = false;
         }
         assert!(!mains.is_empty(), "no mains visited");
         for gains in &mains[1..] {
@@ -524,7 +535,9 @@ mod tests {
             if ctx.cycle > 0 {
                 break;
             }
-            if ctx.section == SongSection::PostChorus {
+            if ctx.section == SongSection::PostChorus && ctx.is_last_measure {
+                // Устоявшаяся передышка (глиссандо доехало): ритм катит,
+                // верх отдыхает. Первый такт переходный — не меряем.
                 let g = ctx.stage_gains;
                 let kick = InstrumentRole::Kick.index();
                 let hat = InstrumentRole::Hat.index();
