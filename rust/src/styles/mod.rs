@@ -520,9 +520,7 @@ fn is_anchor_step(
     let mut w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
     if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
         let pick = crate::arranger::splitmix64(
-            song.seed_hash
-                ^ (slot_idx as u64).wrapping_mul(0x9E3779B9)
-                ^ (song.phrase_index as u64).wrapping_mul(0x85EBCA6B),
+            song.seed_hash ^ (slot_idx as u64).wrapping_mul(0x9E3779B9),
         ) % poles.len() as u64;
         w = poles[pick as usize].get(step_in_measure).copied().unwrap_or(0.0);
     }
@@ -575,7 +573,8 @@ fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
 /// Решетка с периодом P шагов из сида: звучит, если в шаг попадает
 /// очередной тик. P несоизмерим с тактом (дробный, свой у каждого сида),
 /// поэтому рисунок дрейфует и не повторяется — фэйзинг вместо паттерна.
-/// P дышит энергией (в дропе чаще) и варьируется сидом ±25%.
+/// Период СТАТИЧЕН весь трек (разгона в дропе нет — бит держится);
+/// варьируется только сидом ±25%.
 /// Возвращает (fire, accent): акцент сильнее у четвертей.
 /// Чистая функция — состояния нет, тот же сид дает тот же поток.
 fn emergent_fire(
@@ -584,15 +583,13 @@ fn emergent_fire(
     step: usize,
     step_in_measure: usize,
     steps_per_measure: usize,
-    energy: f32,
     beats: f32,
 ) -> (bool, f32) {
     let h = crate::arranger::splitmix64(
         seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xE9E9E9,
     );
     let span = 0.75 + 0.5 * ((h >> 32) as f32 / (u32::MAX as f32));
-    let e = energy.clamp(0.0, 1.5);
-    let mut p = beats * span * steps_per_measure as f32 / 4.0 / (0.85 + 0.3 * e);
+    let mut p = beats * span * steps_per_measure as f32 / 4.0;
     p = p.clamp(1.25, 16.0);
     let s = step as f32;
     let fire = ((s + 1.0) / p).floor() > (s / p).floor();
@@ -655,6 +652,16 @@ pub(crate) fn envelope_shape(seed_hash: u64, slot_idx: usize) -> (f32, f32) {
     (0.8 + 1.0 * hi, 0.8 + 0.8 * lo)
 }
 
+/// Длительность ноты от сида 0.85..1.25, статична на (сид, слот):
+/// одни сиды играют протяжнее, другие отрывистее («медленнее/быстрее»).
+/// Ударные короткие по построению — им почти не влияет.
+pub(crate) fn duration_shape(seed_hash: u64, slot_idx: usize) -> f32 {
+    let h = crate::arranger::splitmix64(
+        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xD0A4,
+    );
+    0.85 + 0.4 * ((h >> 32) as f32 / (u32::MAX as f32))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn play_guide(
     guide: &RoleGuide,
@@ -684,17 +691,15 @@ fn play_guide(
     kick_fill: bool,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
-    // Вес шага: полюс фразы или веса такта. Без морфинга и заливок:
+    // Вес шага: полюс трека или веса такта. Без морфинга и заливок:
     // плотность секции задают только энергия и структура.
-    // Полюс грува: пересдается каждую фразу (2 такта) детерминированно
-    // от (сид, слот, фраза). Один сид = один бесконечный неповторяющийся
-    // поток грувов, тот же сид всегда дает тот же поток.
+    // Полюс грува: один на весь трек от (сид, слот). Бит прописан
+    // и держится (уверенная основа), оживляют его только гейты фраз
+    // и свинг сида. Тот же сид — тот же бит; другой сид — другой.
     let base_w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
     let weight = if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
         let pick = crate::arranger::splitmix64(
-            song.seed_hash
-                ^ (slot_idx as u64).wrapping_mul(0x9E3779B9)
-                ^ (song.phrase_index as u64).wrapping_mul(0x85EBCA6B),
+            song.seed_hash ^ (slot_idx as u64).wrapping_mul(0x9E3779B9),
         ) % poles.len() as u64;
         poles[pick as usize]
             .get(step_in_measure)
@@ -729,6 +734,9 @@ fn play_guide(
         return Vec::new();
     }
 
+    // Роль слота нужна рано (кик-якоря в гейте): чистая функция id.
+    let role = Slot::from_id(instrument_id).map(|s| s.role());
+
     // Emergent-пульс вместо сетки: бьет ли глобальный шаг.
     // Веса/морфинг/гейты пропускаем; структура выше уже отработала.
     // Акцент у четвертей — барабанщик выделяет доли (грув, а не стук).
@@ -739,7 +747,6 @@ fn play_guide(
             global_step,
             step_in_measure,
             steps_per_measure,
-            energy,
             guide.emergent_beats,
         );
         if !fire {
@@ -752,9 +759,14 @@ fn play_guide(
 
     // Сеточный путь: вероятности + гейт сида. Emergent-слот его
     // пропускает (решение уже принято пульсом выше).
+    // Кик-якоря — абсолюти: фундамент бьет всегда, без дыхания.
+    // Остальные якоря дышат приоритетом 0.95.
     if guide.emergent_beats <= 0.0 {
+        let kick_anchor =
+            weight >= 1.0 && matches!(role, Some(InstrumentRole::Kick));
         let probability = if weight >= 1.0 {
             // Якорь — сильный приоритет, а не гарантия: даунбит дышит.
+            // Кроме кика: там гарантия.
             ANCHOR_PRIOR
         } else {
             // Плотность сида масштабирует все вероятности: разреженные
@@ -769,13 +781,14 @@ fn play_guide(
         // Гейт сида: решение зависит от (сид, слот, шаг, фраза), поэтому грув
         // стоит ровно фразу и никогда не повторяется дословно. Якоря идут
         // отдельным броском (своя соль) — пропуск якоря не влечет пропуски
-        // остальных шагов и наоборот.
+        // остальных шагов и наоборот. Кик-якорь гейт не проходит вовсе.
         let salt = if weight >= 1.0 {
             ANCHOR_SALT ^ (song.phrase_index as u64)
         } else {
             song.phrase_index as u64
         };
-        if probability < 1.0
+        if !kick_anchor
+            && probability < 1.0
             && fixed_gate(song.seed_hash, slot_idx, step_in_measure, salt) >= probability
         {
             return Vec::new();
@@ -792,13 +805,14 @@ fn play_guide(
     // с разной мягкостью у разных сидов. Ударные идут как есть.
     let (attack_mul, release_mul) = envelope_shape(song.seed_hash, slot_idx);
 
-    // Роль слота: квинтовый бас, аккорды по умолчанию, баланс партии.
-    let role = Slot::from_id(instrument_id).map(|s| s.role());
-
     // Оффбитные 8-е: шаг q/2 внутри четверти (q = шагов на четверть).
+    // Длительность — от сида: одни сиды протяжнее, другие отрывистее.
     let quarter = steps_per_measure / 4;
     let long = guide.long_offbeats && quarter > 0 && step_in_measure % quarter == quarter / 2;
-    let duration = base_step_secs * guide.duration_mult * if long { guide.long_mult } else { 1.0 };
+    let duration = base_step_secs
+        * guide.duration_mult
+        * duration_shape(song.seed_hash, slot_idx)
+        * if long { guide.long_mult } else { 1.0 };
 
     // Ударные: одиночная нота фиксированного питча, коротким путем.
     if let Voicing::Kit(pitch) = guide.voice {
@@ -1163,7 +1177,7 @@ mod tests {
     const POLE_B: &[f32] = &[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     const POLES: &[&[f32]] = &[POLE_A, POLE_B];
 
-    fn pole_steps(seed_hash: u64, slot_idx: usize, phrase: usize) -> Vec<usize> {
+    fn pole_steps(seed_hash: u64, slot_idx: usize) -> Vec<usize> {
         let guide = RoleGuide {
             weights: &[0.0; 8],
             poles: Some(POLES),
@@ -1171,7 +1185,6 @@ mod tests {
         };
         let mut song = test_song(0.0);
         song.seed_hash = seed_hash;
-        song.phrase_index = phrase;
         let mut rng = rand::SeedableRng::seed_from_u64(1);
         (0..8)
             .filter(|step| {
@@ -1327,24 +1340,20 @@ mod tests {
 
     #[test]
     fn poles_pick_groove_by_seed() {
-        // Внутри одной фразы — один полюс: шаги только из POLE_A
-        // или только из POLE_B. Фраза пересдается детерминированно.
+        // Один полюс на весь трек: шаги только из POLE_A
+        // или только из POLE_B. Бит прописан и держится.
         for seed_hash in [0u64, 1, 7, 42, 1000] {
-            let steps = pole_steps(seed_hash, 1, 0);
+            let steps = pole_steps(seed_hash, 1);
             let in_a = steps.iter().all(|s| POLE_A[*s] > 0.0);
             let in_b = steps.iter().all(|s| POLE_B[*s] > 0.0);
             assert!(in_a || in_b, "seed {seed_hash}: mixed poles {steps:?}");
         }
         // Разные сиды выбирают разные полюса.
         let grooves: std::collections::HashSet<Vec<usize>> =
-            (0..8u64).map(|s| pole_steps(s, 1, 0)).collect();
+            (0..8u64).map(|s| pole_steps(s, 1)).collect();
         assert!(grooves.len() > 1, "pole never varies");
-        // Тот же сид + та же фраза = тот же грув (повторяемость).
-        assert_eq!(pole_steps(42, 1, 3), pole_steps(42, 1, 3));
-        // Фразы меняют грув: за 8 фраз хотя бы два разных полюса.
-        let flow: std::collections::HashSet<Vec<usize>> =
-            (0..8usize).map(|ph| pole_steps(42, 1, ph)).collect();
-        assert!(flow.len() > 1, "groove never evolves: {flow:?}");
+        // Тот же сид = тот же грув (повторяемость, бит прописан).
+        assert_eq!(pole_steps(42, 1), pole_steps(42, 1));
     }
 
     #[test]
@@ -1764,7 +1773,7 @@ mod tests {
                 &[
                     ("kick", 12),
                     ("snare", 24),
-                    ("hat", 24),
+                    ("hat", 16),
                     ("bass", 12),
                     ("chords", 48),
                     ("lead", 8),
@@ -1974,35 +1983,29 @@ mod tests {
 
     #[test]
     fn emergent_pulse_phases_without_repeating() {
-        // Пульс: детерминирован, варьируется сидом, дышит энергией,
-        // такты не клонируются (фэйзинг: ≥3 разных рисунка на 8 тактов).
-        let ticks = |seed: u64, energy: f32| -> Vec<Vec<usize>> {
+        // Пульс: детерминирован, варьируется сидом, темп ровный
+        // (разгона в дропе нет — бит держится), такты не клонируются
+        // (фэйзинг: ≥3 разных рисунка на 8 тактов).
+        let ticks = |seed: u64| -> Vec<Vec<usize>> {
             (0..8)
                 .map(|bar| {
                     (0..16)
                         .filter(|sim| {
                             let s = *sim;
-                            emergent_fire(seed, 4, bar * 16 + s, s, 16, energy, 0.45).0
+                            emergent_fire(seed, 4, bar * 16 + s, s, 16, 0.45).0
                         })
                         .collect()
                 })
                 .collect()
         };
-        let a = ticks(11, 1.0);
-        assert_eq!(a, ticks(11, 1.0), "must repeat");
+        let a = ticks(11);
+        assert_eq!(a, ticks(11), "must repeat");
         assert!(a.iter().any(|b| !b.is_empty()), "pulse silent");
         let bars: std::collections::HashSet<Vec<usize>> = a.into_iter().collect();
         assert!(bars.len() >= 3, "bars cloned: {bars:?}");
-        // Другой сид — другой грув; высокая энергия — гуще.
-        let b = ticks(42, 1.0);
-        assert_ne!(
-            ticks(11, 1.0).concat(),
-            b.concat(),
-            "seeds share groove"
-        );
-        let sparse: usize = ticks(11, 0.3).iter().map(|v| v.len()).sum();
-        let dense: usize = ticks(11, 1.0).iter().map(|v| v.len()).sum();
-        assert!(dense > sparse, "energy ignored: {dense} vs {sparse}");
+        // Другой сид — другой грув.
+        let b = ticks(42);
+        assert_ne!(ticks(11).concat(), b.concat(), "seeds share groove");
     }
 
     #[test]
@@ -2224,6 +2227,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn duration_shape_stretches_notes_by_seed() {
+        // Длительность от сида 0.85..1.25: детерминирована, варьируется,
+        // цепляется к ноте (доля базового шага × mult гайда × shape).
+        for h in [0u64, 1, 42, 777] {
+            let d = duration_shape(h, 3);
+            assert!((0.85..=1.25).contains(&d), "out of range: {d}");
+            assert_eq!(d, duration_shape(h, 3), "not deterministic");
+        }
+        let set: std::collections::HashSet<u32> = (0..32u64)
+            .map(|h| (duration_shape(h, 3) * 1000.0) as u32)
+            .collect();
+        assert!(set.len() > 8, "seeds share lengths");
+        // Прилипание: длительность ноты = база × mult × shape.
+        let guide = RoleGuide {
+            weights: &[1.0; 8],
+            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 2.0, 0.8)
+        };
+        let mut song = test_song(0.5);
+        song.seed_hash = 99;
+        let mut rng = rand::SeedableRng::seed_from_u64(3);
+        let notes = play_guide(
+            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.5, 3, 2,
+            1.0, false, false, 0, false, &mut rng,
+        );
+        assert!(!notes.is_empty());
+        let expected = 0.5 * 2.0 * duration_shape(99, 2);
+        assert!(
+            (notes[0].duration_secs - expected).abs() < 1e-4,
+            "shape ignored: {} vs {expected}",
+            notes[0].duration_secs
+        );
     }
 
     #[test]
