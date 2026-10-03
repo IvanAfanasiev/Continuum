@@ -2095,7 +2095,7 @@ mod tests {
             }
             (pitches, rhythm)
         }
-        for name in ["club", "lofi"] {
+        for name in ["club", "rock", "lofi", "phonk"] {
             let sigs: Vec<_> = (0..8u64).map(|s| signature(name, s)).collect();
             for i in 0..8 {
                 for j in (i + 1)..8 {
