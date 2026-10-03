@@ -397,6 +397,23 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             .map(|(_, s)| s.id())
     };
     let mut notes = Vec::new();
+    // Носители темы на этом шаге: активные followers + подхват.
+    // Лидер ведет фразу в полную, остальные — эхом (см. play_guide):
+    // впервые у темы есть первый голос, а не хор солистов.
+    let mut carriers: Vec<usize> = Slot::ALL
+        .iter()
+        .enumerate()
+        .filter(|(i, s)| {
+            is_active(**s) && guides[*i].follow_motif && !guides[*i].is_silent()
+        })
+        .map(|(_, s)| s.id())
+        .collect();
+    if carriers.is_empty() {
+        if let Some(fb) = fallback {
+            carriers.push(fb);
+        }
+    }
+    let leader = theme_leader(&carriers, sctx.song.seed_hash, sctx.song.phrase_index);
     // Фаза 1: кики. Заливка (сработал не якорь) запоминается —
     // бас во второй фазе под нее пригнется.
     let mut kick_fill = false;
@@ -426,6 +443,8 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             fallback == Some(slot.id()),
             false,
             sctx.step,
+            false,
+            // Кики тему не несут: лидерство им не нужно.
             false,
             sctx.rng,
         );
@@ -479,6 +498,8 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             thicken,
             sctx.step,
             kick_fill,
+            // Лидер фразы — в полную, остальные носители — эхом.
+            leader == Some(slot.id()),
             sctx.rng,
         ));
     }
@@ -558,6 +579,27 @@ pub(crate) fn tonic_shift_for(seed_hash: u64) -> i8 {
 pub(crate) fn motif_octave(seed_hash: u64) -> i8 {
     (crate::arranger::splitmix64(seed_hash ^ 0x0C7A) % 3) as i8 - 1
 }
+
+/// Лидер темы на фразу: один носитель ведет в полную, остальные
+/// вторят эхом. Ротация детерминирована (сид, фраза). Пусто —
+/// вести некому (все молчат как написано).
+pub(crate) fn theme_leader(
+    carriers: &[usize],
+    seed_hash: u64,
+    phrase_index: usize,
+) -> Option<usize> {
+    if carriers.is_empty() {
+        return None;
+    }
+    let h = crate::arranger::splitmix64(
+        seed_hash ^ 0x1EAD ^ (phrase_index as u64).wrapping_mul(0x9E3779B9),
+    );
+    Some(carriers[(h % carriers.len() as u64) as usize])
+}
+
+/// Доля эха: столько своих шагов вторящий оставляет себе.
+/// Общий бросок на всех вторящих — эхо звучит вместе.
+pub(crate) const LEAD_ECHO: f32 = 0.35;
 
 /// Свинг сида: множитель 0.93..1.07 к свингу стиля — у каждого сида
 /// свой кач (слышно!), грув не разваливается (±10% давали пьяные
@@ -698,6 +740,10 @@ fn play_guide(
     // Заливка кика на этом шаге (не якорь): бас пригибается вдвое,
     // чтобы не наслаиваться. Даунбит играют вместе в полную.
     kick_fill: bool,
+    // Лидер темы на этой фразе: ведет в полную. Остальные носители —
+    // эхом (урезанная плотность, те же шаги). Тесты зовут с true:
+    // голос в изоляции звучит как написано.
+    theme_lead: bool,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
     // Вес шага: полюс трека или веса такта. Без морфинга и заливок:
@@ -820,6 +866,20 @@ fn play_guide(
         {
             return Vec::new();
         }
+    }
+    // Иерархия темы: ведет один (лидер фразы), остальные — эхом.
+    // Общий бросок на всех вторящих: эхо звучит вместе, в те же шаги.
+    // Вложенность базовых гейтов цела: разреженный и так подмножество.
+    if (guide.follow_motif || force_motif)
+        && !theme_lead
+        && fixed_gate(
+            song.seed_hash,
+            7777,
+            step_in_measure,
+            song.phrase_index as u64,
+        ) >= LEAD_ECHO
+    {
+        return Vec::new();
     }
 
     let mut velocity = (guide.vel_base
@@ -1158,7 +1218,7 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    0, false, &mut rng,
+                    0, false, true, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1198,7 +1258,7 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    0, false, &mut rng,
+                    0, false, true, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1238,7 +1298,7 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, false, &mut rng,
+                    &guide, &[48], &song, 1.0, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, false, true, &mut rng,
                 )
                 .is_empty()
             })
@@ -1256,7 +1316,7 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, false, &mut rng);
+        let notes = play_guide(&guide, &scale, &song, 1.0, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, false, true, &mut rng);
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
@@ -1283,7 +1343,7 @@ mod tests {
             song.phrase_index = phrase;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, &mut rng)
+            if !play_guide(&guide, &[48], &song, 1.0, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, true, &mut rng)
                 .is_empty()
             {
                 hits += 1;
@@ -1447,7 +1507,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guide, &scale, &song, 1.0, step * 2, 16, 0.1, 6, 5, 1.0, false,
-                        false, 0, false, &mut rng,
+                        false, 0, false, true, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1493,7 +1553,7 @@ mod tests {
             .map(|step| {
                 play_guide(
                     &anchor_motif, scale, &song, 1.0, step, spm, 0.1, 6, 5, 1.0,
-                    false, false, 0, false, &mut rng,
+                    false, false, 0, false, true, &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1508,7 +1568,7 @@ mod tests {
                 .filter_map(|step| {
                     play_guide(
                         &guides[ki], scale, &song, 1.0, step, spm, 0.1,
-                        Slot::Keys.id(), ki, 1.0, force, false, 0, false, &mut rng,
+                        Slot::Keys.id(), ki, 1.0, force, false, 0, false, true, &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1714,7 +1774,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 3,
-            2, 1.0, false, false, 0, false, &mut rng,
+            2, 1.0, false, false, 0, false, true, &mut rng,
         );
         assert!(!notes.is_empty());
         let (a, r) = envelope_shape(42, 2);
@@ -1738,7 +1798,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 1,
-            0, 1.0, false, false, 0, false, &mut rng,
+            0, 1.0, false, false, 0, false, true, &mut rng,
         );
         assert!(!notes.is_empty());
         assert_eq!(notes[0].sub_bias, 0.8);
@@ -1746,7 +1806,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 1,
-            0, 1.0, false, false, 0, false, &mut rng,
+            0, 1.0, false, false, 0, false, true, &mut rng,
         );
         assert_eq!(notes[0].sub_bias, 0.0);
     }
@@ -1933,7 +1993,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
                 &guide, &scale, &song, 1.0, step, 16, 0.1, 6, 5, 1.0,
-                false, false, 0, false, &mut rng,
+                false, false, 0, false, true, &mut rng,
             )
             .into_iter()
             .next()
@@ -2028,7 +2088,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             if let Some(n) = play_guide(
                 &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false,
-                false, 0, false, &mut rng,
+                false, 0, false, true, &mut rng,
             )
             .into_iter()
             .next()
@@ -2173,7 +2233,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
                 &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false,
-                false, 0, fill, &mut rng,
+                false, 0, fill, true, &mut rng,
             )
             .into_iter()
             .next()
@@ -2207,6 +2267,28 @@ mod tests {
             .collect();
         assert_eq!(seen, HashSet::from([-1, 0, 1]), "octave stuck: {seen:?}");
         assert_eq!(motif_octave(42), motif_octave(42), "not deterministic");
+    }
+
+    #[test]
+    fn theme_leader_rotates_deterministically() {
+        // Лидерство: ротация по фразам (не залипает на одном),
+        // детерминировано, пусто = некому вести, один = всегда он.
+        use std::collections::HashSet;
+        let carriers = vec![6usize, 18];
+        let leaders: HashSet<usize> = (0..16usize)
+            .map(|p| theme_leader(&carriers, 42, p).unwrap())
+            .collect();
+        assert!(leaders.len() > 1, "leadership stuck: {leaders:?}");
+        for l in &leaders {
+            assert!(carriers.contains(l), "stranger leads: {l}");
+        }
+        assert_eq!(
+            theme_leader(&carriers, 42, 3),
+            theme_leader(&carriers, 42, 3),
+            "not deterministic"
+        );
+        assert_eq!(theme_leader(&[], 42, 0), None);
+        assert_eq!(theme_leader(&[6], 42, 9), Some(6));
     }
 
     #[test]
@@ -2332,7 +2414,7 @@ mod tests {
         let mut rng = rand::SeedableRng::seed_from_u64(3);
         let notes = play_guide(
             &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.5, 3, 2,
-            1.0, false, false, 0, false, &mut rng,
+            1.0, false, false, 0, false, true, &mut rng,
         );
         assert!(!notes.is_empty());
         let expected = 0.5 * 2.0 * duration_shape(99, 2);
@@ -2360,7 +2442,7 @@ mod tests {
             song.measure_index = measure;
             song.prog = [0, 2, 0, 0];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, step, 8, 0.1, 7, 6, 1.0, false, false, 0, false, &mut rng)
+            play_guide(&guide, &scale, &song, 1.0, step, 8, 0.1, 7, 6, 1.0, false, false, 0, false, true, &mut rng)
                 .into_iter()
                 .next()
                 .map(|n| n.midi_pitch)
@@ -2398,7 +2480,7 @@ mod tests {
                 .filter(|step| {
                     !play_guide(
                         &guide, &[48], &song, 1.0, *step, 16, 0.1, 6, 5, share,
-                        false, false, 0, false, &mut rng,
+                        false, false, 0, false, true, &mut rng,
                     )
                     .is_empty()
                 })
@@ -2436,7 +2518,7 @@ mod tests {
                     out.push(
                         !play_guide(
                             &anchor, &[48], &song, 1.0, step, 8, 0.1, 2, 0,
-                            share, false, false, 0, false, &mut rng,
+                            share, false, false, 0, false, true, &mut rng,
                         )
                         .is_empty(),
                     );

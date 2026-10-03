@@ -468,27 +468,80 @@ mod tests {
 
     #[test]
     fn theme_layers_nest_on_shared_beat() {
-        // Общий план: разреженный слой — подмножество густого
-        // (те же шаги, не своя композиция). Плак скромнее формулы
-        // (отклик 1.5 < 2.2) — каждый его шаг сидит внутри формулы.
+        // Общий план + иерархия: в фразах, где ведет формула, плак —
+        // строго ее подмножество (те же шаги, не своя композиция).
+        // В своих фразах плак ведет сам — там гарантий нет.
+        // Лидерство ротируется: за 512 шагов ведут минимум двое.
         use crate::playback::{FORMULA_ID, PLUCK_ID};
-        use std::collections::HashSet;
+        use std::collections::{HashMap, HashSet};
+        let mut checked_total = 0;
         for seed in [5u64, 11, 24] {
-            let notes = render(seed, 512);
-            let steps = |id: usize| {
-                notes
-                    .iter()
-                    .filter(|(_, n)| n.instrument_id == id)
-                    .map(|(s, _)| *s)
-                    .collect::<HashSet<usize>>()
-            };
-            let (pluck, formula) = (steps(PLUCK_ID), steps(FORMULA_ID));
-            assert!(!pluck.is_empty() && !formula.is_empty(), "seed {seed}: theme silent");
-            assert!(
-                pluck.is_subset(&formula),
-                "seed {seed}: pluck strays off the shared beat"
-            );
+            let style = ClubStyle::new();
+            let guides = style.slot_guides();
+            let active: Vec<usize> = crate::instruments::Slot::ALL
+                .iter()
+                .map(|s| s.id())
+                .collect();
+            let carriers: Vec<usize> = crate::instruments::Slot::ALL
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| guides[*i].follow_motif && !guides[*i].is_silent())
+                .map(|(_, s)| s.id())
+                .collect();
+            assert!(carriers.len() > 1, "seed {seed}: nobody to lead");
+            let seed_hash = crate::arranger::splitmix64(seed ^ 0x51ED);
+            let mut rng = rand::SeedableRng::seed_from_u64(seed);
+            let mut arranger = crate::arranger::Arranger::new(seed);
+            let mut song = arranger.advance_measure();
+            let mut pluck: HashMap<usize, HashSet<usize>> = HashMap::new();
+            let mut formula: HashMap<usize, HashSet<usize>> = HashMap::new();
+            for step in 0..1024 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for n in render_style(&style, &mut sctx) {
+                    let table = if n.instrument_id == PLUCK_ID {
+                        &mut pluck
+                    } else if n.instrument_id == FORMULA_ID {
+                        &mut formula
+                    } else {
+                        continue;
+                    };
+                    table.entry(song.phrase_index).or_default().insert(step);
+                }
+            }
+            let mut leaders = HashSet::new();
+            let mut checked = 0;
+            for (phrase, psteps) in &pluck {
+                let leader =
+                    super::super::theme_leader(&carriers, seed_hash, *phrase).unwrap();
+                leaders.insert(leader);
+                if leader == FORMULA_ID {
+                    let fsteps = formula.get(phrase).cloned().unwrap_or_default();
+                    assert!(
+                        psteps.is_subset(&fsteps),
+                        "seed {seed} phrase {phrase}: pluck strays off the lead"
+                    );
+                    checked += psteps.len();
+                }
+            }
+            assert!(leaders.len() > 1, "seed {seed}: no rotation");
+            // Проверенные шаги копятся по сидам: пересечение лидерства
+            // с нотами — тоже бросок, на одном сиде его может не выпасть.
+            checked_total += checked;
         }
+        assert!(checked_total >= 10, "no formula-led phrases sampled");
     }
 
     #[test]
