@@ -467,6 +467,31 @@ mod tests {
     }
 
     #[test]
+    fn theme_layers_nest_on_shared_beat() {
+        // Общий план: разреженный слой — подмножество густого
+        // (те же шаги, не своя композиция). Плак скромнее формулы
+        // (отклик 1.5 < 2.2) — каждый его шаг сидит внутри формулы.
+        use crate::playback::{FORMULA_ID, PLUCK_ID};
+        use std::collections::HashSet;
+        for seed in [5u64, 11, 24] {
+            let notes = render(seed, 512);
+            let steps = |id: usize| {
+                notes
+                    .iter()
+                    .filter(|(_, n)| n.instrument_id == id)
+                    .map(|(s, _)| *s)
+                    .collect::<HashSet<usize>>()
+            };
+            let (pluck, formula) = (steps(PLUCK_ID), steps(FORMULA_ID));
+            assert!(!pluck.is_empty() && !formula.is_empty(), "seed {seed}: theme silent");
+            assert!(
+                pluck.is_subset(&formula),
+                "seed {seed}: pluck strays off the shared beat"
+            );
+        }
+    }
+
+    #[test]
     fn downbeat_breathes_but_holds() {
         // Якорь 1: пропуск возможен (приоритет 0.95), но даунбит держится
         // в подавляющем большинстве тактов — лицо жанра цело.
