@@ -197,6 +197,7 @@ impl RenderState {
     /// голоса пропускаются без DSP.
     pub(crate) fn render_sample(&mut self, volumes: &[(usize, f32)], treble_hz: f32) -> (f32, f32) {
         // Проход 1: кики. Их уровень заряжает огибающую сайдчейна.
+        // Немой затихший кик пропускаем (как остальных во 2-м проходе).
         let mut kick_l = 0.0;
         let mut kick_r = 0.0;
         for (pos, inst) in self.instruments.iter_mut().enumerate() {
@@ -204,6 +205,9 @@ impl RenderState {
                 continue;
             }
             let vol = Self::volume_of(volumes, inst.id());
+            if vol <= 0.0 && !inst.is_active() {
+                continue;
+            }
             let (l, r) = inst.next_sample_stereo();
             kick_l += l * vol;
             kick_r += r * vol;
