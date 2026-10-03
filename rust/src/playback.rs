@@ -1764,10 +1764,10 @@ mod tests {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
 
-        // Phonk без колокола: кик, 808, саб, снейр, хэты,
+        // Phonk без колокола: кик, 808, саб, снейр, хэты, шейкер,
         // тёмные клавиши и формульная тень. Хор — редкий гость.
         let phonk = ensemble_of("phonk");
-        for s in [Bass, Kick, Snare, Hat, Keys, Kick808, Formula] {
+        for s in [Bass, Kick, Snare, Hat, Keys, Kick808, Shaker, Formula] {
             assert!(phonk.contains(&s), "phonk: {s:?} missing");
         }
         for s in [Pad, Pluck, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz] {

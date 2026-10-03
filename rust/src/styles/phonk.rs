@@ -8,10 +8,15 @@ use crate::instruments::Slot;
 const SCALE: [u8; 7] = [45, 47, 48, 50, 52, 53, 55];
 
 const KICK_PH: &[f32] = &[
-    1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.6, 0.0,
+    // Реф: напористый нок почти весь такт (XXXXXxXXX.X.XxXx),
+    // слабые доли — тише, а не пустые. Вдох перед единицей свят:
+    // 15-й шаг пуст во всех стилях (связка 14-15-0 давала фламы).
+    1.0, 0.9, 0.9, 0.9, 1.0, 0.5, 1.0, 0.9, 1.0, 0.0, 0.9, 0.0, 1.0, 0.0, 0.5, 0.0,
 ];
 const SNARE_PH: &[f32] = &[
-    0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.3,
+    // Реф: half-time — снейр только на 3 (шаг 8), не на 2 и 4.
+    // Вокруг — госты, бэкбита на 4-м шаге нет.
+    0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.2, 0.0,
 ];
 const HAT_PH: &[f32] = &[
     0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.4, 0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.5,
@@ -33,6 +38,11 @@ const LEAD_PH: &[f32] = &[
 ];
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+];
+// Песок поверх хэтов: плотные 16-е рефа гудят верхом,
+// колокола нет — воздух дают шейкер и хэт.
+const SHK_PH: &[f32] = &[
+    0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.4,
 ];
 
 pub struct PhonkStyle {}
@@ -63,8 +73,9 @@ impl Style for PhonkStyle {
     }
 
     fn swing_ratio(&self) -> f32 {
-        // Фонк идёт прямо: свинг почти нулевой, кач — 808-слайдами.
-        1.05
+        // Почти прямо с лёгкой походкой (реф: шатание нечётных ~1.1):
+        // кач — 808-слайдами, а не свингом.
+        1.1
     }
 
     fn scale(&self) -> &'static [u8] {
@@ -79,13 +90,14 @@ impl Style for PhonkStyle {
         0.4
     }
 
-    /// Тёмный мемфис-верх: полка ниже клубной (спека референса).
+    /// Верх по референсу (centroid ~3.3k, HF ~0.22 — как клуб):
+    /// темно только внизу, колокол выведен, а не зарезан фильтром.
     fn treble_cutoff(&self) -> f32 {
-        14000.0
+        15000.0
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Ядро без колокола: кик, 808, саб, снейр, хэты,
+        // Ядро без колокола: кик, 808, саб, снейр, хэты, шейкер-песок,
         // тёмные клавиши и формульная тень дропа.
         &[
             Slot::Bass,
@@ -94,6 +106,7 @@ impl Style for PhonkStyle {
             Slot::Hat,
             Slot::Keys,
             Slot::Kick808,
+            Slot::Shaker,
             Slot::Formula,
         ]
     }
@@ -128,7 +141,8 @@ impl Style for PhonkStyle {
             vel_high_cut: 0.6,
             bass_fifth: true,
             sub_bias: 0.6,
-            bass_top: 43,
+            // Реф: 808 сидит на F2 (86 Гц) — кап 41, ниже клубного.
+            bass_top: 41,
             ..RoleGuide::pitched(BASS_PH, 0, -1, 0, 1.5, 0.8)
         };
         let kick = RoleGuide {
@@ -149,10 +163,10 @@ impl Style for PhonkStyle {
         let hat = RoleGuide {
             energy_response: 1.2,
             duration_mult: 0.4,
-            vel_base: 0.6,
+            vel_base: 0.7,
             vel_energy: 0.3,
             vel_jitter: 0.08,
-            ..RoleGuide::kit(HAT_PH, 42, 0.6)
+            ..RoleGuide::kit(HAT_PH, 42, 0.7)
         };
         let pluck = RoleGuide {
             energy_response: 1.0,
@@ -180,7 +194,7 @@ impl Style for PhonkStyle {
             follow_motif: true,
             ..RoleGuide::pitched(KEYS_PH, 0, 0, 1, 1.2, 0.55)
         };
-        // 808 ведет баслайн слайдами, регистр саба (фолд в mod.rs).
+        // 808 ведет баслайн слайдами, регистр рефа (фолд в mod.rs).
         let kick808 = RoleGuide {
             vel_base: 0.95,
             vel_energy: 0.05,
@@ -189,7 +203,7 @@ impl Style for PhonkStyle {
                 octave: -1,
                 jitter: 0,
             },
-            bass_top: 43,
+            bass_top: 41,
             ..RoleGuide::pitched(SUB_PH, 0, -1, 0, 1.0, 0.95)
         };
         let laser = RoleGuide {
@@ -272,11 +286,12 @@ impl Style for PhonkStyle {
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
         };
         let shaker = RoleGuide {
-            energy_response: 1.0,
+            energy_response: 1.2,
             duration_mult: 0.4,
-            vel_base: 0.3,
-            vel_jitter: 0.06,
-            ..RoleGuide::kit(BED_W, 60, 0.3)
+            vel_base: 0.55,
+            vel_energy: 0.2,
+            vel_jitter: 0.08,
+            ..RoleGuide::kit(SHK_PH, 60, 0.55)
         };
         // Формульная тень: мотив терцией выше клавиш, дроп-отклик.
         let formula = RoleGuide {
@@ -373,11 +388,18 @@ mod tests {
 
     #[test]
     fn kick808_stays_sub() {
-        // 808 — бас, а не лид: регистровый кап саба.
+        // 808 — бас, а не лид: регистровый кап рефа (F2).
         let style = PhonkStyle::new();
         let guides = style.slot_guides();
         let idx = Slot::ALL.iter().position(|s| *s == Slot::Kick808).unwrap();
-        assert_eq!(guides[idx].bass_top, 43, "808 must share the sub ceiling");
+        assert_eq!(guides[idx].bass_top, 41, "808 must share the sub ceiling");
+    }
+
+    #[test]
+    fn snare_is_half_time() {
+        // Реф: снейр только на 3 (шаг 8), на 2-м шаге тишина.
+        assert_eq!(SNARE_PH[8], 1.0, "snare must crack on 3");
+        assert_eq!(SNARE_PH[4], 0.0, "no backbeat on 2: phonk is half-time");
     }
 
     #[test]
