@@ -313,9 +313,6 @@ struct RunningSession {
     engine_error: Arc<Mutex<Option<String>>>,
     counters: EngineCounters,
     audio_config: Arc<RwLock<String>>,
-    /// Насос для pull-режима (фронтенд играет сам): создается лениво
-    /// первым render_pull, переживает вызовы (голоса/хвосты целы).
-    pull_pump: Mutex<Option<Pump>>,
 }
 
 impl RunningSession {
@@ -401,7 +398,6 @@ impl RunningSession {
             engine_error,
             counters,
             audio_config,
-            pull_pump: Mutex::new(None),
         }
     }
 
@@ -524,12 +520,20 @@ impl RunningSession {
 
 pub struct PlaybackController {
     session: Mutex<Option<RunningSession>>,
+    /// Насос pull-режима (фронтенд играет сам): создается лениво первым
+    /// render_pull, переживает вызовы (голоса/хвосты целы). Живет ОТДЕЛЬНО
+    /// от мьютекса сессии специально: рендер блока НЕ должен держать
+    /// замок сессии, иначе каждый блок сериализует за собой все UI-вызовы
+    /// (статус, слайдеры, треки) — фронт лагает, и тем сильнее,
+    /// чем больше голосов в миксе.
+    pull_pump: Mutex<Option<Pump>>,
 }
 
 impl PlaybackController {
     pub fn new() -> Self {
         Self {
             session: Mutex::new(None),
+            pull_pump: Mutex::new(None),
         }
     }
 
@@ -567,6 +571,9 @@ impl PlaybackController {
         let session = RunningSession::launch(style_name, seed, with_audio);
         let status = session.status();
         *guard = Some(session);
+        // Новая сессия — новые shared-объекты: старый насос сброшен,
+        // пересоздастся лениво первым render_pull.
+        *self.pull_pump.lock().unwrap_or_else(|e| e.into_inner()) = None;
         status
     }
 
@@ -589,6 +596,7 @@ impl PlaybackController {
                 if let Some(h) = s.engine_handle.take() {
                     let _ = h.join();
                 }
+                *self.pull_pump.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 status.running = false;
                 status
             }
@@ -758,7 +766,9 @@ impl PlaybackController {
     /// Pull-рендер для фронтенда (Android играет сам через AudioTrack):
     /// стерео interleaved f32, `frames` фреймов. Насос создается лениво
     /// и переживает вызовы; смена частоты ретюнит без потери голосов.
-    /// Без сессии — пусто. Кап 4 секунд за вызов от дурака.
+    /// Замок сессии держим только на клонирование shared-частей —
+    /// сам рендер идет без него (иначе лаги UI). Без сессии — пусто.
+    /// Кап 4 секунд за вызов от дурака.
     pub fn render_pull(&self, frames: u64, sample_rate: f32) -> Vec<f32> {
         let n = (frames as usize).min(192_000);
         if n == 0 {
@@ -769,29 +779,49 @@ impl PlaybackController {
         } else {
             44_100.0
         };
-        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = guard.as_ref() else {
+        struct Parts {
+            queue: Arc<ArrayQueue<NoteEvent>>,
+            mixer: Arc<RwLock<MixerState>>,
+            paused: Arc<AtomicBool>,
+            fx: SharedFx,
+            live_bpm: Arc<RwLock<f32>>,
+            filter_open: Arc<RwLock<f32>>,
+            counters: EngineCounters,
+        }
+        let parts: Option<Parts> = {
+            let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().map(|s| Parts {
+                queue: Arc::clone(&s.queue),
+                mixer: Arc::clone(&s.mixer),
+                paused: Arc::clone(&s.paused),
+                fx: Arc::clone(&s.fx),
+                live_bpm: Arc::clone(&s.live_bpm),
+                filter_open: Arc::clone(&s.filter_open),
+                counters: s.counters.clone(),
+            })
+        };
+        let Some(p) = parts else {
             return Vec::new();
         };
-        let mut pump_guard = s.pull_pump.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pump_guard = self.pull_pump.lock().unwrap_or_else(|e| e.into_inner());
         let pump = match pump_guard.as_mut() {
-            Some(p) => {
-                if (p.sample_rate() - sr).abs() > 1.0 {
-                    p.retune(sr);
+            Some(pump) => {
+                if (pump.sample_rate() - sr).abs() > 1.0 {
+                    pump.retune(sr);
                 }
-                p
+                pump
             }
             None => {
                 *pump_guard = Some(Pump::new(
-                    Arc::clone(&s.queue),
+                    p.queue,
                     build_instruments(),
-                    Arc::clone(&s.mixer),
-                    Arc::clone(&s.paused),
-                    Arc::clone(&s.fx),
-                    Arc::clone(&s.live_bpm),
+                    p.mixer,
+                    p.paused,
+                    p.fx,
+                    p.live_bpm,
                     sr,
-                    s.counters.clone(),
-                    Arc::clone(&s.filter_open),
+                    p.counters,
+                    p.filter_open,
                 ));
                 pump_guard.as_mut().expect("pump just created")
             }
@@ -1332,6 +1362,51 @@ mod tests {
         let s = c.stop();
         assert!(!s.running);
         assert!(!c.status().running);
+    }
+
+    #[test]
+    fn pull_pump_lives_outside_session_lock() {
+        // Рендер блока НЕ держит замок сессии: иначе каждый блок
+        // сериализует за собой статус/слайдеры/треки и фронт лагает
+        // тем сильнее, чем больше голосов (регрессия с телефона).
+        let c = PlaybackController::new();
+        c.start("club", 42, false);
+        assert!(c.pull_pump.lock().unwrap().is_none());
+        let out = c.render_pull(44_100, 44_100.0);
+        assert_eq!(out.len(), 88_200);
+        assert!(out.iter().all(|s| s.is_finite()));
+        assert!(c.pull_pump.lock().unwrap().is_some());
+        c.stop();
+        assert!(c.pull_pump.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_calls_do_not_deadlock_render() {
+        // Статус/статистика из 4 потоков во время рендеров:
+        // завершается (порядок замков консистентен), а не висит.
+        use std::sync::{Arc, Barrier};
+        let c = Arc::new(PlaybackController::new());
+        c.start("club", 42, false);
+        let bar = Arc::new(Barrier::new(5));
+        let mut hs = Vec::new();
+        for _ in 0..4 {
+            let (cc, bb) = (Arc::clone(&c), Arc::clone(&bar));
+            hs.push(std::thread::spawn(move || {
+                bb.wait();
+                for _ in 0..10 {
+                    let _ = cc.status();
+                    let _ = cc.engine_stats();
+                }
+            }));
+        }
+        bar.wait();
+        for _ in 0..3 {
+            let out = c.render_pull(44_100, 44_100.0);
+            assert_eq!(out.len(), 88_200);
+        }
+        for h in hs {
+            h.join().unwrap();
+        }
     }
 
     #[test]
