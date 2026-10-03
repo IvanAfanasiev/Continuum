@@ -1240,7 +1240,8 @@ mod tests {
         assert!(vol(KEYS_ID) > 0.0);
         assert!(vol(SHAKER_ID) > 0.0);
         assert_eq!(vol(VINYL_ID), 0.0);
-        // Гости из пула (бюджет 1–2): все слышимые вне ядра — из пула.
+        // Гость из пула (бюджет 0–1): хор либо есть, либо нет.
+        // Кислота в автомикс не ходит (только вручную).
         let guests: Vec<u64> = tracks
             .iter()
             .filter(|t| {
@@ -1254,13 +1255,13 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert!(
-            (1..=2).contains(&guests.len()),
+            guests.len() <= 1,
             "guests: {guests:?}"
         );
         for id in &guests {
             let slot = Slot::from_id(*id as usize).expect("known slot");
             assert!(
-                [Slot::Vocal, Slot::Acid].contains(&slot),
+                [Slot::Vocal].contains(&slot),
                 "stranger guest: {slot:?}"
             );
         }
@@ -1769,23 +1770,28 @@ mod tests {
 
     #[test]
     fn flex_lottery_follows_weights() {
-        // Взвешенная лотерея: детерминирована сидом, покрывает весь пул,
-        // частоты следуют весам (частые гости и редкие специи).
+        // Взвешенная лотерея: детерминирована сидом, бюджет держится.
+        // Пул club — один вокал (кислота только вручную): сиды
+        // чередуют «хор есть / хора нет», состав стабилен.
         let style = styles::make_style("club").expect("club");
-        let mut counts = [0usize; 2];
+        let mut empty = 0;
+        let mut vocal = 0;
         for seed in 0..64u64 {
             let picked = pick_flex_slots(&*style, seed);
             assert_eq!(picked, pick_flex_slots(&*style, seed), "not deterministic");
             let (lo, hi) = style.flex_range();
             assert!((lo..=hi).contains(&picked.len()), "budget broken");
             for s in &picked {
-                let i = style.flex_pool().iter().position(|p| p == s).unwrap();
-                counts[i] += 1;
+                assert!(style.flex_pool().contains(s), "stranger guest: {s:?}");
+            }
+            if picked.is_empty() {
+                empty += 1;
+            } else {
+                vocal += 1;
             }
         }
-        // Оба гостя выпадают, но с разной частотой (веса 0.4 vs 1.0).
-        assert!(counts[0] > 0 && counts[1] > 0, "pool member never picked");
-        assert_ne!(counts[0], counts[1], "lottery ignores weights: {counts:?}");
+        // Оба исхода выпадают: гость — специя, а не константа.
+        assert!(empty > 0 && vocal > 0, "lottery stuck: empty={empty} vocal={vocal}");
     }
 
     #[test]

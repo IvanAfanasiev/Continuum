@@ -1,36 +1,39 @@
 use std::f32::consts::TAU;
 
 use super::{
-    dsp::{release_fade, saw_blep, Noise, Svf},
+    dsp::{release_fade, Noise, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
 
-/// Вокальный чоп: пара пил с вибрато через формантные полосы.
-/// Гласная — от ноты (ah/oh/eh): каждый чоп свой слог, а не один
-/// вечный «ah» (статичная гласная = половина синтетичности).
-/// Дыхание добавляет воздуха сибилянтам. Половину узнаваемости дает
-/// сильный дилэй на мастере (сенд роли Vocal).
-const DETUNE: f32 = 1.004;
+/// Хор: унисон-октава-квинта чистого строя через одну гласную «ah»
+/// с медленным переходом в «oh» внутри ноты. Долгая атака, долгое
+/// кольцо, вибрато — около-хоровое пение вместо лидовых чопов.
+/// Дыхание — едва слышный воздух. Узнаваемость дает сильный дилэй
+/// на мастере (сенд роли Vocal).
 const VIBRATO_HZ: f32 = 5.2;
 const VIBRATO_DEPTH: f32 = 0.006;
-/// Гласные (F1, F2): ah, oh, eh. Выбор — сидом ноты.
-const VOWELS: [(f32, f32); 3] = [(730.0, 1090.0), (500.0, 860.0), (610.0, 1900.0)];
+/// Стек хора: корень, квинта 3/2, октава. Чистый строй держит
+/// аккорд без биений — много голосов, один организм.
+const CHOIR_PARTIALS: [(f32, f32); 3] = [(1.0, 0.5), (1.5, 0.3), (2.0, 0.25)];
+/// Гласная плывет ah → oh за ноту: хор живой, а не сэмплерный.
+const AH: (f32, f32) = (730.0, 1090.0);
+const OH: (f32, f32) = (500.0, 860.0);
 const FORMANT_Q: f32 = 3.5;
 /// Доля дыхательного шума: слышно воздух, не шипение.
-const BREATH_GAIN: f32 = 0.06;
+const BREATH_GAIN: f32 = 0.03;
 const BREATH_HZ: f32 = 2400.0;
-const ATTACK_SECS: f32 = 0.008;
-const AMP_DECAY_RATE: f32 = 5.0;
-const MAX_RING_SECS: f32 = 0.8;
-const FADE_SECS: f32 = 0.04;
+const ATTACK_SECS: f32 = 0.09;
+const AMP_DECAY_RATE: f32 = 2.2;
+const MAX_RING_SECS: f32 = 1.8;
+const FADE_SECS: f32 = 0.08;
 const VOICE_GAIN: f32 = 0.5;
 
 #[derive(Clone, Default)]
 pub struct VocalVoice {
     sample_rate: f32,
-    phase1: f32,
-    phase2: f32,
+    /// Циклы от старта (общая высота стека).
+    phase: f32,
     vib_phase: f32,
     form1: Svf,
     form2: Svf,
@@ -39,6 +42,7 @@ pub struct VocalVoice {
     frequency: f32,
     gain: f32,
     t: f32,
+    ring_secs: f32,
     samples_left: usize,
     pub(crate) f1_hz: f32,
     pub(crate) f2_hz: f32,
@@ -52,21 +56,19 @@ impl Voice for VocalVoice {
     fn trigger(&mut self, note: &NoteEvent) {
         self.frequency = midi_to_freq(note.midi_pitch);
         let ring = note.duration_secs.clamp(0.05, MAX_RING_SECS);
+        self.ring_secs = ring;
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
-        self.phase1 = 0.0;
-        self.phase2 = 0.0;
+        self.phase = 0.0;
         self.form1.reset();
         self.form2.reset();
         self.breath_bp.reset();
-        // Гласная чопа — от сида ноты: разные ноты поют разные слоги.
-        // Детерминировано: та же нота — тот же слог.
-        let seed = super::dsp::note_seed(note, 0xB0CA);
-        let (f1, f2) = VOWELS[(seed % VOWELS.len() as u32) as usize];
-        self.f1_hz = f1;
-        self.f2_hz = f2;
-        self.noise = Noise::new(seed);
+        // Гласная одна на всех («ah» → «oh» внутри ноты): хор поет
+        // хором, а не слогами по нотам. Шум детерминирован нотой.
+        self.f1_hz = AH.0;
+        self.f2_hz = AH.1;
+        self.noise = Noise::new(super::dsp::note_seed(note, 0xB0CA));
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -84,22 +86,23 @@ impl Voice for VocalVoice {
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sample_rate) % 1.0;
         let wobble = 1.0 + VIBRATO_DEPTH * (self.vib_phase * TAU).sin();
         // Scoop: голос въезжает снизу (−4% за 30 мс), как живой onset.
-        // Плак так не делает — голоса расходятся с первой миллисекунды.
         let scoop = 1.0 - 0.04 * (-self.t / 0.03).exp();
         let freq = self.frequency * wobble * scoop;
 
-        self.phase1 = (self.phase1 + freq / sample_rate) % 1.0;
-        self.phase2 = (self.phase2 + (freq * DETUNE) / sample_rate) % 1.0;
-        let raw = (saw_blep(self.phase1, freq, sample_rate)
-            + saw_blep(self.phase2, freq * DETUNE, sample_rate))
-            * 0.5;
+        self.phase = (self.phase + freq / sample_rate) % 4096.0;
+        // Стек хора вместо пил: три синуса чистого строя.
+        // Только синусы — алиасинга нет по построению.
+        let mut raw = 0.0;
+        for (ratio, amp) in CHOIR_PARTIALS {
+            raw += (TAU * self.phase * ratio).sin() * amp;
+        }
 
-        let (_, vow1, _) = self
-            .form1
-            .process(raw, self.f1_hz, FORMANT_Q, sample_rate);
-        let (_, vow2, _) = self
-            .form2
-            .process(raw, self.f2_hz, FORMANT_Q, sample_rate);
+        // Гласная плывет ah → oh за время ноты (доля пройденного кольца).
+        let morph = (self.t / self.ring_secs).clamp(0.0, 1.0);
+        let f1 = AH.0 + (OH.0 - AH.0) * morph;
+        let f2 = AH.1 + (OH.1 - AH.1) * morph;
+        let (_, vow1, _) = self.form1.process(raw, f1, FORMANT_Q, sample_rate);
+        let (_, vow2, _) = self.form2.process(raw, f2, FORMANT_Q, sample_rate);
         // Дыхание: шум через полосу 2.4 кГц поверх гласных.
         let (_, breath, _) = self
             .breath_bp
@@ -129,9 +132,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn onset_scoops_up_to_pitch() {
-        // Scoop: первые 30 мс ниже строя, дальше — строй. Плак так
-        // не делает (резкий щелчок среза): голоса расходятся сразу.
+    fn onset_swells_softly_and_holds_tune() {
+        // Хор входит мягко (атака 90 мс: начало тише середины —
+        // никакого чоп-щелчка), высота держит строй со scoop-въездом.
         fn peak_near(samples: &[f32], sr: f32, lo: f32, hi: f32) -> f32 {
             let mut best = (0.0f32, 0.0f32);
             let mut f = lo;
@@ -157,11 +160,18 @@ mod tests {
         let sr = 44_100.0;
         let mut v = VocalVoice::default();
         v.set_sample_rate(sr);
-        v.trigger(&NoteEvent::new(11, 57, 0.9, 0.5));
-        let out: Vec<f32> = (0..9000).map(|_| v.next_sample()).collect();
-        let early = peak_near(&out[0..1323], sr, 200.0, 240.0);
-        let late = peak_near(&out[4410..6615], sr, 200.0, 240.0);
-        assert!(early < late, "no scoop: early={early} late={late}");
+        v.trigger(&NoteEvent::new(11, 57, 0.9, 1.2));
+        let out: Vec<f32> = (0..(1.0 * sr) as usize).map(|_| v.next_sample()).collect();
+        let rms = |lo: usize, hi: usize| {
+            (out[lo..hi].iter().map(|s| s * s).sum::<f32>() / (hi - lo) as f32).sqrt()
+        };
+        // Мягкий вход: первые 30 мс заметно тише середины ноты.
+        assert!(
+            rms(0, 1323) < rms(8820, 22050) * 0.5,
+            "choir barks instead of swelling"
+        );
+        // Строй: середина ноты — ля (220 Гц ± толерантность).
+        let late = peak_near(&out[22050..44100], sr, 200.0, 240.0);
         assert!((late - 220.0).abs() < 12.0, "out of tune: {late}");
     }
 
@@ -170,46 +180,58 @@ mod tests {
         let sr = 44_100.0;
         let mut vocal = VoicePool::vocals(11, 4);
         vocal.set_sample_rate(sr);
-        vocal.trigger(&NoteEvent::new(11, 69, 0.9, 0.5));
+        vocal.trigger(&NoteEvent::new(11, 69, 0.9, 1.2));
         let mut peak: f32 = 0.0;
         let mut first = 0.0;
         let mut second = 0.0;
-        for i in 0..20_000 {
+        for i in 0..(2.0 * sr) as usize {
             let s = vocal.next_sample();
             assert!(s.is_finite());
             peak = peak.max(s.abs());
-            if i < 10_000 {
+            if i < (1.0 * sr) as usize {
                 first += s.abs();
             } else {
                 second += s.abs();
             }
         }
-        assert!(peak > 0.15, "vocal too quiet: {peak}");
+        assert!(peak > 0.1, "vocal too quiet: {peak}");
+        assert!(peak < 0.8, "vocal blows up: {peak}");
         assert!(second < first, "vocal does not decay");
+        assert!(!vocal.is_active());
     }
 
     #[test]
-    fn chops_sing_different_vowels() {
-        // Слоги различаются от ноты к ноте, но детерминированы:
-        // та же нота — та же гласная. Все гласные из таблицы.
-        use std::collections::HashSet;
+    fn choir_sings_one_vowel_with_fifth_and_octave() {
+        // Хор, а не чопы: гласная одна на всех нотах («ah» на старте),
+        // а спектр держит квинту и октаву чистого строя.
         let sr = 44_100.0;
-        let mut seen = HashSet::new();
         for pitch in 60..72u8 {
             let mut v = VocalVoice::default();
             v.set_sample_rate(sr);
-            v.trigger(&NoteEvent::new(11, pitch, 0.9, 0.5));
-            assert!([730.0, 500.0, 610.0].contains(&v.f1_hz));
-            assert!([1090.0, 860.0, 1900.0].contains(&v.f2_hz));
-            seen.insert((v.f1_hz.to_bits(), v.f2_hz.to_bits()));
-            let out: Vec<f32> = (0..2000).map(|_| v.next_sample()).collect();
-            assert!(out.iter().all(|s| s.is_finite()));
-            // Та же нота — та же гласная.
-            let mut v2 = VocalVoice::default();
-            v2.set_sample_rate(sr);
-            v2.trigger(&NoteEvent::new(11, pitch, 0.9, 0.5));
-            assert_eq!((v.f1_hz, v.f2_hz), (v2.f1_hz, v2.f2_hz));
+            v.trigger(&NoteEvent::new(11, pitch, 0.9, 1.0));
+            assert_eq!((v.f1_hz, v.f2_hz), (AH.0, AH.1));
         }
-        assert!(seen.len() > 1, "one eternal vowel: {seen:?}");
+        // Спектр ноты A3: пики на 220, 330 (квинта), 440 (октава).
+        let mut v = VocalVoice::default();
+        v.set_sample_rate(sr);
+        v.trigger(&NoteEvent::new(11, 57, 0.9, 1.5));
+        let out: Vec<f32> = (0..(1.0 * sr) as usize).map(|_| v.next_sample()).collect();
+        let mag_at = |f: f32| {
+            let n = out.len() as f32;
+            let k = f / sr * n;
+            let om = 2.0 * std::f32::consts::PI * k / n;
+            let c = 2.0 * om.cos();
+            let (mut s1, mut s2) = (0.0f32, 0.0f32);
+            for &x in &out {
+                let s0 = x + c * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            (s1 * s1 + s2 * s2 - c * s1 * s2).sqrt() / n
+        };
+        let root = mag_at(220.0);
+        assert!(root > 1e-4, "no fundamental: {root}");
+        assert!(mag_at(330.0) > root * 0.05, "no fifth in choir stack");
+        assert!(mag_at(440.0) > root * 0.05, "no octave in choir stack");
     }
 }

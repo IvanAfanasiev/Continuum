@@ -150,18 +150,18 @@ impl Style for ClubStyle {
         ]
     }
 
-    /// Гости deep house: соул-чопы или кислота по одной-две,
-    /// состав зависит от сида. Чопы чаще, кислота — специя.
+    /// Гость deep house: соул-хор по сиду (есть/нет), кислота —
+    /// только вручную: второй бас в автомиксе давал кашу вместо сквелча.
     fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Vocal, Slot::Acid]
+        &[Slot::Vocal]
     }
 
     fn flex_weights(&self) -> &'static [f32] {
-        &[1.0, 0.5]
+        &[1.0]
     }
 
     fn flex_range(&self) -> (usize, usize) {
-        (1, 2)
+        (0, 1)
     }
 
     fn flex_count(&self) -> usize {
@@ -180,10 +180,13 @@ impl Style for ClubStyle {
                 octave: -1,
                 jitter: 0,
             },
-            octave_up: 0.15,
+            octave_up: 0.08,
             top_pitch: 50,
             vel_high_cut: 0.6,
             bass_fifth: true,
+            // Саб сидит низко: кап 43 (G2), прыжки вверх редкие.
+            // Выше — уже не фундамент, а вторая мелодия.
+            bass_top: 43,
             // Глубокий ровный саб вместо струны: презенс-цепь придавлена,
             // фундамент — чистый синус. Рок держит струну (0.0).
             // Громкость с запасом: саб без презенса тише струнного.
@@ -257,6 +260,7 @@ impl Style for ClubStyle {
         };
         // 808 следует за баслайном (слайды между фразами), тот же four-floor.
         // Перед дропом — саб-ролл: удар вместо звона тарелки.
+        // Регистр тот же, что у саба (фолд в mod.rs): 808 — бас, а не лид.
         let kick808 = RoleGuide {
             vel_base: 0.95,
             vel_energy: 0.05,
@@ -265,6 +269,7 @@ impl Style for ClubStyle {
                 octave: -1,
                 jitter: 0,
             },
+            bass_top: 43,
             ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, 1.0, 0.95)
         };
         let laser = RoleGuide {
@@ -281,13 +286,13 @@ impl Style for ClubStyle {
             follow_motif: true,
             ..RoleGuide::pitched(LEAD_W, 0, 2, 2, 1.0, 0.5)
         };
-        // Вокальные чопы из deep-наследия: задранные, короткие, в эхе.
-        // Только для ручного включения: в битмейкере вокала нет.
-        // Текут через секции, а не мигают (отклик сглажен).
+        // Хор deep house: редкие долгие «ah→oh» в эхе, сидят сзади.
+        // Только для ручного включения и редкого гостя: в битмейкере
+        // вокала нет. Текут через секции, а не мигают (отклик сглажен).
         let vocal = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 1.6,
-            vel_base: 0.55,
+            duration_mult: 3.0,
+            vel_base: 0.45,
             vel_energy: 0.15,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -295,7 +300,7 @@ impl Style for ClubStyle {
                 octave: 2,
                 jitter: 3,
             },
-            ..RoleGuide::pitched(VOCAL_W, 2, 2, 3, 1.6, 0.55)
+            ..RoleGuide::pitched(VOCAL_W, 2, 2, 3, 3.0, 0.45)
         };
         // Чужие слоты: рабочие, но сдержанные направляющие — включаются
         // только ручкой фронта, характер стиля не ломают.
@@ -389,6 +394,8 @@ impl Style for ClubStyle {
         // Формульный лид дропа: та же мотивная скелет-линия, что у плака,
         // но терцией выше (ступень 2) — гетерофония вместо унисона.
         // Отклик 2.2 держит куплеты разреженными, дроп — плотным.
+        // Джиттер узкий (1): формула и так меняет краску классом питча,
+        // широкие прыжки с переключением режимов дают кашу.
         let formula = RoleGuide {
             energy_response: 2.2,
             duration_mult: 0.9,
@@ -398,7 +405,7 @@ impl Style for ClubStyle {
             voice: Voicing::Scale {
                 degree: 2,
                 octave: 2,
-                jitter: 2,
+                jitter: 1,
             },
             follow_motif: true,
             ..RoleGuide::pitched(LEAD_W, 2, 2, 2, 0.9, 0.5)

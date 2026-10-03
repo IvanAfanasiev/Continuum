@@ -11,7 +11,11 @@ use std::f32::consts::TAU;
 /// вместо расстроенных пил: стена строит, а не гудит.
 /// В противовес темному лазеру.
 /// Стена чистого строя: унисон, 10/9, кварта, квинта, октава.
+/// Микро-расстрой пар держит стену живой (статичный стек звучит
+/// органом), биений строя не дает: доли цента, не проценты.
 const JUST_WALL: [f32; 5] = [1.0, 10.0 / 9.0, 4.0 / 3.0, 3.0 / 2.0, 2.0];
+/// Дыхание стены: доли цента на частицу (живость без расстройки).
+const WALL_SHIMMER: [f32; 5] = [1.0, 1.0012, 0.9988, 1.0009, 0.9991];
 const FILTER_FLOOR_HZ: f32 = 800.0;
 const FILTER_SNAP_HZ: f32 = 5500.0;
 const FILTER_SNAP_RATE: f32 = 16.0;
@@ -32,6 +36,9 @@ pub struct FestivalVoice {
     gain: f32,
     t: f32,
     samples_left: usize,
+    /// Поворот стены от питча: та же нота — тот же стек,
+    /// разные ноты — разные краски (мотив не монотонен).
+    rot: usize,
 }
 
 impl Voice for FestivalVoice {
@@ -46,6 +53,7 @@ impl Voice for FestivalVoice {
         self.gain = note.velocity;
         self.t = 0.0;
         self.phase = 0.0;
+        self.rot = (note.midi_pitch % 5) as usize;
         self.filter.reset();
     }
 
@@ -63,9 +71,11 @@ impl Voice for FestivalVoice {
 
         self.phase = (self.phase + self.frequency / sample_rate) % 4096.0;
         // Стена чистого строя вместо расстроенных пил: пять синусов
-        // в just-интервалах. Только синусы — алиасинга нет по построению.
+        // в just-интервалах, поворот стека — от питча ноты.
+        // Только синусы — алиасинга нет по построению.
         let mut raw = 0.0;
-        for ratio in JUST_WALL {
+        for i in 0..5 {
+            let ratio = JUST_WALL[(i + self.rot) % 5] * WALL_SHIMMER[i];
             raw += (TAU * self.phase * ratio).sin();
         }
         raw /= 5.0;

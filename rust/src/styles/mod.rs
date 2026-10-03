@@ -961,10 +961,15 @@ fn play_guide(
         let mut tone = modal_tone(scale, idx, song.seed_hash)
             .saturating_add_signed(tonic_shift_for(song.seed_hash))
             .saturating_add_signed(octaves.saturating_mul(12));
-        // Бас держим внизу: уползшее выше капа складываем октавой вниз.
+        // Низ держим внизу: уползшее выше капа складываем октавой вниз.
         // Гармония та же (тот же питч-класс). Кап от гайда: саб 45,
-        // рок риффует выше (52) вслед за гитарой.
-        if matches!(role, Some(InstrumentRole::Bass)) {
+        // рок риффует выше (52) вслед за гитарой. Питчевый кик (808)
+        // ведет баслайн — тот же регистровый закон, что у баса:
+        // ударные-киты (фиксированный питч) это не трогает.
+        let low_fold = matches!(role, Some(InstrumentRole::Bass))
+            || (matches!(role, Some(InstrumentRole::Kick))
+                && matches!(guide.voice, Voicing::Scale { .. }));
+        if low_fold {
             while tone > guide.bass_top {
                 tone -= 12;
             }
