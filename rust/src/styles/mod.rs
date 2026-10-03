@@ -559,12 +559,12 @@ pub(crate) fn motif_octave(seed_hash: u64) -> i8 {
     (crate::arranger::splitmix64(seed_hash ^ 0x0C7A) % 3) as i8 - 1
 }
 
-/// Свинг сида: множитель 0.90..1.10 к свингу стиля — у каждого сида
-/// свой кач (слышно!), жанр цел (отклонение ±10%). Детерминирован.
-/// свой кач (слышно!), жанр цел (отклонение ±10%). Детерминирован.
+/// Свинг сида: множитель 0.93..1.07 к свингу стиля — у каждого сида
+/// свой кач (слышно!), грув не разваливается (±10% давали пьяные
+/// шестнадцатые). Детерминирован.
 pub(crate) fn swing_var(seed_hash: u64) -> f32 {
     let h = crate::arranger::splitmix64(seed_hash ^ 0x5716);
-    0.90 + 0.2 * ((h >> 32) as f32 / (u32::MAX as f32))
+    0.93 + 0.14 * ((h >> 32) as f32 / (u32::MAX as f32))
 }
 
 /// Модальный вариант от сида: дорийская секста / фригийская секунда /
@@ -1068,8 +1068,8 @@ mod tests {
             stage_gains: [1.0; 8],
             seed_hash: 42,
             density: 1.0,
-            motif: [0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6],
-            motif_b: [1, 4, 0, 3, 2, 4, 2, 0, 4, 5, 1, 6, 3, 2, 5, 0],
+            motif: [0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3],
+            motif_b: [1, 4, 0, 3, 2, 4, 2, 0, 4, 0, 1, 3, 3, 2, 0, 4],
             use_alt_motif: false,
             prog: [0, 0, 0, 0],
         }
@@ -1159,10 +1159,10 @@ mod tests {
     fn alt_motif_switches_theme() {
         // Тот же лид, разные темы A/B — разные мелодии.
         // use_alt_motif переключает массив, остальное одинаково.
-        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6]);
+        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3]);
         let mut song_b = test_song(0.5);
-        song_b.motif = [0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6];
-        song_b.motif_b = [4, 4, 0, 0, 2, 2, 4, 4, 1, 6, 3, 5, 0, 4, 2, 6];
+        song_b.motif = [0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3];
+        song_b.motif_b = [4, 4, 0, 0, 2, 2, 4, 4, 1, 3, 3, 0, 0, 4, 2, 1];
         song_b.use_alt_motif = true;
         let guide = RoleGuide {
             weights: &[1.0; 16],
@@ -1202,12 +1202,12 @@ mod tests {
     fn motif_shapes_melody() {
         // Один и тот же лид с разными мотивами дает разные мелодии —
         // мотив сида слышно.
-        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6]);
+        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3]);
         let b = motif_pitches([4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
         assert_eq!(a.len(), 8);
         assert_ne!(a, b, "motif ignored");
         // Детерминизм: тот же мотив — те же ноты.
-        assert_eq!(a, motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6]));
+        assert_eq!(a, motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3]));
     }
 
     const POLE_A: &[f32] = &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
@@ -2192,18 +2192,18 @@ mod tests {
 
     #[test]
     fn swing_varies_by_seed_within_band() {
-        // Свинг сида: 0.90..1.10, детерминирован, реально варьируется
-        // (min ниже 0.95, max выше 1.05) — у сидов разный кач.
+        // Свинг сида: 0.93..1.07, детерминирован, реально варьируется
+        // (min ниже 0.96, max выше 1.04) — у сидов разный кач.
         // Club свингован (deep house 54–58%), а не прямой.
         for h in [0u64, 1, 42, 777, 424242] {
             let v = swing_var(h);
-            assert!((0.90..=1.10).contains(&v), "swing out of band: {v}");
+            assert!((0.93..=1.07).contains(&v), "swing out of band: {v}");
             assert_eq!(v, swing_var(h), "not deterministic");
         }
         let vals: Vec<f32> = (0..64u64).map(swing_var).collect();
         assert!(
-            vals.iter().cloned().fold(1.0f32, f32::min) < 0.95
-                && vals.iter().cloned().fold(0.0f32, f32::max) > 1.05,
+            vals.iter().cloned().fold(1.0f32, f32::min) < 0.96
+                && vals.iter().cloned().fold(0.0f32, f32::max) > 1.04,
             "swing never varies"
         );
     }

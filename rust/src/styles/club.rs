@@ -229,10 +229,10 @@ impl Style for ClubStyle {
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 2,
-                jitter: 4,
+                jitter: 2,
             },
             follow_motif: true,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 4, 0.9, 0.45)
+            ..RoleGuide::pitched(LEAD_W, 0, 2, 2, 0.9, 0.45)
         };
         let keys = RoleGuide {
             // Гость-текучка, а не рубильник: ровное присутствие

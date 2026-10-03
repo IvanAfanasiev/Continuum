@@ -118,9 +118,11 @@ pub struct SongContext {
     pub seed_hash: u64,
     /// Плотность генерации 0.7..=1.3 от сида: разреженные и густые сиды.
     pub density: f32,
-    /// Мотив сида: 16 ступеней лада 0..6 — мелодическое ДНК трека.
-    /// Длинная тема через 2 такта (окно фразы) плюс полный диапазон
-    /// лада с прыжками: сиды различаются на слух, а не только в нотах.
+    /// Мотив сида: 16 ступеней лада 0..4 — мелодическое ДНК трека.
+    /// Длинная тема через 2 такта (окно фразы) узким напевом:
+    /// сиды различаются темой, а не случайными прыжками.
+    /// Широкие скачки давали «свою композицию» у каждого слоя —
+    /// неслышимую кашу вместо гетерофонии.
     /// Создается в интро и НЕ меняется весь круг: один сид = одна
     /// узнаваемая тема, развиваемая формой, а не пересочиняемая.
     pub motif: [u8; 16],
@@ -242,14 +244,14 @@ impl Arranger {
 
     pub fn with_score(seed: u64, score: Score) -> Self {
         let seed_hash = splitmix64(seed ^ 0x51ED);
-        // Мотив сида: цепочка splitmix дает 16 ступеней 0..6 —
-        // длинная тема на 2 такта полным диапазоном лада.
+        // Мотив сида: цепочка splitmix дает 16 ступеней 0..4 —
+        // длинная тема на 2 такта узким напевом.
         // Создается в интро и живет весь круг неизменной.
         let mut motif = [0u8; 16];
         let mut m = seed_hash ^ 0x9071F;
         for slot in motif.iter_mut() {
             m = splitmix64(m);
-            *slot = (m % 7) as u8;
+            *slot = (m % 5) as u8;
         }
         // Тема B: близкая вариация A — 3 точечные мутации (±ступень-две).
         // Не «вторая композиция», а развитие той же: припев к куплету,
@@ -262,10 +264,10 @@ impl Arranger {
             let pos = (g % 16) as usize;
             g = splitmix64(g);
             let delta = 1 + (g % 2) as u8;
-            motif_b[pos] = (motif_b[pos] + delta) % 7;
+            motif_b[pos] = (motif_b[pos] + delta) % 5;
         }
         if motif_b == motif {
-            motif_b[0] = (motif_b[0] + 1) % 7;
+            motif_b[0] = (motif_b[0] + 1) % 5;
         }
         let mut a = Self {
             score,
@@ -607,10 +609,10 @@ mod tests {
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
             assert!(!first.use_alt_motif, "intro must start with A");
             for v in first.motif_b {
-                assert!(v <= 6, "motif_b out of range: {v}");
+                assert!(v <= 4, "motif_b out of range: {v}");
             }
             for v in first.motif {
-                assert!(v <= 6, "motif out of range: {v}");
+                assert!(v <= 4, "motif out of range: {v}");
             }
         }
         let mut a = Arranger::new(5);
