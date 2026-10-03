@@ -113,6 +113,8 @@ const _slotMeta = {
   'rain': 'Дождь',
   'fuzz': 'Фазз',
   'acid': 'Эйсид',
+  'shaker': 'Шейкер',
+  'formula': 'Формула',
 };
 
 String _styleTitle(String style) {

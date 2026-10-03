@@ -387,9 +387,21 @@ impl Style for LofiStyle {
             vel_jitter: 0.06,
             ..RoleGuide::kit(SHAKER_LOFI_W, 60, 0.25)
         };
+        // Формула вне club: редкая математическая специя для ручки фронта.
+        let formula = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 1.0,
+            vel_base: 0.3,
+            voice: Voicing::Scale {
+                degree: 0,
+                octave: 1,
+                jitter: 2,
+            },
+            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
+        };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid, shaker,
+            festival, guitar, rain, fuzz, acid, shaker, formula,
         ]
     }
 }

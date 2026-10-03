@@ -3,6 +3,7 @@ pub mod bass;
 pub mod dsp;
 pub mod festival;
 pub mod flute;
+pub mod formula;
 pub mod fuzz;
 pub mod guitar;
 pub mod hat;
@@ -147,10 +148,11 @@ pub enum Slot {
     Fuzz,
     Acid,
     Shaker,
+    Formula,
 }
 
 impl Slot {
-    pub const COUNT: usize = 18;
+    pub const COUNT: usize = 19;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -170,6 +172,7 @@ impl Slot {
         Slot::Fuzz,
         Slot::Acid,
         Slot::Shaker,
+        Slot::Formula,
     ];
 
     pub fn id(self) -> usize {
@@ -200,6 +203,7 @@ impl Slot {
             Slot::Fuzz => "fuzz",
             Slot::Acid => "acid",
             Slot::Shaker => "shaker",
+            Slot::Formula => "formula",
         }
     }
 
@@ -218,7 +222,7 @@ impl Slot {
             Slot::Vocal => InstrumentRole::Vocal,
             Slot::Guitar => InstrumentRole::Lead,
             Slot::Rain => InstrumentRole::Texture,
-            Slot::Flute | Slot::Festival | Slot::Fuzz => InstrumentRole::Lead,
+            Slot::Flute | Slot::Festival | Slot::Fuzz | Slot::Formula => InstrumentRole::Lead,
         }
     }
 
@@ -232,7 +236,7 @@ impl Slot {
             Slot::Pluck | Slot::Laser => Group::Lead,
             Slot::Vocal => Group::Vocal,
             Slot::Vinyl | Slot::Rain => Group::Texture,
-            Slot::Flute | Slot::Festival | Slot::Guitar | Slot::Fuzz => Group::Lead,
+            Slot::Flute | Slot::Festival | Slot::Guitar | Slot::Fuzz | Slot::Formula => Group::Lead,
         }
     }
 
@@ -260,6 +264,7 @@ impl Slot {
             Slot::Fuzz => 0.7,
             Slot::Acid => 0.6,
             Slot::Shaker => 0.55,
+            Slot::Formula => 0.55,
         }
     }
 }
@@ -344,6 +349,7 @@ pub trait Voice: Send {
 
 use festival::FestivalVoice;
 use flute::FluteVoice;
+use formula::FormulaVoice;
 use keys::KeysVoice;
 use laser::LaserVoice;
 use pad::PadVoice;
@@ -364,6 +370,7 @@ pub(crate) enum AnyVoice {
     Festival(FestivalVoice),
     Guitar(GuitarVoice),
     Fuzz(FuzzVoice),
+    Formula(FormulaVoice),
 }
 
 impl Voice for AnyVoice {
@@ -378,6 +385,7 @@ impl Voice for AnyVoice {
             AnyVoice::Festival(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Guitar(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Fuzz(v) => v.set_sample_rate(sample_rate),
+            AnyVoice::Formula(v) => v.set_sample_rate(sample_rate),
         }
     }
 
@@ -392,6 +400,7 @@ impl Voice for AnyVoice {
             AnyVoice::Festival(v) => v.trigger(note),
             AnyVoice::Guitar(v) => v.trigger(note),
             AnyVoice::Fuzz(v) => v.trigger(note),
+            AnyVoice::Formula(v) => v.trigger(note),
         }
     }
 
@@ -406,6 +415,7 @@ impl Voice for AnyVoice {
             AnyVoice::Festival(v) => v.next_sample(),
             AnyVoice::Guitar(v) => v.next_sample(),
             AnyVoice::Fuzz(v) => v.next_sample(),
+            AnyVoice::Formula(v) => v.next_sample(),
         }
     }
 
@@ -420,6 +430,7 @@ impl Voice for AnyVoice {
             AnyVoice::Festival(v) => v.is_active(),
             AnyVoice::Guitar(v) => v.is_active(),
             AnyVoice::Fuzz(v) => v.is_active(),
+            AnyVoice::Formula(v) => v.is_active(),
         }
     }
 
@@ -434,6 +445,7 @@ impl Voice for AnyVoice {
             AnyVoice::Festival(v) => v.reset(),
             AnyVoice::Guitar(v) => v.reset(),
             AnyVoice::Fuzz(v) => v.reset(),
+            AnyVoice::Formula(v) => v.reset(),
         }
     }
 }
@@ -659,6 +671,17 @@ impl VoicePool {
             InstrumentRole::Lead,
             (0..count)
                 .map(|_| AnyVoice::Fuzz(FuzzVoice::default()))
+                .collect(),
+        )
+    }
+
+    /// Формульный лид: функция времени вместо осциллятора.
+    pub fn formulas(id: usize, count: usize) -> Self {
+        Self::with_voices(
+            id,
+            InstrumentRole::Lead,
+            (0..count)
+                .map(|_| AnyVoice::Formula(FormulaVoice::default()))
                 .collect(),
         )
     }

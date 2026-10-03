@@ -45,6 +45,7 @@ pub const RAIN_ID: usize = 15;
 pub const FUZZ_ID: usize = 16;
 pub const ACID_ID: usize = 17;
 pub const SHAKER_ID: usize = 18;
+pub const FORMULA_ID: usize = 19;
 
 /// Все id ансамбля — для валидации `set_track` из Flutter.
 pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
@@ -66,6 +67,7 @@ pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
     FUZZ_ID,
     ACID_ID,
     SHAKER_ID,
+    FORMULA_ID,
 ];
 
 /// Границы ручки темпа фронта, BPM.
@@ -154,6 +156,7 @@ pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
                 Slot::Fuzz => Box::new(VoicePool::fuzzes(slot.id(), 4)),
                 Slot::Acid => Box::new(Acid::new(slot.id())),
                 Slot::Shaker => Box::new(Shaker::new(slot.id())),
+                Slot::Formula => Box::new(VoicePool::formulas(slot.id(), 4)),
             }
         })
         .collect()
@@ -1217,9 +1220,9 @@ mod tests {
         assert_eq!(s.tempo_bpm, 126.0);
 
         // Дефолтный набор club — deep house: панч, саб, снейр, хэты,
-        // плак темы, Rhodes-стабы, шейкер + гости (пул: чопы, кислота).
+        // плак темы, Rhodes-стабы, шейкер, формула + гости (пул: чопы, кислота).
         let tracks = c.tracks();
-        assert_eq!(tracks.len(), 18);
+        assert_eq!(tracks.len(), Slot::COUNT);
         let vol = |id: usize| {
             tracks
                 .iter()
@@ -1244,6 +1247,7 @@ mod tests {
                 t.volume > 0.0
                     && ![
                         BASS_ID, KICK_ID, SNARE_ID, HAT_ID, PLUCK_ID, KEYS_ID, SHAKER_ID,
+                        FORMULA_ID,
                     ]
                     .contains(&(t.id as usize))
             })
@@ -1722,7 +1726,7 @@ mod tests {
         use Slot::*;
 
         let club = ensemble_of("club");
-        for s in [Bass, Kick, Snare, Hat, Pluck, Keys, Shaker] {
+        for s in [Bass, Kick, Snare, Hat, Pluck, Keys, Shaker, Formula] {
             assert!(club.contains(&s), "club: {s:?} missing");
         }
         for s in [
@@ -1740,7 +1744,7 @@ mod tests {
         }
         // Плак вне дефолта: поверх Rhodes и гитары дает кашу —
         // включается вручную. Остальные чужие — тоже вне набора.
-        for s in [Pluck, Kick808, Laser, Vocal, Festival] {
+        for s in [Pluck, Kick808, Laser, Vocal, Festival, Formula] {
             assert!(!lofi.contains(&s), "lofi: {s:?} should be off");
         }
 
@@ -1758,7 +1762,7 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Guitar, Fuzz] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Acid] {
+        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Acid, Formula] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
     }

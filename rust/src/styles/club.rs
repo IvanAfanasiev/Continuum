@@ -136,8 +136,8 @@ impl Style for ClubStyle {
 
     fn ensemble(&self) -> &'static [Slot] {
         // Deep house: биты, ударные, бас, сквозной плак темы,
-        // Rhodes-стабы и шейкер. Без синтезаторных верхов
-        // и шумовых подложек.
+        // Rhodes-стабы, шейкер и формульный лид дропа.
+        // Без синтезаторных верхов и шумовых подложек.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -146,6 +146,7 @@ impl Style for ClubStyle {
             Slot::Pluck,
             Slot::Keys,
             Slot::Shaker,
+            Slot::Formula,
         ]
     }
 
@@ -385,9 +386,26 @@ impl Style for ClubStyle {
             vel_jitter: 0.08,
             ..RoleGuide::kit(SHAKER_W, 60, 0.5)
         };
+        // Формульный лид дропа: та же мотивная скелет-линия, что у плака,
+        // но терцией выше (ступень 2) — гетерофония вместо унисона.
+        // Отклик 2.2 держит куплеты разреженными, дроп — плотным.
+        let formula = RoleGuide {
+            energy_response: 2.2,
+            duration_mult: 0.9,
+            vel_base: 0.5,
+            vel_energy: 0.3,
+            vel_jitter: 0.07,
+            voice: Voicing::Scale {
+                degree: 2,
+                octave: 2,
+                jitter: 2,
+            },
+            follow_motif: true,
+            ..RoleGuide::pitched(LEAD_W, 2, 2, 2, 0.9, 0.5)
+        };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid, shaker,
+            festival, guitar, rain, fuzz, acid, shaker, formula,
         ]
     }
 }
@@ -453,6 +471,42 @@ mod tests {
         let (ad, ao, aj) = deg(acid);
         assert_eq!((ad, aj), (bd, 0), "acid must mirror bass degree without jitter");
         assert_eq!(ao, bo + 1, "acid must sit exactly an octave above bass");
+    }
+
+    #[test]
+    fn formula_shadows_pluck_a_third_up() {
+        // Формула — гетерофония, а не унисон: тот же мотив (follow_motif),
+        // но терцией выше плака (ступень 2 против 0), иначе два лида
+        // на одном скелете слипаются в кашу.
+        use crate::instruments::Slot;
+        let style = ClubStyle::new();
+        let guides = style.slot_guides();
+        let at = |slot: Slot| {
+            Slot::ALL.iter().position(|s| *s == slot).map(|i| &guides[i]).unwrap()
+        };
+        let (pluck, formula) = (at(Slot::Pluck), at(Slot::Formula));
+        let deg = |g: &RoleGuide| match g.voice {
+            Voicing::Scale { degree, octave, jitter } => (degree, octave, jitter),
+            _ => (0, 0, 0),
+        };
+        let (pd, po, _) = deg(pluck);
+        let (fd, fo, _) = deg(formula);
+        assert!(formula.follow_motif, "formula must follow the motif");
+        assert_eq!((fo, fd), (po, pd + 2), "formula must sit a third above pluck");
+        assert!(style.ensemble().contains(&Slot::Formula), "formula must be in club mix");
+    }
+
+    #[test]
+    fn formula_sounds_in_club_drop() {
+        // Формула в ансамбле — обязана давать ноты (молчащий слот
+        // в миксе — мертвый груз и обман ползунка).
+        use crate::playback::FORMULA_ID;
+        let notes = render(11, 512);
+        let hits = notes
+            .iter()
+            .filter(|(_, n)| n.instrument_id == FORMULA_ID)
+            .count();
+        assert!(hits >= 8, "formula silent in club: {hits}");
     }
 
     #[test]
