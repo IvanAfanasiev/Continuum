@@ -21,7 +21,7 @@ use crate::composer::{Composer, LiveTempo};
 use crate::core::{snapshot, DEFAULT_SEED, NOTE_QUEUE_CAPACITY};
 use crate::engine::{f32_identity, AudioEngine, MasterFx, Pump, SharedFx};
 use crate::instruments::{
-    Acid, BassGuitar, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Shaker, Slot,
+    BassGuitar, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Shaker, Slot,
     SnareDrum, Vinyl, VoicePool,
 };
 use crate::mixer::MixerState;
@@ -43,9 +43,8 @@ pub const FESTIVAL_ID: usize = 13;
 pub const GUITAR_ID: usize = 14;
 pub const RAIN_ID: usize = 15;
 pub const FUZZ_ID: usize = 16;
-pub const ACID_ID: usize = 17;
-pub const SHAKER_ID: usize = 18;
-pub const FORMULA_ID: usize = 19;
+pub const SHAKER_ID: usize = 17;
+pub const FORMULA_ID: usize = 18;
 
 /// Все id ансамбля — для валидации `set_track` из Flutter.
 pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
@@ -65,7 +64,6 @@ pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
     GUITAR_ID,
     RAIN_ID,
     FUZZ_ID,
-    ACID_ID,
     SHAKER_ID,
     FORMULA_ID,
 ];
@@ -154,7 +152,6 @@ pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
                 Slot::Guitar => Box::new(VoicePool::guitars(slot.id(), 6)),
                 Slot::Rain => Box::new(Rain::new(slot.id())),
                 Slot::Fuzz => Box::new(VoicePool::fuzzes(slot.id(), 4)),
-                Slot::Acid => Box::new(Acid::new(slot.id())),
                 Slot::Shaker => Box::new(Shaker::new(slot.id())),
                 Slot::Formula => Box::new(VoicePool::formulas(slot.id(), 4)),
             }
@@ -1220,7 +1217,7 @@ mod tests {
         assert_eq!(s.tempo_bpm, 126.0);
 
         // Дефолтный набор club — deep house: панч, саб, снейр, хэты,
-        // плак темы, Rhodes-стабы, шейкер, формула + гости (пул: чопы, кислота).
+        // плак темы, Rhodes-стабы, шейкер, формула + гость (хор по сиду).
         let tracks = c.tracks();
         assert_eq!(tracks.len(), Slot::COUNT);
         let vol = |id: usize| {
@@ -1732,7 +1729,7 @@ mod tests {
         }
         for s in [
             Pad, Laser, Vocal, Flute, Guitar, Rain, Festival, Fuzz,
-            Kick808, Acid, Vinyl,
+            Kick808, Vinyl,
         ] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
         }
@@ -1763,16 +1760,25 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Guitar, Fuzz] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Acid, Formula] {
+        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Formula] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
+        }
+
+        // Phonk без колокола: кик, 808, саб, снейр, хэты,
+        // тёмные клавиши и формульная тень. Хор — редкий гость.
+        let phonk = ensemble_of("phonk");
+        for s in [Bass, Kick, Snare, Hat, Keys, Kick808, Formula] {
+            assert!(phonk.contains(&s), "phonk: {s:?} missing");
+        }
+        for s in [Pad, Pluck, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz] {
+            assert!(!phonk.contains(&s), "phonk: {s:?} should be off");
         }
     }
 
     #[test]
     fn flex_lottery_follows_weights() {
         // Взвешенная лотерея: детерминирована сидом, бюджет держится.
-        // Пул club — один вокал (кислота только вручную): сиды
-        // чередуют «хор есть / хора нет», состав стабилен.
+        // Пул club — один вокал-хор: сиды чередуют «хор есть / хора нет».
         let style = styles::make_style("club").expect("club");
         let mut empty = 0;
         let mut vocal = 0;

@@ -133,9 +133,9 @@ mod tests {
 
     fn render(pitch: u8, vel: f32, secs: f32) -> Vec<f32> {
         let sr = 44_100.0;
-        let mut pool = VoicePool::formulas(19, 4);
+        let mut pool = VoicePool::formulas(18, 4);
         pool.set_sample_rate(sr);
-        pool.trigger(&NoteEvent::new(19, pitch, vel, secs));
+        pool.trigger(&NoteEvent::new(18, pitch, vel, secs));
         (0..(secs * sr) as usize).map(|_| pool.next_sample()).collect()
     }
 
@@ -186,9 +186,9 @@ mod tests {
     #[test]
     fn goes_quiet_after_note_end() {
         let sr = 44_100.0;
-        let mut pool = VoicePool::formulas(19, 1);
+        let mut pool = VoicePool::formulas(18, 1);
         pool.set_sample_rate(sr);
-        pool.trigger(&NoteEvent::new(19, 64, 1.0, 0.2));
+        pool.trigger(&NoteEvent::new(18, 64, 1.0, 0.2));
         for _ in 0..(0.7 * sr) as usize {
             pool.next_sample();
         }

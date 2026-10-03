@@ -112,7 +112,6 @@ const _slotMeta = {
   'guitar': 'Гитара',
   'rain': 'Дождь',
   'fuzz': 'Фазз',
-  'acid': 'Эйсид',
   'shaker': 'Шейкер',
   'formula': 'Формула',
 };

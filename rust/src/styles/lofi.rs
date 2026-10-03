@@ -367,18 +367,6 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.35)
         };
-        // Кислота вне club: тихий сквелч для ручки фронта.
-        let acid = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 0,
-                jitter: 1,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 0, 1, 1.0, 0.3)
-        };
         // Шейкер вне club: пыльные оффбиты для ручки фронта.
         let shaker = RoleGuide {
             energy_response: 1.0,
@@ -401,7 +389,7 @@ impl Style for LofiStyle {
         };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid, shaker, formula,
+            festival, guitar, rain, fuzz, shaker, formula,
         ]
     }
 }

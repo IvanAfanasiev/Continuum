@@ -1,4 +1,3 @@
-pub mod acid;
 pub mod bass;
 pub mod dsp;
 pub mod festival;
@@ -19,7 +18,6 @@ pub mod snare;
 pub mod vinyl;
 pub mod vocal;
 
-pub use acid::Acid;
 pub use bass::BassGuitar;
 pub use fuzz::FuzzVoice;
 pub use guitar::GuitarVoice;
@@ -146,13 +144,12 @@ pub enum Slot {
     Guitar,
     Rain,
     Fuzz,
-    Acid,
     Shaker,
     Formula,
 }
 
 impl Slot {
-    pub const COUNT: usize = 19;
+    pub const COUNT: usize = 18;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -170,7 +167,6 @@ impl Slot {
         Slot::Guitar,
         Slot::Rain,
         Slot::Fuzz,
-        Slot::Acid,
         Slot::Shaker,
         Slot::Formula,
     ];
@@ -201,7 +197,6 @@ impl Slot {
             Slot::Guitar => "guitar",
             Slot::Rain => "rain",
             Slot::Fuzz => "fuzz",
-            Slot::Acid => "acid",
             Slot::Shaker => "shaker",
             Slot::Formula => "formula",
         }
@@ -209,7 +204,7 @@ impl Slot {
 
     pub fn role(self) -> InstrumentRole {
         match self {
-            Slot::Bass | Slot::Acid => InstrumentRole::Bass,
+            Slot::Bass => InstrumentRole::Bass,
             Slot::Kick => InstrumentRole::Kick,
             Slot::Hat | Slot::Shaker => InstrumentRole::Hat,
             Slot::Pad => InstrumentRole::Chords,
@@ -228,7 +223,7 @@ impl Slot {
 
     pub fn group(self) -> Group {
         match self {
-            Slot::Bass | Slot::Acid => Group::Bass,
+            Slot::Bass => Group::Bass,
             Slot::Kick | Slot::Kick808 => Group::Kick,
             Slot::Snare => Group::Snare,
             Slot::Hat | Slot::Shaker => Group::Hat,
@@ -262,7 +257,6 @@ impl Slot {
             Slot::Guitar => 0.6,
             Slot::Rain => 0.2,
             Slot::Fuzz => 0.7,
-            Slot::Acid => 0.6,
             Slot::Shaker => 0.55,
             Slot::Formula => 0.55,
         }

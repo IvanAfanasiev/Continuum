@@ -2,7 +2,7 @@ use super::{RoleGuide, Style, Voicing};
 use crate::instruments::Slot;
 
 /// Club: битмейкер. Прямая бочка + 808-слой, глубокий саб,
-/// клэп на 2 и 4, кислота поверх и виниловый фон.
+/// клэп на 2 и 4 и виниловый фон.
 /// Доминирует прямой бит 4/4: тяжело и агрессивно, без свиста.
 const SCALE: [u8; 7] = [48, 50, 51, 53, 55, 56, 58];
 
@@ -74,15 +74,6 @@ const HAT_BUSY16_W: &[f32] = &[
     0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.4, 0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.5,
 ];
 const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_OFF_W, HAT_BUSY16_W];
-// Кислота: плотная шестнадцатая линия с акцентами — сквелч течет,
-// а не квакает отдельными пинами. Якоря на оффбитах держат кач.
-const ACID_W: &[f32] = &[
-    0.5, 0.4, 1.0, 0.4, 0.6, 0.4, 1.0, 0.4, 0.5, 0.4, 1.0, 0.4, 0.6, 0.4, 1.0, 0.5,
-];
-const ACID_P1: &[f32] = &[
-    0.7, 0.4, 1.0, 0.4, 0.5, 0.6, 1.0, 0.4, 0.7, 0.4, 1.0, 0.4, 0.5, 0.6, 1.0, 0.4,
-];
-const ACID_POLES: &[&[f32]] = &[ACID_W, ACID_P1];
 
 pub struct ClubStyle {}
 
@@ -150,8 +141,7 @@ impl Style for ClubStyle {
         ]
     }
 
-    /// Гость deep house: соул-хор по сиду (есть/нет), кислота —
-    /// только вручную: второй бас в автомиксе давал кашу вместо сквелча.
+    /// Гость deep house: соул-хор по сиду (есть/нет).
     fn flex_pool(&self) -> &'static [Slot] {
         &[Slot::Vocal]
     }
@@ -364,24 +354,6 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.35)
         };
-        // Кислотный бас поверх саба: плотная линия, сквелч с акцентами.
-        // Джиттер строго 0: эйсид дублирует бас октавой выше —
-        // расстроенная октава бьётся с гармониками саба (жабий стрекот).
-        let acid = RoleGuide {
-            energy_response: 1.6,
-            duration_mult: 0.9,
-            vel_base: 0.6,
-            vel_energy: 0.2,
-            vel_jitter: 0.07,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 0,
-                jitter: 0,
-            },
-            vel_high_cut: 0.8,
-            poles: Some(ACID_POLES),
-            ..RoleGuide::pitched(ACID_W, 0, 0, 1, 0.4, 0.65)
-        };
         // Шейкер deep house: песок 16-х поверх хэта, акцент на оффбитах.
         let shaker = RoleGuide {
             energy_response: 1.0,
@@ -412,7 +384,7 @@ impl Style for ClubStyle {
         };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, acid, shaker, formula,
+            festival, guitar, rain, fuzz, shaker, formula,
         ]
     }
 }
@@ -456,28 +428,6 @@ mod tests {
             );
         }
         out
-    }
-
-    #[test]
-    fn acid_doubles_bass_in_unison() {
-        // Правило против жабьего стрекота: эйсид — октава саба
-        // (та же ступень, джиттер 0), иначе фундамента бьются
-        // с гармониками (замер: 11.5 Гц в полосе 120–500).
-        use crate::instruments::Slot;
-        let style = ClubStyle::new();
-        let guides = style.slot_guides();
-        let at = |slot: Slot| {
-            Slot::ALL.iter().position(|s| *s == slot).map(|i| &guides[i]).unwrap()
-        };
-        let (bass, acid) = (at(Slot::Bass), at(Slot::Acid));
-        let deg = |g: &RoleGuide| match g.voice {
-            Voicing::Scale { degree, octave, jitter } => (degree, octave, jitter),
-            _ => (0, 0, 0),
-        };
-        let (bd, bo, _) = deg(bass);
-        let (ad, ao, aj) = deg(acid);
-        assert_eq!((ad, aj), (bd, 0), "acid must mirror bass degree without jitter");
-        assert_eq!(ao, bo + 1, "acid must sit exactly an octave above bass");
     }
 
     #[test]

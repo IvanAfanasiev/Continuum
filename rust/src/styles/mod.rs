@@ -8,6 +8,7 @@
 
 pub mod club;
 pub mod lofi;
+pub mod phonk;
 pub mod rock;
 
 use rand::rngs::StdRng;
@@ -1011,18 +1012,20 @@ fn play_guide(
 pub fn make_style(name: &str) -> Option<Box<dyn Style>> {
     use club::ClubStyle;
     use lofi::LofiStyle;
+    use phonk::PhonkStyle;
     use rock::RockStyle;
     match name.trim().to_lowercase().as_str() {
         "club" => Some(Box::new(ClubStyle::new())),
         "lofi" => Some(Box::new(LofiStyle::new())),
         "rock" => Some(Box::new(RockStyle::new())),
+        "phonk" => Some(Box::new(PhonkStyle::new())),
         _ => None,
     }
 }
 
 /// Все доступные стили: имена для CLI и Flutter.
 pub fn style_names() -> &'static [&'static str] {
-    &["club", "rock", "lofi"]
+    &["club", "rock", "lofi", "phonk"]
 }
 
 #[cfg(test)]
