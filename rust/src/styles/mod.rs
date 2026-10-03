@@ -552,11 +552,19 @@ pub(crate) fn tonic_shift_for(seed_hash: u64) -> i8 {
     (crate::arranger::splitmix64(seed_hash ^ 0x701C) % 5) as i8 - 2
 }
 
-/// Свинг сида: множитель 0.95..1.05 к свингу стиля — у каждого сида
-/// свой кач (слышно!), жанр цел (отклонение ±5%). Детерминирован.
+/// Октава темы от сида (−1/0/+1 на весь трек): один сид поет
+/// высоко, другой — тенором. Едет со всей темой (мотив и подхват
+/// вместе), а не с отдельным слотом. Детерминирована полностью.
+pub(crate) fn motif_octave(seed_hash: u64) -> i8 {
+    (crate::arranger::splitmix64(seed_hash ^ 0x0C7A) % 3) as i8 - 1
+}
+
+/// Свинг сида: множитель 0.90..1.10 к свингу стиля — у каждого сида
+/// свой кач (слышно!), жанр цел (отклонение ±10%). Детерминирован.
+/// свой кач (слышно!), жанр цел (отклонение ±10%). Детерминирован.
 pub(crate) fn swing_var(seed_hash: u64) -> f32 {
     let h = crate::arranger::splitmix64(seed_hash ^ 0x5716);
-    0.95 + 0.1 * ((h >> 32) as f32 / (u32::MAX as f32))
+    0.90 + 0.2 * ((h >> 32) as f32 / (u32::MAX as f32))
 }
 
 /// Модальный вариант от сида: дорийская секста / фригийская секунда /
@@ -935,7 +943,14 @@ fn play_guide(
                     step_in_measure,
                     0x0C74 ^ (song.phrase_index as u64),
                 ) < guide.octave_up;
-            (base, octave + if bump { 1 } else { 0 })
+            // Октава темы от сида: мотив и подхват едут вместе.
+            // Верх страхует колпак ниже.
+            let seed_octave = if use_motif {
+                motif_octave(song.seed_hash)
+            } else {
+                0
+            };
+            (base, octave + if bump { 1 } else { 0 } + seed_octave)
         }
     };
 
@@ -962,6 +977,13 @@ fn play_guide(
         let mut tone = modal_tone(scale, idx, song.seed_hash)
             .saturating_add_signed(tonic_shift_for(song.seed_hash))
             .saturating_add_signed(octaves.saturating_mul(12));
+        // Потолок темы: сид-октава могла вынести выше гайда —
+        // складываем октавой вниз (класс тот же, свиста нет).
+        if guide.follow_motif || force_motif {
+            while tone > guide.top_pitch.min(86) {
+                tone = tone.saturating_sub(12);
+            }
+        }
         // Низ держим внизу: уползшее выше капа складываем октавой вниз.
         // Гармония та же (тот же питч-класс). Кап от гайда: саб 45,
         // рок риффует выше (52) вслед за гитарой. Питчевый кик (808)
@@ -1046,8 +1068,8 @@ mod tests {
             stage_gains: [1.0; 8],
             seed_hash: 42,
             density: 1.0,
-            motif: [0, 2, 4, 2, 0, 3, 1, 4],
-            motif_b: [1, 4, 0, 3, 2, 4, 2, 0],
+            motif: [0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6],
+            motif_b: [1, 4, 0, 3, 2, 4, 2, 0, 4, 5, 1, 6, 3, 2, 5, 0],
             use_alt_motif: false,
             prog: [0, 0, 0, 0],
         }
@@ -1098,7 +1120,7 @@ mod tests {
         }
     }
 
-    fn motif_pitches(motif: [u8; 8]) -> Vec<u8> {
+    fn motif_pitches(motif: [u8; 16]) -> Vec<u8> {
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
@@ -1137,10 +1159,10 @@ mod tests {
     fn alt_motif_switches_theme() {
         // Тот же лид, разные темы A/B — разные мелодии.
         // use_alt_motif переключает массив, остальное одинаково.
-        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4]);
+        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6]);
         let mut song_b = test_song(0.5);
-        song_b.motif = [0, 2, 4, 2, 0, 3, 1, 4];
-        song_b.motif_b = [4, 4, 0, 0, 2, 2, 4, 4];
+        song_b.motif = [0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6];
+        song_b.motif_b = [4, 4, 0, 0, 2, 2, 4, 4, 1, 6, 3, 5, 0, 4, 2, 6];
         song_b.use_alt_motif = true;
         let guide = RoleGuide {
             weights: &[1.0; 16],
@@ -1180,12 +1202,12 @@ mod tests {
     fn motif_shapes_melody() {
         // Один и тот же лид с разными мотивами дает разные мелодии —
         // мотив сида слышно.
-        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4]);
-        let b = motif_pitches([4, 4, 4, 4, 4, 4, 4, 4]);
+        let a = motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6]);
+        let b = motif_pitches([4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
         assert_eq!(a.len(), 8);
         assert_ne!(a, b, "motif ignored");
         // Детерминизм: тот же мотив — те же ноты.
-        assert_eq!(a, motif_pitches([0, 2, 4, 2, 0, 3, 1, 4]));
+        assert_eq!(a, motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 5, 3, 6, 4, 2, 5, 1, 6]));
     }
 
     const POLE_A: &[f32] = &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
@@ -1907,6 +1929,10 @@ mod tests {
                 if tonic_shift_for(h1) == tonic_shift_for(h2) {
                     continue;
                 }
+                // Октава темы — та же: меряем сдвиг тоники, а не октаву.
+                if motif_octave(h1) != motif_octave(h2) {
+                    continue;
+                }
                 pair = Some((h1, h2));
                 break 'search;
             }
@@ -2153,19 +2179,31 @@ mod tests {
     }
 
     #[test]
+    fn motif_octave_covers_all_three() {
+        // Октава темы от сида: −1/0/+1 все выпадают (иначе фича мертва),
+        // детерминирована хэшем.
+        use std::collections::HashSet;
+        let seen: HashSet<i8> = (0..64u64)
+            .map(|s| motif_octave(crate::arranger::splitmix64(s ^ 0x51ED)))
+            .collect();
+        assert_eq!(seen, HashSet::from([-1, 0, 1]), "octave stuck: {seen:?}");
+        assert_eq!(motif_octave(42), motif_octave(42), "not deterministic");
+    }
+
+    #[test]
     fn swing_varies_by_seed_within_band() {
-        // Свинг сида: 0.95..1.05, детерминирован, реально варьируется
-        // (min ниже 0.98, max выше 1.02) — у сидов разный кач.
+        // Свинг сида: 0.90..1.10, детерминирован, реально варьируется
+        // (min ниже 0.95, max выше 1.05) — у сидов разный кач.
         // Club свингован (deep house 54–58%), а не прямой.
         for h in [0u64, 1, 42, 777, 424242] {
             let v = swing_var(h);
-            assert!((0.95..=1.05).contains(&v), "swing out of band: {v}");
+            assert!((0.90..=1.10).contains(&v), "swing out of band: {v}");
             assert_eq!(v, swing_var(h), "not deterministic");
         }
         let vals: Vec<f32> = (0..64u64).map(swing_var).collect();
         assert!(
-            vals.iter().cloned().fold(1.0f32, f32::min) < 0.98
-                && vals.iter().cloned().fold(0.0f32, f32::max) > 1.02,
+            vals.iter().cloned().fold(1.0f32, f32::min) < 0.95
+                && vals.iter().cloned().fold(0.0f32, f32::max) > 1.05,
             "swing never varies"
         );
     }

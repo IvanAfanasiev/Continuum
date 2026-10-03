@@ -118,15 +118,17 @@ pub struct SongContext {
     pub seed_hash: u64,
     /// Плотность генерации 0.7..=1.3 от сида: разреженные и густые сиды.
     pub density: f32,
-    /// Мотив сида: 8 ступеней лада 0..4 — мелодическое ДНК трека.
+    /// Мотив сида: 16 ступеней лада 0..6 — мелодическое ДНК трека.
+    /// Длинная тема через 2 такта (окно фразы) плюс полный диапазон
+    /// лада с прыжками: сиды различаются на слух, а не только в нотах.
     /// Создается в интро и НЕ меняется весь круг: один сид = одна
     /// узнаваемая тема, развиваемая формой, а не пересочиняемая.
-    pub motif: [u8; 8],
+    pub motif: [u8; 16],
     /// Вторая тема сида: B — вариация A (3 мутации), материал кульминаций.
     /// Drop и PostChorus поют B, остальное A: куплет/припев различаются
     /// темой, а не только громкостью. Границы — границы секций (их длины
     /// от сида), отдельной блочной логики нет.
-    pub motif_b: [u8; 8],
+    pub motif_b: [u8; 16],
     /// B звучит на кульминациях (Drop/PostChorus), A — везде иначе.
     pub use_alt_motif: bool,
     /// Гармоническая прогрессия сида: сдвиги ступеней 0..4 для аккомпанемента,
@@ -154,8 +156,8 @@ pub struct Arranger {
     cycle: u64,
     phrase_offset: usize,
     density: f32,
-    motif: [u8; 8],
-    motif_b: [u8; 8],
+    motif: [u8; 16],
+    motif_b: [u8; 16],
     prog: [u8; 4],
     /// Сглаженные громкости ролей: едут к таблице полпути за такт,
     /// а не прыгают на стыках (инструменты не гаснут/не врываются).
@@ -240,14 +242,14 @@ impl Arranger {
 
     pub fn with_score(seed: u64, score: Score) -> Self {
         let seed_hash = splitmix64(seed ^ 0x51ED);
-        // Мотив сида: цепочка splitmix дает 8 ступеней 0..4 —
-        // узкий напевный диапазон настоящей темы. Создается в интро
-        // и живет весь круг неизменным.
-        let mut motif = [0u8; 8];
+        // Мотив сида: цепочка splitmix дает 16 ступеней 0..6 —
+        // длинная тема на 2 такта полным диапазоном лада.
+        // Создается в интро и живет весь круг неизменной.
+        let mut motif = [0u8; 16];
         let mut m = seed_hash ^ 0x9071F;
         for slot in motif.iter_mut() {
             m = splitmix64(m);
-            *slot = (m % 5) as u8;
+            *slot = (m % 7) as u8;
         }
         // Тема B: близкая вариация A — 3 точечные мутации (±ступень-две).
         // Не «вторая композиция», а развитие той же: припев к куплету,
@@ -257,13 +259,13 @@ impl Arranger {
         let mut g = splitmix64(seed_hash ^ 0xB17B);
         for _ in 0..3 {
             g = splitmix64(g);
-            let pos = (g % 8) as usize;
+            let pos = (g % 16) as usize;
             g = splitmix64(g);
             let delta = 1 + (g % 2) as u8;
-            motif_b[pos] = (motif_b[pos] + delta) % 5;
+            motif_b[pos] = (motif_b[pos] + delta) % 7;
         }
         if motif_b == motif {
-            motif_b[0] = (motif_b[0] + 1) % 5;
+            motif_b[0] = (motif_b[0] + 1) % 7;
         }
         let mut a = Self {
             score,
@@ -605,7 +607,10 @@ mod tests {
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
             assert!(!first.use_alt_motif, "intro must start with A");
             for v in first.motif_b {
-                assert!(v <= 4, "motif_b out of range: {v}");
+                assert!(v <= 6, "motif_b out of range: {v}");
+            }
+            for v in first.motif {
+                assert!(v <= 6, "motif out of range: {v}");
             }
         }
         let mut a = Arranger::new(5);
