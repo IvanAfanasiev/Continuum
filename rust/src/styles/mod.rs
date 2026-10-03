@@ -2148,6 +2148,7 @@ mod tests {
     fn swing_varies_by_seed_within_band() {
         // Свинг сида: 0.95..1.05, детерминирован, реально варьируется
         // (min ниже 0.98, max выше 1.02) — у сидов разный кач.
+        // Club свингован (deep house 54–58%), а не прямой.
         for h in [0u64, 1, 42, 777, 424242] {
             let v = swing_var(h);
             assert!((0.95..=1.05).contains(&v), "swing out of band: {v}");
@@ -2159,6 +2160,13 @@ mod tests {
                 && vals.iter().cloned().fold(0.0f32, f32::max) > 1.02,
             "swing never varies"
         );
+    }
+
+    #[test]
+    fn club_swings_for_deep_house() {
+        // Deep house кач: свинг club в 1.15..1.25 (54–58%), не прямой.
+        let swing = make_style("club").expect("club").swing_ratio();
+        assert!((1.15..=1.25).contains(&swing), "club too straight: {swing}");
     }
 
     #[test]

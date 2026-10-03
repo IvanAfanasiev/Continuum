@@ -9,7 +9,10 @@ const TINE_RATIO: f32 = 3.98;
 const TINE_DECAY: f32 = 45.0;
 const TREMOLO_HZ: f32 = 4.5;
 const TREMOLO_DEPTH: f32 = 0.22;
-const ATTACK_SECS: f32 = 0.003;
+/// Атака 8 мс (спека стабов 5–15): мягкий вход без щелчка.
+/// High-pass 180 Гц: низ под Rhodes вырезан (место басу и бочке).
+const ATTACK_SECS: f32 = 0.008;
+const HP_HZ: f32 = 180.0;
 const AMP_DECAY_RATE: f32 = 3.5;
 const SUSTAIN_LEVEL: f32 = 0.55;
 const FADE_SECS: f32 = 0.08;
@@ -40,6 +43,7 @@ pub struct KeysVoice {
     samples_left: usize,
     attack_mul: f32,
     release_mul: f32,
+    hp: Svf,
 }
 
 impl Voice for KeysVoice {
@@ -55,6 +59,7 @@ impl Voice for KeysVoice {
         self.tine_gain = 0.12 + 0.45 * note.velocity;
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
+        self.hp.reset();
         self.t = 0.0;
         self.car_phase = 0.0;
         self.mod_phase = 0.0;
@@ -93,7 +98,9 @@ impl Voice for KeysVoice {
 
         self.t += 1.0 / sample_rate;
         let raw = (body * 0.75 + tine) * self.gain * amp * attack * fade * tremolo;
-        let (polished, _, _) = self.polish.process(raw, POLISH_HZ, POLISH_Q, sample_rate);
+        // High-pass 180 Гц: низ под Rhodes вырезан, место басу и бочке.
+        let (_, _, hipped) = self.hp.process(raw, HP_HZ, 0.7, sample_rate);
+        let (polished, _, _) = self.polish.process(hipped, POLISH_HZ, POLISH_Q, sample_rate);
         polished * VOICE_GAIN
     }
 
@@ -106,6 +113,7 @@ impl Voice for KeysVoice {
         self.t = 0.0;
         self.gain = 0.0;
         self.polish.reset();
+        self.hp.reset();
     }
 }
 
@@ -152,5 +160,28 @@ mod tests {
         }
         assert!(peak > 0.2, "keys too quiet: {peak}");
         assert!(keys.is_active(), "long chord cut too early");
+    }
+
+    #[test]
+    fn attack_fits_stab_spec() {
+        // Атака 8 мс (спека 5–15): 90% пика между 5 и 30 мс.
+        let sr = 44_100.0;
+        let mut keys = VoicePool::keys(7, 1);
+        keys.set_sample_rate(sr);
+        keys.trigger(&NoteEvent::new(7, 60, 0.8, 0.5));
+        let mut peak: f32 = 0.0;
+        let buf: Vec<f32> = (0..(0.2 * sr) as usize)
+            .map(|_| {
+                let s = keys.next_sample();
+                assert!(s.is_finite());
+                peak = peak.max(s.abs());
+                s
+            })
+            .collect();
+        let t90 = buf.iter().position(|s| s.abs() >= peak * 0.9).unwrap();
+        assert!(
+            (0.005 * sr) as usize <= t90 && t90 <= (0.030 * sr) as usize,
+            "attack out of spec: {t90}"
+        );
     }
 }

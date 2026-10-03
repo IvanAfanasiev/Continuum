@@ -1,5 +1,5 @@
 use super::{
-    dsp::{release_fade, Svf},
+    dsp::{release_fade, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -19,8 +19,10 @@ const PRESENCE_GAIN: f32 = 0.45;
 const DRIVE_BASE: f32 = 1.5;
 const DRIVE_VEL: f32 = 2.5;
 const PRESENCE_Q: f32 = 0.7;
-/// Легкое проседание питча в атаке — аналоговая «плотность» удара.
-/// Перекосом гасится вместе с презенсом: чирп = часть дребезга.
+/// Щипок медиатора: короткий шумовой транзиент. Его слышно
+/// в picked-басу референса; без него атака безликая.
+const PICK_DECAY: f32 = 120.0;
+const PICK_GAIN: f32 = 0.12;
 const PITCH_DROP: f32 = 0.025;
 const PITCH_DROP_RATE: f32 = 80.0;
 /// Атака с фейдом вместо щелчка: 10 мс + мягкость сида сверху.
@@ -40,9 +42,11 @@ struct BassVoice {
     elapsed: usize,
     samples_left: usize,
     presence_lp: Svf,
+    presence_lp2: Svf,
     attack_mul: f32,
     release_mul: f32,
     sub_bias: f32,
+    noise: Noise,
 }
 
 impl Voice for BassVoice {
@@ -60,7 +64,9 @@ impl Voice for BassVoice {
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
         self.sub_bias = note.sub_bias.clamp(0.0, 1.0);
+        self.noise = Noise::new(super::dsp::note_seed(note, 0x8A55));
         self.presence_lp.reset();
+        self.presence_lp2.reset();
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -95,14 +101,36 @@ impl Voice for BassVoice {
         // фундаменту — тепло без биений и хоруса.
         // Саб-перекос стиля гасит презенс-цепь (край «струны») в пользу
         // чистого синуса: club глубокий и ровный, рок струнный (0.0).
+        // Конверт среза (deep house): tanh-гармоники ныряют 680→300 Гц
+        // за ~300 мс (щипок в атаке), а четная октава идет МИМО фильтра —
+        // ламповое тепло стабильно весь сустейн, а не гаснет с нырком.
         let drive = DRIVE_BASE + DRIVE_VEL * self.velocity;
-        let cutoff = (self.frequency * 6.0).clamp(300.0, 1600.0);
+        let cutoff = 300.0 + 380.0 * (-t / 0.3).exp();
         let (presence, _, _) =
             self.presence_lp
-                .process((wave * drive).tanh() + octave, cutoff, PRESENCE_Q, sample_rate);
+                .process((wave * drive).tanh(), cutoff, PRESENCE_Q, sample_rate);
+        // Второй каскад (24 дБ/окт суммарно): одиночный пропускал
+        // tanh-гармоники далеко вверх — нырка не было слышно.
+        let (presence, _, _) =
+            self.presence_lp2
+                .process(presence, cutoff, PRESENCE_Q, sample_rate);
 
         let keep = 1.0 - 0.85 * self.sub_bias;
-        (sub + presence * PRESENCE_GAIN * keep) * self.gain * amp * attack * fade
+        // Щипок: широкополосный транзиент только в атаке (8 мс).
+        // С перекосом тише, но не исчезает: picked-суб тоже щиплет.
+        // Своя быстрая рампа (2 мс): щелчок идет раньше мягкого тела,
+        // иначе 10 мс атака его душит.
+        let pa = (t / 0.002).min(1.0);
+        let pick = self.noise.sample()
+            * (-PICK_DECAY * t).exp()
+            * PICK_GAIN
+            * (1.0 - 0.5 * self.sub_bias)
+            * pa;
+        (sub + (presence * PRESENCE_GAIN + octave * OCTAVE_GAIN) * keep + pick)
+            * self.gain
+            * amp
+            * attack
+            * fade
     }
 
     fn reset(&mut self) {
@@ -110,6 +138,7 @@ impl Voice for BassVoice {
         self.elapsed = 0;
         self.gain = 0.0;
         self.presence_lp.reset();
+        self.presence_lp2.reset();
     }
 
     fn is_active(&self) -> bool {
@@ -183,6 +212,33 @@ mod tests {
         (0..(secs * sr) as usize)
             .map(|_| bass.next_sample())
             .collect()
+    }
+
+    #[test]
+    fn filter_dives_from_pick_to_sub() {
+        // Конверт среза: первые 100 мс ярче (щипок), 400–500 мс темнее.
+        // Меряем энергию первой разности (ВЧ) во временной области —
+        // без утечек прямоугольного окна гёртцеля.
+        fn hf_share(from_ms: f32, to_ms: f32) -> f32 {
+            let sr = 44_100.0;
+            let out = render_bass(40, 1.0, 1.0);
+            let seg = &out[(from_ms / 1000.0 * sr) as usize..(to_ms / 1000.0 * sr) as usize];
+            let mut hf = 0.0;
+            let mut tot = 0.0;
+            let mut prev = 0.0;
+            for &s in seg {
+                hf += (s - prev) * (s - prev);
+                tot += s * s;
+                prev = s;
+            }
+            hf / tot.max(1e-9)
+        }
+        assert!(
+            hf_share(15.0, 100.0) > hf_share(400.0, 500.0),
+            "filter does not dive: early={} late={}",
+            hf_share(15.0, 100.0),
+            hf_share(400.0, 500.0)
+        );
     }
 
     #[test]

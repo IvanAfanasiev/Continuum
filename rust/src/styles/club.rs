@@ -112,7 +112,8 @@ impl Style for ClubStyle {
     }
 
     fn swing_ratio(&self) -> f32 {
-        1.0
+        // Deep house кач 54–58%: свингованные 16-е вместо прямых.
+        1.2
     }
 
     fn scale(&self) -> &'static [u8] {
@@ -127,8 +128,10 @@ impl Style for ClubStyle {
         0.3
     }
 
+    /// Срез верхов мастера, Гц. Тёмный аналоговый верх: полка выше
+    /// 16 кГц срезана (спека deep house). Было 19000 — лишний воздух цифры.
     fn treble_cutoff(&self) -> f32 {
-        19000.0
+        16000.0
     }
 
     fn ensemble(&self) -> &'static [Slot] {

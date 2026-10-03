@@ -19,7 +19,9 @@ const OPEN_THRESHOLD_SECS: f32 = 0.12;
 const MAX_OPEN_SECS: f32 = 0.5;
 const CLOSED_DECAY: f32 = 90.0;
 const OPEN_DECAY: f32 = 9.0;
-const ATTACK_SECS: f32 = 0.0005;
+/// Атака смягчена (1.5 мс): transient shaper против резких пиков,
+/// как в спеке перкуссии. Было 0.5 мс — щелкало.
+const ATTACK_SECS: f32 = 0.0015;
 const FADE_SECS: f32 = 0.006;
 
 #[derive(Clone, Default)]

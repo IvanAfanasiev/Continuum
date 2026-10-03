@@ -16,6 +16,9 @@ const CUTOFF_SWEEP_HZ: f32 = 900.0;
 const CUTOFF_VEL_HZ: f32 = 300.0;
 const FILTER_Q: f32 = 0.7;
 const LFO_HZ: f32 = 0.15;
+/// High-pass 200 Гц (низ спеки deep house 200–300): гул саб-октавы пил
+/// вырезан, место басу. Нижний край спеки — наш регистр ниже.
+const PAD_HP_HZ: f32 = 200.0;
 /// Медленный дрейф строя (±3.5 цента): живое дыхание аналога
 /// вместо цифровой стерильности. Фаза дрейфа детерминирована
 /// высотой ноты — один и тот же аккорд звучит одинаково.
@@ -31,6 +34,7 @@ pub struct PadVoice {
     drift_phase: f32,
     lp1: Svf,
     lp2: Svf,
+    hp: Svf,
     frequency: f32,
     gain: f32,
     attack_samples: usize,
@@ -68,6 +72,7 @@ impl Voice for PadVoice {
         // Состояния лишь чистятся от деначала (иначе редкие всплески CPU).
         self.lp1.scrub_denormals();
         self.lp2.scrub_denormals();
+        self.hp.reset();
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -95,7 +100,8 @@ impl Voice for PadVoice {
         self.lfo_phase = (self.lfo_phase + LFO_HZ / sample_rate) % 1.0;
         let lfo = (self.lfo_phase * TAU).sin() * 0.5 + 0.5;
         let cutoff = CUTOFF_MIN_HZ + lfo * CUTOFF_SWEEP_HZ + self.gain * CUTOFF_VEL_HZ;
-        let (l1, _, _) = self.lp1.process(raw, cutoff, FILTER_Q, sample_rate);
+        let (_, _, hipassed) = self.hp.process(raw, PAD_HP_HZ, FILTER_Q, sample_rate);
+        let (l1, _, _) = self.lp1.process(hipassed, cutoff, FILTER_Q, sample_rate);
         let (l2, _, _) = self.lp2.process(l1, cutoff, FILTER_Q, sample_rate);
 
         l2 * self.gain * attack * fade * VOICE_GAIN
@@ -111,6 +117,7 @@ impl Voice for PadVoice {
         self.gain = 0.0;
         self.lp1.reset();
         self.lp2.reset();
+        self.hp.reset();
     }
 }
 
