@@ -22,6 +22,13 @@ class PullPlayer {
 
   bool get running => _running;
 
+  /// Замеры темпа рендера для диагностики: сколько мс занимает блок.
+  /// Рендер медленнее realtime (блок 0.5с дольше 500мс) = заикания:
+  /// трек голодает. Пишем в лог только медленные и сводку каждых 20.
+  int _chunks = 0;
+  int _slowChunks = 0;
+  int _renderMsTotal = 0;
+
   /// Старт: подготовить трек и гнать цикл. false — трек не создался.
   Future<bool> start() async {
     if (_running) return true;
@@ -43,13 +50,27 @@ class PullPlayer {
   }
 
   Future<void> _loop() async {
+    final sw = Stopwatch();
     while (_running) {
       late final Float32List pcm;
       try {
+        sw.reset();
+        sw.start();
         pcm = await playbackPullRender(
           frames: BigInt.from(chunkFrames),
           sampleRate: sampleRate,
         );
+        sw.stop();
+        _chunks++;
+        _renderMsTotal += sw.elapsedMilliseconds;
+        if (sw.elapsedMilliseconds > 250) {
+          _slowChunks++;
+          debugPrint('[pull] SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
+              '(budget 500ms, slow=$_slowChunks)');
+        } else if (_chunks % 20 == 0) {
+          debugPrint('[pull] render avg ${_renderMsTotal ~/ _chunks}ms '
+              '(slow=$_slowChunks/$_chunks)');
+        }
       } catch (e) {
         debugPrint('[pull] render failed: $e');
         await Future<void>.delayed(const Duration(milliseconds: 200));
