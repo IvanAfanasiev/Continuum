@@ -1,16 +1,15 @@
 use super::{
-    dsp::{release_fade, saw_blep, Svf},
+    dsp::{release_fade, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
+use std::f32::consts::TAU;
 
-/// Фазз-синт: два расстроенных пилообразных осциллятора (PolyBLEP)
+/// Фазз-синт: битовая формула из «math functions» (`−1 + ¼m₂ + m₄·m₁`)
 /// плюс жирная суб-октава — через tanh-перегруз и темный lowpass.
 /// Рев гитар без гитары: механический рок, индастриал-слои, жирные хуки.
 /// Темный и злой — в противовес светлой стене фестиваля.
 /// Короткие ноты звучат чопами, длинные — стеной.
-const DETUNE_UP: f32 = 1.00463;
-const DETUNE_DOWN: f32 = 0.99539;
 const DRIVE: f32 = 4.5;
 const TONE_HZ: f32 = 1900.0;
 const TONE_Q: f32 = 0.8;
@@ -22,9 +21,8 @@ const FADE_SECS: f32 = 0.02;
 #[derive(Clone, Default)]
 pub struct FuzzVoice {
     sample_rate: f32,
-    phase_a: f32,
-    phase_b: f32,
-    phase_sub: f32,
+    /// Циклы от старта (общая высота формулы).
+    phase: f32,
     filter: Svf,
     frequency: f32,
     gain: f32,
@@ -43,9 +41,7 @@ impl Voice for FuzzVoice {
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
-        self.phase_a = 0.0;
-        self.phase_b = 0.0;
-        self.phase_sub = 0.0;
+        self.phase = 0.0;
         self.filter.reset();
     }
 
@@ -56,16 +52,19 @@ impl Voice for FuzzVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        let a = saw_blep(self.phase_a, self.frequency * DETUNE_UP, sample_rate);
-        let b = saw_blep(self.phase_b, self.frequency * DETUNE_DOWN, sample_rate);
-        let s = saw_blep(self.phase_sub, self.frequency * 0.5, sample_rate);
-        self.phase_a = (self.phase_a + self.frequency * DETUNE_UP / sample_rate) % 1.0;
-        self.phase_b = (self.phase_b + self.frequency * DETUNE_DOWN / sample_rate) % 1.0;
-        self.phase_sub = (self.phase_sub + self.frequency * 0.5 / sample_rate) % 1.0;
+        self.phase = (self.phase + self.frequency / sample_rate) % 4096.0;
+        // Битовая формула вместо пил: скрежет цифры из битовых операций,
+        // среднее вычтено (иначе постоянка косит перегруз).
+        let x = self.phase;
+        let m1 = (x.floor() as i64 & 1) as f32;
+        let m2 = ((x * 2.0).floor() as i64 & 1) as f32;
+        let m4 = ((x * 4.0).floor() as i64 & 1) as f32;
+        let bit = (-1.0 + 0.25 * m2 + m4 * m1 + 0.625) * 0.7;
+        let s = (TAU * x * 0.5).sin();
 
         // Перегруз вместо громкости: гармоники растут, пик — нет.
         // Суб жирный: стена давит низом, а не визжит верхом.
-        let driven = ((a + b) * 0.5 + s * 0.9) * DRIVE;
+        let driven = (bit + s * 0.9) * DRIVE;
         let shaped = driven.tanh();
         let (warm, _, _) = self.filter.process(shaped, TONE_HZ, TONE_Q, sample_rate);
 

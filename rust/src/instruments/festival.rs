@@ -1,13 +1,17 @@
 use super::{
-    dsp::{release_fade, saw_blep, Svf},
+    dsp::{release_fade, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
+use std::f32::consts::TAU;
 
-/// Фестивальный суперсо-лид: широкая стена из 5 пил через яркий
-/// щелчок среза. Рифф биг-рума поверх дропа — светло и дерзко,
-/// в противовес темному лазеру.
-const DETUNE: [f32; 5] = [1.0, 1.009, 0.991, 1.005, 0.995];
+/// Фестивальный суперсо-лид: широкая стена из чистых интервалов
+/// (унисон, 10/9, 4/3, 3/2, октава) через яркий щелчок среза.
+/// Рифф биг-рума поверх дропа — светло и дерзко, математика
+/// вместо расстроенных пил: стена строит, а не гудит.
+/// В противовес темному лазеру.
+/// Стена чистого строя: унисон, 10/9, кварта, квинта, октава.
+const JUST_WALL: [f32; 5] = [1.0, 10.0 / 9.0, 4.0 / 3.0, 3.0 / 2.0, 2.0];
 const FILTER_FLOOR_HZ: f32 = 800.0;
 const FILTER_SNAP_HZ: f32 = 5500.0;
 const FILTER_SNAP_RATE: f32 = 16.0;
@@ -21,7 +25,8 @@ const VOICE_GAIN: f32 = 0.5;
 #[derive(Clone, Default)]
 pub struct FestivalVoice {
     sample_rate: f32,
-    phases: [f32; 5],
+    /// Циклы от старта (общая высота стены).
+    phase: f32,
     filter: Svf,
     frequency: f32,
     gain: f32,
@@ -40,7 +45,7 @@ impl Voice for FestivalVoice {
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
-        self.phases = [0.0; 5];
+        self.phase = 0.0;
         self.filter.reset();
     }
 
@@ -56,11 +61,12 @@ impl Voice for FestivalVoice {
         let amp = (-AMP_DECAY_RATE * self.t).exp();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
+        self.phase = (self.phase + self.frequency / sample_rate) % 4096.0;
+        // Стена чистого строя вместо расстроенных пил: пять синусов
+        // в just-интервалах. Только синусы — алиасинга нет по построению.
         let mut raw = 0.0;
-        for (phase, detune) in self.phases.iter_mut().zip(DETUNE) {
-            let freq = self.frequency * detune;
-            *phase = (*phase + freq / sample_rate) % 1.0;
-            raw += saw_blep(*phase, freq, sample_rate);
+        for ratio in JUST_WALL {
+            raw += (TAU * self.phase * ratio).sin();
         }
         raw /= 5.0;
 

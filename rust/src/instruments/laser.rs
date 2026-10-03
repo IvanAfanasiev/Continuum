@@ -1,15 +1,20 @@
 use super::{
-    dsp::{release_fade, saw_blep, square_blep, Svf},
+    dsp::{release_fade, square_blep, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
+use std::f32::consts::TAU;
 
-/// Лазерный лид: пила с быстрым нисходящим запитчем («pew») через
-/// резонансный свип. Резкий и пронзительный — для взрывных дропов,
+/// Лазерный лид: формульный запитч («pew») через резонансный свип.
+/// Высота падает с 3.5x к ноте, а тембр шагает чистыми отношениями
+/// (фонк-строй 1, 10/9, 4/3, 3/2) — математика вместо пил.
+/// Резкий и пронзительный — для взрывных дропов,
 /// запрещен в мягких стилях.
 const DETUNE: f32 = 1.004;
 const ZAP_AMOUNT: f32 = 2.5;
 const ZAP_RATE: f32 = 25.0;
+/// Чистые интервалы шага тембра внутри запитча.
+const PHONK_RATIOS: [f32; 4] = [1.0, 10.0 / 9.0, 4.0 / 3.0, 3.0 / 2.0];
 const FILTER_FLOOR_HZ: f32 = 600.0;
 const FILTER_SNAP_HZ: f32 = 4000.0;
 const FILTER_SNAP_RATE: f32 = 15.0;
@@ -24,8 +29,8 @@ const VOICE_GAIN: f32 = 0.55;
 #[derive(Clone, Default)]
 pub struct LaserVoice {
     sample_rate: f32,
-    phase_saw1: f32,
-    phase_saw2: f32,
+    /// Циклы от старта (аккумулятор запитченной высоты).
+    phase: f32,
     phase_sub: f32,
     filter: Svf,
     frequency: f32,
@@ -45,8 +50,7 @@ impl Voice for LaserVoice {
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
-        self.phase_saw1 = 0.0;
-        self.phase_saw2 = 0.0;
+        self.phase = 0.0;
         self.phase_sub = 0.0;
         self.filter.reset();
     }
@@ -67,18 +71,21 @@ impl Voice for LaserVoice {
         let amp = (-AMP_DECAY_RATE * self.t).exp();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
-        self.phase_saw1 = (self.phase_saw1 + freq / sample_rate) % 1.0;
-        self.phase_saw2 = (self.phase_saw2 + (freq * DETUNE) / sample_rate) % 1.0;
         self.phase_sub = (self.phase_sub + (self.frequency * 0.5) / sample_rate) % 1.0;
-        let saw = (saw_blep(self.phase_saw1, freq, sample_rate)
-            + saw_blep(self.phase_saw2, freq * DETUNE, sample_rate))
+        self.phase = (self.phase + freq / sample_rate) % 4096.0;
+        // Формула вместо пил: пара расстроенных чистых тонов, высота
+        // каждого шагает отношениями — запитч с фонк-характером.
+        // Только синусы: алиасинга нет по построению.
+        let r = PHONK_RATIOS[(self.phase * 2.0).floor().rem_euclid(4.0) as usize];
+        let tone = ((TAU * self.phase * r).sin()
+            + (TAU * self.phase * r * DETUNE).sin())
             * 0.5;
         let sub = square_blep(self.phase_sub, self.frequency * 0.5, sample_rate) * SUB_GAIN;
 
         let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * (-FILTER_SNAP_RATE * self.t).exp();
         let (low, _, _) = self
             .filter
-            .process(saw + sub, cutoff, FILTER_Q, sample_rate);
+            .process(tone + sub, cutoff, FILTER_Q, sample_rate);
 
         self.t += 1.0 / sample_rate;
         (low * 1.4).tanh() * self.gain * amp * attack * fade * VOICE_GAIN
