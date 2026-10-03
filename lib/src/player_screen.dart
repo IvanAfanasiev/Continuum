@@ -484,7 +484,7 @@ class _MixPanelBody extends StatelessWidget {
             max: 180,
             integer: true,
             suffix: ' BPM',
-            onChanged: (v) => c.setTempo(v),
+            onCommit: (v) => c.setTempo(v),
           ),
           _VolumeRow(
             icon: Icons.bolt,
@@ -492,7 +492,7 @@ class _MixPanelBody extends StatelessWidget {
             value: c.status?.intensity ?? 1.0,
             max: 2.0,
             percent: true,
-            onChanged: (v) => c.setIntensity(v),
+            onCommit: (v) => c.setIntensity(v),
           ),
           // Инструменты, сгруппированные по полкам (порядок полок —
           // как 8 типов выше было). Групповых фейдеров нет: ручка
@@ -527,7 +527,7 @@ class _MixPanelBody extends StatelessWidget {
                 max: 1.0,
                 percent: true,
                 dimmed: t.volume <= 0.0,
-                onChanged: (v) => c.setTrackVolume(t.id, v * t.baseVolume),
+                onCommit: (v) => c.setTrackVolume(t.id, v * t.baseVolume),
               ),
             ],
           ],
@@ -537,13 +537,18 @@ class _MixPanelBody extends StatelessWidget {
   }
 }
 
-class _VolumeRow extends StatelessWidget {
+/// Строка слайдера: локальный отклик во время драга, один коммит
+/// в бэкенд по отпусканию. Иначе каждый тик драга — это 2–3 FFI
+/// туда-обратно плюс перестройка всего экрана: на телефоне слайдер
+/// вешает UI. Откат бэкенда (защита последнего слота) приезжает
+/// сам через notifyListeners после коммита.
+class _VolumeRow extends StatefulWidget {
   const _VolumeRow({
     required this.icon,
     required this.tooltip,
     required this.value,
     required this.max,
-    required this.onChanged,
+    required this.onCommit,
     this.min = 0.0,
     this.suffix = '',
     this.integer = false,
@@ -559,47 +564,86 @@ class _VolumeRow extends StatelessWidget {
   final String suffix;
   final bool integer;
   final bool percent;
-  final void Function(double) onChanged;
+  final void Function(double) onCommit;
 
   /// Затемнение строки (группа/слот выключены стилем).
   final bool dimmed;
 
-  String get _text {
-    if (suffix.isNotEmpty) return '${value.round()}$suffix';
-    if (integer) return '${value.round()}';
-    if (percent) return '${(value * 100).round()}%';
+  @override
+  State<_VolumeRow> createState() => _VolumeRowState();
+}
+
+class _VolumeRowState extends State<_VolumeRow> {
+  late double _local;
+  bool _dragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _local = widget.value;
+  }
+
+  @override
+  void didUpdateWidget(_VolumeRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Внешнее значение (коммит/откат) — только вне драга,
+    // иначе ползунок вырывают из-под пальца.
+    if (!_dragging && widget.value != oldWidget.value) {
+      _local = widget.value;
+    }
+  }
+
+  double get _shown => _dragging ? _local : widget.value;
+
+  String _text(double value) {
+    if (widget.suffix.isNotEmpty) return '${value.round()}${widget.suffix}';
+    if (widget.integer) return '${value.round()}';
+    if (widget.percent) return '${(value * 100).round()}%';
     return value.toStringAsFixed(2);
   }
 
   @override
   Widget build(BuildContext context) {
+    final v = _shown.clamp(widget.min, widget.max);
     return Opacity(
-      opacity: dimmed ? 0.45 : 1.0,
+      opacity: widget.dimmed ? 0.45 : 1.0,
       child: Row(
-      children: [
-        Tooltip(
-          message: tooltip,
-          child: Icon(icon, size: 24),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Slider(
-            value: value.clamp(min, max),
-            min: min,
-            max: max,
-            divisions: integer ? (max - min).round() : null,
-            onChanged: (v) => onChanged(integer ? v.roundToDouble() : v),
+        children: [
+          Tooltip(
+            message: widget.tooltip,
+            child: Icon(widget.icon, size: 24),
           ),
-        ),
-        SizedBox(
-          width: 56,
-          child: Text(
-            _text,
-            textAlign: TextAlign.end,
-            style: const TextStyle(fontSize: 12),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Slider(
+              value: v,
+              min: widget.min,
+              max: widget.max,
+              divisions:
+                  widget.integer ? (widget.max - widget.min).round() : null,
+              onChanged: (nv) {
+                _dragging = true;
+                setState(() {
+                  _local = widget.integer ? nv.roundToDouble() : nv;
+                });
+              },
+              onChangeEnd: (nv) {
+                _dragging = false;
+                final commit =
+                    widget.integer ? nv.roundToDouble() : nv;
+                widget.onCommit(commit);
+              },
+            ),
           ),
-        ),
-      ],
+          SizedBox(
+            width: 56,
+            child: Text(
+              _text(v),
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
       ),
     );
   }
