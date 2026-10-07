@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:cont/src/rust/api/playback.dart';
 
@@ -47,6 +49,50 @@ class PullPlayer {
   /// Кап 60 — память не течет на длинных сессиях.
   final List<String> diagLog = [];
   static const int _diagCap = 60;
+
+  /// Захват потока в файл для экспертизы: пишет сырые f32-блоки
+  /// (потом склею в WAV на десктопе). null — не пишем.
+  RandomAccessFile? _captureFile;
+  int _captureLeft = 0;
+  static const int _captureChunks = 300; // 30 секунд по 0.1с.
+
+  /// Начать захват следующих 30 секунд. Путь файла — в логе.
+  /// Работает только во время игры.
+  Future<String?> startCapture() async {
+    if (!_running || _captureFile != null) return null;
+    try {
+      final dir = await getTemporaryDirectory();
+      final path =
+          '${dir.path}/cont_capture_${DateTime.now().millisecondsSinceEpoch}.f32';
+      _captureFile = await File(path).open(mode: FileMode.write);
+      _captureLeft = _captureChunks;
+      _log('capture -> $path');
+      return path;
+    } catch (e) {
+      _log('capture failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _captureWrite(Float32List pcm) async {
+    final f = _captureFile;
+    if (f == null) return;
+    try {
+      await f.writeFrom(pcm.buffer.asUint8List());
+      _captureLeft--;
+      if (_captureLeft <= 0) {
+        await f.close();
+        _captureFile = null;
+        _log('capture done (30s)');
+      }
+    } catch (e) {
+      _log('capture write failed: $e');
+      try {
+        await f.close();
+      } catch (_) {}
+      _captureFile = null;
+    }
+  }
 
   void _log(String s) {
     final t = DateTime.now();
@@ -133,6 +179,7 @@ class PullPlayer {
           sw.stop();
           _chunks++;
           _renderMsTotal += sw.elapsedMilliseconds;
+          await _captureWrite(pcm);
           if (sw.elapsedMilliseconds > 50) {
             _slowChunks++;
             _log('SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
@@ -203,6 +250,14 @@ class PullPlayer {
   Future<void> stop() async {
     _running = false;
     _runId++;
+    final cap = _captureFile;
+    _captureFile = null;
+    if (cap != null) {
+      try {
+        await cap.close();
+      } catch (_) {}
+      _log('capture stopped early');
+    }
     try {
       await _channel.invokeMethod<void>('pauseTrack');
     } catch (e) {

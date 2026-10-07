@@ -530,6 +530,25 @@ class _DiagPanelState extends State<_DiagPanel> {
                 style: TextStyle(fontSize: 11),
               ),
             ),
+            TextButton.icon(
+              onPressed: () async {
+                final path = await widget.bridge.startCapture();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(path == null
+                          ? 'Запись не стартовала (нет игры)'
+                          : 'Пишу 30с сюда: $path'),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.fiber_manual_record, size: 14),
+              label: const Text(
+                'Запись 30с',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
           ],
         ],
       ),
