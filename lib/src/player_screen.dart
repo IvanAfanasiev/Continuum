@@ -408,6 +408,16 @@ class _CenterColumn extends StatelessWidget {
                   color: Colors.amber,
                   text: diag,
                 ),
+              // Темп рендера (обновляется опросом, пока играет):
+              // видно без USB-логов, успевает ли телефон.
+              if (bridge.pullStats() case final ps? when c.running)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    ps,
+                    style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  ),
+                ),
             ],
           ),
         ),
