@@ -1773,6 +1773,15 @@ mod tests {
         for s in [Pad, Pluck, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz] {
             assert!(!phonk.contains(&s), "phonk: {s:?} should be off");
         }
+
+        // Proto-гибрид: худое ядро (кик, саб, снейр, хэты, щипок).
+        let proto = ensemble_of("proto");
+        for s in [Bass, Kick, Snare, Hat, Pluck] {
+            assert!(proto.contains(&s), "proto: {s:?} missing");
+        }
+        for s in [Pad, Keys, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz, Kick808, Shaker, Formula] {
+            assert!(!proto.contains(&s), "proto: {s:?} should be off");
+        }
     }
 
     #[test]

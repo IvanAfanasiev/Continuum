@@ -9,6 +9,7 @@
 pub mod club;
 pub mod lofi;
 pub mod phonk;
+pub mod protoclub;
 pub mod rock;
 
 use rand::rngs::StdRng;
@@ -1125,19 +1126,21 @@ pub fn make_style(name: &str) -> Option<Box<dyn Style>> {
     use club::ClubStyle;
     use lofi::LofiStyle;
     use phonk::PhonkStyle;
+    use protoclub::ProtoclubStyle;
     use rock::RockStyle;
     match name.trim().to_lowercase().as_str() {
         "club" => Some(Box::new(ClubStyle::new())),
         "lofi" => Some(Box::new(LofiStyle::new())),
         "rock" => Some(Box::new(RockStyle::new())),
         "phonk" => Some(Box::new(PhonkStyle::new())),
+        "proto" => Some(Box::new(ProtoclubStyle::new())),
         _ => None,
     }
 }
 
 /// Все доступные стили: имена для CLI и Flutter.
 pub fn style_names() -> &'static [&'static str] {
-    &["club", "rock", "lofi", "phonk"]
+    &["club", "rock", "lofi", "phonk", "proto"]
 }
 
 #[cfg(test)]
@@ -2243,7 +2246,7 @@ mod tests {
             }
             (pitches, rhythm)
         }
-        for name in ["club", "rock", "lofi", "phonk"] {
+        for name in ["club", "rock", "lofi", "phonk", "proto"] {
             let sigs: Vec<_> = (0..8u64).map(|s| signature(name, s)).collect();
             for i in 0..8 {
                 for j in (i + 1)..8 {
@@ -2365,6 +2368,11 @@ mod tests {
         // у разных сидов (у каждого сида свой бит, а не один на стиль).
         use crate::instruments::Slot;
         for name in style_names() {
+            // Proto держит один steady-бит весь трек (как видео-реф):
+            // словарь бита там не нужен, сиды различаются остальным.
+            if *name == "proto" {
+                continue;
+            }
             let style = make_style(name).expect("style");
             let mut pats = std::collections::HashSet::new();
             for seed in 0..12u64 {
