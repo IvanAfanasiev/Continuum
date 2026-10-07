@@ -15,11 +15,11 @@ class ContAudioTrack {
         const val SAMPLE_RATE = 48000
         const val CHANNEL_MASK = AudioFormat.CHANNEL_OUT_STEREO
         const val ENCODING = AudioFormat.ENCODING_PCM_FLOAT
-        // Короткий буфер (~0.3с): блокирующая запись сама держит темп
-        // Dart-цикла — часы у аудиоустройства, а не у таймеров Dart
-        // (их джиттер давал скачущий бит). Рендер впрок ограничен
-        // размером буфера, спинить нечему.
-        const val BUFFER_FRAMES = SAMPLE_RATE * 3 / 10
+        // Буфер ~1с: сглаживает джиттер рендера. Рендер впрок ограничен
+        // им же (неблокирующая запись вернет 0, когда полон — см. feed).
+        // ВАЖНО: запись только неблокирующая — блокирующая вешает
+        // UI-поток Android на время ожидания места (системные лаги).
+        const val BUFFER_FRAMES = SAMPLE_RATE
     }
 
     private var track: AudioTrack? = null
@@ -63,13 +63,14 @@ class ContAudioTrack {
     }
 
     /**
-     * Блокирующая запись кадра: держит темп Dart-цикла без таймеров.
-     * Возвращает записанные фреймы, отрицательное — ошибка.
+     * Неблокирующая запись кадра: возвращает реально принятые фреймы
+     * (0..N). Ноль/частичность — буфер полон: Dart подождет и повторит
+     * остаток, а не будет спиновать. Никогда не виснет на UI-потоке.
      */
     fun feed(pcm: FloatArray): Int {
         val t = synchronized(lock) { track } ?: return -1
         return try {
-            t.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING) / 2
+            t.write(pcm, 0, pcm.size, AudioTrack.WRITE_NON_BLOCKING) / 2
         } catch (e: Exception) {
             -1
         }

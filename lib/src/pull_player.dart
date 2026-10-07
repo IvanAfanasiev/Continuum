@@ -67,39 +67,48 @@ class PullPlayer {
     // Самолечение трека: серия ошибок подачи — пересоздаем трек,
     // а не крутим рендер вхолостую.
     var feedErrors = 0;
+    // Несожранный остаток прошлого feed (буфер был полон): отдаем
+    // первым, рендерим только когда трек все съел. Потерять хвост
+    // нельзя — это заикание, а не джиттер.
+    Float32List? pending;
     bool alive() => _running && myId == _runId;
     while (alive()) {
-      // Часы — блокирующая запись в трек (буфер ~0.3с): feed ждет,
-      // пока освободится место, и цикл идет ровно в темпе трека.
-      // Никаких снов по таймеру поверх: их джиттер давал скачущий бит
-      // (на десктопе часы аппаратные — там ровно). Рендер впрок
-      // ограничен буфером: максимум ~3 чанка впереди.
-      late final Float32List pcm;
-      try {
-        sw.reset();
-        sw.start();
-        pcm = await playbackPullRender(
-          frames: BigInt.from(chunkFrames),
-          sampleRate: sampleRate,
-        );
-        sw.stop();
-        _chunks++;
-        _renderMsTotal += sw.elapsedMilliseconds;
-        if (sw.elapsedMilliseconds > 50) {
-          _slowChunks++;
-          debugPrint('[pull] SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
-              '(budget 100ms, slow=$_slowChunks)');
-        } else if (_chunks % 100 == 0) {
-          debugPrint('[pull] render avg ${_renderMsTotal ~/ _chunks}ms '
-              '(slow=$_slowChunks/$_chunks)');
+      // Темп задает противодавление трека: пока буфер полон, feed
+      // возвращает частичность и цикл ждет — рендера впрок нет,
+      // спина нет. Блокирующих вызовов нет вовсе: запись неблокирующая,
+      // UI-поток Android не виснет ни на миллисекунду.
+      Float32List pcm;
+      final rest = pending;
+      if (rest != null) {
+        pcm = rest;
+      } else {
+        try {
+          sw.reset();
+          sw.start();
+          pcm = await playbackPullRender(
+            frames: BigInt.from(chunkFrames),
+            sampleRate: sampleRate,
+          );
+          sw.stop();
+          _chunks++;
+          _renderMsTotal += sw.elapsedMilliseconds;
+          if (sw.elapsedMilliseconds > 50) {
+            _slowChunks++;
+            debugPrint('[pull] SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
+                '(budget 100ms, slow=$_slowChunks)');
+          } else if (_chunks % 100 == 0) {
+            debugPrint('[pull] render avg ${_renderMsTotal ~/ _chunks}ms '
+                '(slow=$_slowChunks/$_chunks)');
+          }
+        } catch (e) {
+          debugPrint('[pull] render failed: $e');
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+          continue;
         }
-      } catch (e) {
-        debugPrint('[pull] render failed: $e');
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        continue;
       }
       if (!alive()) break;
       if (pcm.isEmpty) {
+        pending = null;
         await Future<void>.delayed(const Duration(milliseconds: 200));
         continue;
       }
@@ -112,6 +121,7 @@ class PullPlayer {
             // Трек мертв (маршрут умер без события): пересоздаем
             // и продолжаем с пустого буфера, а не крутим вхолостую.
             feedErrors = 0;
+            pending = null;
             try {
               final ok = await _channel.invokeMethod<bool>('prepare');
               if (ok == true) {
@@ -122,8 +132,15 @@ class PullPlayer {
             }
           }
           await Future<void>.delayed(const Duration(milliseconds: 200));
+        } else if (written * 2 < pcm.length) {
+          // Буфер почти полон: съедено частично — остаток следующим,
+          // рендерить нечего, ждем место.
+          feedErrors = 0;
+          pending = Float32List.sublistView(pcm, written * 2);
+          await Future<void>.delayed(const Duration(milliseconds: 30));
         } else {
           feedErrors = 0;
+          pending = null;
         }
       } catch (e) {
         debugPrint('[pull] feed failed: $e');
