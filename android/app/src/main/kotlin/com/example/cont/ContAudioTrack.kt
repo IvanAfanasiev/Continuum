@@ -15,8 +15,10 @@ class ContAudioTrack {
         const val SAMPLE_RATE = 48000
         const val CHANNEL_MASK = AudioFormat.CHANNEL_OUT_STEREO
         const val ENCODING = AudioFormat.ENCODING_PCM_FLOAT
-        // ~2 секунды буфера: переживает GC-паузы и джиттер канала.
-        const val BUFFER_FRAMES = SAMPLE_RATE * 2
+        // ~1 секунда буфера: сглаживает джиттер рендера, но не дает
+        // Dart-циклу рендерить далеко вперед на полной мощности
+        // (рендер впрок = 100% CPU = висящий телефон).
+        const val BUFFER_FRAMES = SAMPLE_RATE
     }
 
     private var track: AudioTrack? = null
@@ -82,6 +84,11 @@ class ContAudioTrack {
 
     fun isPlaying(): Boolean = synchronized(lock) {
         track?.playState == AudioTrack.PLAYSTATE_PLAYING
+    }
+
+    /** Позиция иглы во фреймах: Dart держит ≤1 чанка впереди нее. */
+    fun headPosition(): Int = synchronized(lock) {
+        runCatching { track?.playbackHeadPosition ?: 0 }.getOrDefault(0)
     }
 
     fun release() {

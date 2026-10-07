@@ -22,6 +22,10 @@ class PullPlayer {
 
   bool get running => _running;
 
+  /// Скормлено треку за этот старт (фреймы): вместе с иглой трека
+  /// задает темп цикла (см. _loop). Сбрасывается на старте.
+  int _fedFrames = 0;
+
   /// Замеры темпа рендера для диагностики: сколько мс занимает блок.
   /// Рендер медленнее realtime (блок 0.5с дольше 500мс) = заикания:
   /// трек голодает. Пишем в лог только медленные и сводку каждых 20.
@@ -39,6 +43,10 @@ class PullPlayer {
         return false;
       }
       _running = true;
+      _fedFrames = 0;
+      _chunks = 0;
+      _slowChunks = 0;
+      _renderMsTotal = 0;
       await _channel.invokeMethod<void>('playTrack');
       unawaited(_loop());
       return true;
@@ -52,6 +60,25 @@ class PullPlayer {
   Future<void> _loop() async {
     final sw = Stopwatch();
     while (_running) {
+      // Темп ровно realtime: держим не больше чанка впереди иглы.
+      // Без этого цикл рендерит вперед на всю мощь CPU (старт —
+      // пачкой, дальше впритык) — телефон висит целиком, а не только
+      // приложение. Игла — часы трека, дрейфа нет. Ошибка иглы —
+      // работаем как раньше (fail-open).
+      try {
+        for (;;) {
+          if (!_running) break;
+          final head = await _channel.invokeMethod<int>('head');
+          if (head == null) break;
+          // Игла 32-битная (оборот ~за 24 часа): отрицательное = старшие.
+          final h = head < 0 ? head + 4294967296 : head;
+          if (_fedFrames - h <= chunkFrames) break;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      } catch (_) {
+        // Нет иглы — без pacing, как раньше.
+      }
+      if (!_running) break;
       late final Float32List pcm;
       try {
         sw.reset();
@@ -86,6 +113,8 @@ class PullPlayer {
         if (written != null && written < 0) {
           debugPrint('[pull] feed error, retrying');
           await Future<void>.delayed(const Duration(milliseconds: 200));
+        } else if (written != null) {
+          _fedFrames += written;
         }
       } catch (e) {
         debugPrint('[pull] feed failed: $e');

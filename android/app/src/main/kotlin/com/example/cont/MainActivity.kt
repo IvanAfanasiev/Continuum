@@ -54,6 +54,7 @@ class MainActivity : AudioServiceActivity() {
                         track.pauseAndFlush()
                         result.success(null)
                     }
+                    "head" -> result.success(track.headPosition())
                     "isPlaying" -> result.success(track.isPlaying())
                     "release" -> {
                         track.release()
