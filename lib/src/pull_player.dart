@@ -69,12 +69,11 @@ class PullPlayer {
     var feedErrors = 0;
     bool alive() => _running && myId == _runId;
     while (alive()) {
-      // Каденс ровно realtime: чанк покрывает 0.1с звука — отработали
-      // быстрее, спим остаток. Отстали (медленный рендер) — догоняем
-      // без сна, заикание увидим в SLOW-строках. Спинить нечему:
-      // темп ограничен часами, а не буфером. Плюс блокирующий feed
-      // дает противодавление, когда буфер трека полон.
-      final cycleStart = DateTime.now();
+      // Часы — блокирующая запись в трек (буфер ~0.3с): feed ждет,
+      // пока освободится место, и цикл идет ровно в темпе трека.
+      // Никаких снов по таймеру поверх: их джиттер давал скачущий бит
+      // (на десктопе часы аппаратные — там ровно). Рендер впрок
+      // ограничен буфером: максимум ~3 чанка впереди.
       late final Float32List pcm;
       try {
         sw.reset();
@@ -129,12 +128,6 @@ class PullPlayer {
       } catch (e) {
         debugPrint('[pull] feed failed: $e');
         await Future<void>.delayed(const Duration(milliseconds: 200));
-      }
-      // Каденс: чанк 0.1с — спим остаток цикла.
-      final elapsed = DateTime.now().difference(cycleStart);
-      const quantum = Duration(milliseconds: 100);
-      if (elapsed < quantum) {
-        await Future<void>.delayed(quantum - elapsed);
       }
     }
   }

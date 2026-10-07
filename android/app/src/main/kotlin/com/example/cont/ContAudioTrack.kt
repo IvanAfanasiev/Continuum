@@ -15,10 +15,11 @@ class ContAudioTrack {
         const val SAMPLE_RATE = 48000
         const val CHANNEL_MASK = AudioFormat.CHANNEL_OUT_STEREO
         const val ENCODING = AudioFormat.ENCODING_PCM_FLOAT
-        // ~1 секунда буфера: сглаживает джиттер рендера, но не дает
-        // Dart-циклу рендерить далеко вперед на полной мощности
-        // (рендер впрок = 100% CPU = висящий телефон).
-        const val BUFFER_FRAMES = SAMPLE_RATE
+        // Короткий буфер (~0.3с): блокирующая запись сама держит темп
+        // Dart-цикла — часы у аудиоустройства, а не у таймеров Dart
+        // (их джиттер давал скачущий бит). Рендер впрок ограничен
+        // размером буфера, спинить нечему.
+        const val BUFFER_FRAMES = SAMPLE_RATE * 3 / 10
     }
 
     private var track: AudioTrack? = null
