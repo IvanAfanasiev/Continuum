@@ -92,6 +92,19 @@ impl Style for ProtoclubStyle {
         &[Slot::Bass, Slot::Kick, Slot::Snare, Slot::Hat, Slot::Pluck]
     }
 
+    /// Гость — хор по сиду (есть/нет): худоба ядра, разнообразие сидов.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[Slot::Vocal]
+    }
+
+    fn flex_weights(&self) -> &'static [f32] {
+        &[1.0]
+    }
+
+    fn flex_range(&self) -> (usize, usize) {
+        (0, 1)
+    }
+
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         // Саб держит корни (ступень 0, без квинт и прыжков),
         // регистр — фолдом, как везде.
@@ -186,15 +199,17 @@ impl Style for ProtoclubStyle {
             ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.2)
         };
         let vocal = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 2.0,
-            vel_base: 0.35,
+            energy_response: 1.2,
+            duration_mult: 3.0,
+            vel_base: 0.45,
+            vel_energy: 0.15,
+            vel_jitter: 0.08,
             voice: Voicing::Scale {
                 degree: 2,
                 octave: 2,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 2, 2, 2, 2.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 2, 2, 2, 3.0, 0.45)
         };
         let flute = RoleGuide {
             energy_response: 1.0,
