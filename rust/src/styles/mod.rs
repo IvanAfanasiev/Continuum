@@ -635,8 +635,7 @@ fn emergent_period(seed_hash: u64, slot_idx: usize, beats: f32, steps_per_measur
     p = p.clamp(1.25, 16.0);
     let whole = p.floor();
     let frac = p - whole;
-    let looped = frac < 0.2
-        || frac > 0.8
+    let looped = !(0.2..=0.8).contains(&frac)
         || (frac - 0.5).abs() < 0.1
         || (frac - 1.0 / 3.0).abs() < 0.07
         || (frac - 2.0 / 3.0).abs() < 0.07;
