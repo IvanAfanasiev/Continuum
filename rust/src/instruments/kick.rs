@@ -23,6 +23,9 @@ const KNOCK_HZ: f32 = 280.0;
 const KNOCK_DECAY: f32 = 55.0;
 const KNOCK_GAIN: f32 = 0.3;
 const DRIVE: f32 = 1.7;
+/// Гритовый оффсет из formula-прототипа: грязный хвост удара
+/// вместо стерильного затухания. Масштаб умеренный: панч 909 цел.
+const GRIT: f32 = 0.25;
 const ATTACK_SECS: f32 = 0.001;
 const FADE_SECS: f32 = 0.012;
 
@@ -84,7 +87,7 @@ impl Voice for KickVoice {
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        ((body + knock + click) * DRIVE).tanh() * 0.9 * self.gain * body_env * attack * fade
+        ((body + knock + click - GRIT) * DRIVE).tanh() * 0.9 * self.gain * body_env * attack * fade
     }
 
     fn reset(&mut self) {

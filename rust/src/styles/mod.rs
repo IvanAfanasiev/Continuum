@@ -620,13 +620,37 @@ fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
         _ => root,
     }
 }
+/// Период emergent-пульса в шагах: статичен весь трек (бит держится),
+/// варьируется сидом ±25%. Дробная часть — только из фэйзинг-набора:
+/// период у малого целого или простой дроби (2.0, 2.5, 1.33…)
+/// дает короткий зацикленный стук — те же 2–3 удара по кругу.
+/// С «хорошей» дробью рисунок дрейфует по тактам, а не крутится.
+fn emergent_period(seed_hash: u64, slot_idx: usize, beats: f32, steps_per_measure: usize) -> f32 {
+    const GOOD_FRAC: [f32; 5] = [0.37, 0.41, 0.53, 0.59, 0.63];
+    let h = crate::arranger::splitmix64(
+        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xE9E9E9,
+    );
+    let span = 0.75 + 0.5 * ((h >> 32) as f32 / (u32::MAX as f32));
+    let mut p = beats * span * steps_per_measure as f32 / 4.0;
+    p = p.clamp(1.25, 16.0);
+    let whole = p.floor();
+    let frac = p - whole;
+    let looped = frac < 0.2
+        || frac > 0.8
+        || (frac - 0.5).abs() < 0.1
+        || (frac - 1.0 / 3.0).abs() < 0.07
+        || (frac - 2.0 / 3.0).abs() < 0.07;
+    if looped {
+        whole + GOOD_FRAC[(h >> 16) as usize % GOOD_FRAC.len()]
+    } else {
+        p
+    }
+}
+
 /// Emergent-пульс: бьет ли глобальный шаг `step`.
-/// Решетка с периодом P шагов из сида: звучит, если в шаг попадает
-/// очередной тик. P несоизмерим с тактом (дробный, свой у каждого сида),
-/// поэтому рисунок дрейфует и не повторяется — фэйзинг вместо паттерна.
-/// Период СТАТИЧЕН весь трек (разгона в дропе нет — бит держится);
-/// варьируется только сидом ±25%.
-/// Возвращает (fire, accent): акцент сильнее у четвертей.
+/// Решетка с периодом [`emergent_period`]: звучит, если в шаг попадает
+/// очередной тик. Период СТАТИЧЕН весь трек (разгона в дропе нет —
+/// бит держится). Возвращает (fire, accent): акцент сильнее у четвертей.
 /// Чистая функция — состояния нет, тот же сид дает тот же поток.
 fn emergent_fire(
     seed_hash: u64,
@@ -636,12 +660,7 @@ fn emergent_fire(
     steps_per_measure: usize,
     beats: f32,
 ) -> (bool, f32) {
-    let h = crate::arranger::splitmix64(
-        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xE9E9E9,
-    );
-    let span = 0.75 + 0.5 * ((h >> 32) as f32 / (u32::MAX as f32));
-    let mut p = beats * span * steps_per_measure as f32 / 4.0;
-    p = p.clamp(1.25, 16.0);
+    let p = emergent_period(seed_hash, slot_idx, beats, steps_per_measure);
     let s = step as f32;
     let fire = ((s + 1.0) / p).floor() > (s / p).floor();
     let q = steps_per_measure / 4;
@@ -2126,6 +2145,31 @@ mod tests {
         // Другой сид — другой грув.
         let b = ticks(42);
         assert_ne!(ticks(11).concat(), b.concat(), "seeds share groove");
+    }
+
+    #[test]
+    fn emergent_periods_avoid_short_loops() {
+        // Без шарманки: интервалы между ударами пульса не стоят
+        // метрономом (один короткий интервал по кругу — те же 2–3
+        // удара). Длинные циклы — норма: бесконечность не значит
+        // отсутствие повторов, их значит незаметность.
+        for seed in 0..32u64 {
+            for slot in [0usize, 4, 5, 17] {
+                for beats in [0.3, 0.45, 0.9, 1.5] {
+                    let hits: Vec<usize> = (0..64)
+                        .filter(|s| emergent_fire(seed, slot, *s, *s % 16, 16, beats).0)
+                        .collect();
+                    assert!(!hits.is_empty(), "pulse silent");
+                    if hits.len() >= 4 {
+                        let gaps: Vec<usize> =
+                            hits.windows(2).map(|w| w[1] - w[0]).collect();
+                        let metronome =
+                            gaps.iter().all(|g| *g == gaps[0]) && gaps[0] <= 8;
+                        assert!(!metronome, "seed {seed} slot {slot}: {gaps:?} loop");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
