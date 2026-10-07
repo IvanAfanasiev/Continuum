@@ -218,11 +218,11 @@ impl Style for ClubStyle {
             ..RoleGuide::kit(HAT_W, 42, 0.65)
         };
         // Сквозная тема битмейкера: плак ведет мотив сида через секции —
-        // у бита есть мелодическое лицо, а не только грув. Гости (клавиши,
-        // чопы) — текстура вокруг темы, а не замена ей.
+        // у бита есть мелодическое лицо, а не только грув. Ноты длинные:
+        // линия льется фразами, а не тычет разовыми ударами.
         let pluck = RoleGuide {
             energy_response: 1.5,
-            duration_mult: 0.9,
+            duration_mult: 1.6,
             vel_base: 0.45,
             vel_energy: 0.3,
             vel_jitter: 0.07,
@@ -232,7 +232,7 @@ impl Style for ClubStyle {
                 jitter: 2,
             },
             follow_motif: true,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 2, 0.9, 0.45)
+            ..RoleGuide::pitched(LEAD_W, 0, 2, 2, 1.6, 0.45)
         };
         let keys = RoleGuide {
             // Гость-текучка, а не рубильник: ровное присутствие
@@ -370,7 +370,7 @@ impl Style for ClubStyle {
         // широкие прыжки с переключением режимов дают кашу.
         let formula = RoleGuide {
             energy_response: 2.2,
-            duration_mult: 0.9,
+            duration_mult: 1.6,
             vel_base: 0.5,
             vel_energy: 0.3,
             vel_jitter: 0.07,
@@ -380,7 +380,7 @@ impl Style for ClubStyle {
                 jitter: 1,
             },
             follow_motif: true,
-            ..RoleGuide::pitched(LEAD_W, 2, 2, 2, 0.9, 0.5)
+            ..RoleGuide::pitched(LEAD_W, 2, 2, 2, 1.6, 0.5)
         };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,

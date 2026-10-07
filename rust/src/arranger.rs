@@ -1,19 +1,19 @@
 /// Конечный автомат структуры композиции.
 //
-// Активные стили гоняют бесконечный круг без финала (Outro убран:
-// он противоречит «бесконечной» генерации):
-// Intro (раз) -> MainMotif -> BuildUp -> Drop -> PostChorus -> по кругу.
-// Спокойные стили дышат темой: Intro (раз) -> MainMotif почти всегда,
+// Активные стили гоняют бесконечный круг без финала и без разогрева
+// (Outro противоречит «бесконечной» генерации, Intro — требованию
+// играть сразу в полную): MainMotif -> BuildUp -> Drop -> PostChorus
+// -> по кругу. Первый такт — уже тема в полную силу.
+// Спокойные стили дышат темой: MainMotif почти всегда,
 // редкие BuildUp/PostChorus для разнообразия.
 //
-// Мотив сида фиксирован на весь круг после интро: одна и та же тема
+// Мотив сида фиксирован на весь круг: одна и та же тема
 // развивается формой, а не сочиняется заново. Круги отличаются длинами
 // секций и дыханием энергии, мелодическое ДНК стабильно.
 use crate::instruments::InstrumentRole;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SongSection {
-    Intro,
     MainMotif,
     BuildUp,
     Drop,
@@ -22,11 +22,8 @@ pub enum SongSection {
 
 /// Баланс партий по секциям: насколько громко звучит роль.
 /// Текстуры идут ровным слоем всегда; остальное дышит формой.
-/// Intro нарастает от тишины. Порядок колонок = порядок
-/// дискриминантов [`InstrumentRole`].
-const STAGE_GAINS: [[f32; 8]; 5] = [
-    // Intro
-    [0.45, 0.5, 0.0, 0.5, 0.8, 0.35, 0.3, 1.0],
+/// Порядок колонок = порядок дискриминантов [`InstrumentRole`].
+const STAGE_GAINS: [[f32; 8]; 4] = [
     // MainMotif
     [0.85, 0.9, 0.8, 0.85, 0.8, 0.75, 0.65, 1.0],
     // BuildUp
@@ -37,16 +34,14 @@ const STAGE_GAINS: [[f32; 8]; 5] = [
     [0.8, 0.9, 0.7, 0.85, 0.75, 0.55, 0.5, 1.0],
 ];
 
-/// Партитура: интро играется один раз, дальше бесконечный цикл.
+/// Партитура: бесконечный цикл секций без разогрева и финала.
 #[derive(Debug, Clone, Copy)]
 pub struct Score {
-    pub intro: &'static [(SongSection, usize)],
     pub cycle: &'static [(SongSection, usize)],
 }
 
 /// Полная форма активных стилей: тема → разгон → удар → передышка.
 pub const ENERGETIC_SCORE: Score = Score {
-    intro: &[(SongSection::Intro, 4)],
     cycle: &[
         (SongSection::MainMotif, 8),
         (SongSection::BuildUp, 4),
@@ -58,7 +53,6 @@ pub const ENERGETIC_SCORE: Score = Score {
 /// Спокойная форма: тема почти всегда, редкие подъем и передышка
 /// для разнообразия — без взрывных дропов по кругу.
 pub const CALM_SCORE: Score = Score {
-    intro: &[(SongSection::Intro, 4)],
     cycle: &[
         (SongSection::MainMotif, 8),
         (SongSection::MainMotif, 8),
@@ -68,30 +62,6 @@ pub const CALM_SCORE: Score = Score {
         (SongSection::MainMotif, 8),
     ],
 };
-
-/// Порядок входа инструментов в интро — в две волны, и это обоснование,
-/// а не случайность: сначала пульс и тема (что играем), потом грув
-/// (как качаем). Бочка входит первой везде — heartbeat с первого такта,
-/// иначе стили без пэдов стартуют в тишину. Внутри грува порядок
-/// поворачивается сидом: у разных сидов музыка «собирается» по-разному.
-const EARLY_JOIN: [InstrumentRole; 4] = [
-    InstrumentRole::Kick,
-    InstrumentRole::Chords,
-    InstrumentRole::Texture,
-    InstrumentRole::Lead,
-];
-const LATE_JOIN: [InstrumentRole; 5] = [
-    InstrumentRole::Kick,
-    InstrumentRole::Hat,
-    InstrumentRole::Bass,
-    InstrumentRole::Snare,
-    InstrumentRole::Vocal,
-];
-
-fn smoothstep(x: f32) -> f32 {
-    let t = x.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
 
 /// Музыкальная фраза меняется каждые N тактов.
 const PHRASE_LENGTH_MEASURES: usize = 2;
@@ -148,7 +118,6 @@ impl SongContext {
 
 pub struct Arranger {
     score: Score,
-    in_intro: bool,
     idx: usize,
     section_measure_count: usize,
     section_len: usize,
@@ -206,35 +175,10 @@ fn varied_len(section: SongSection, base: usize, seed_hash: u64, salt: u64) -> u
     base + extra
 }
 
-/// Громкости секции с нарастанием интро. Первая волна (тема и пелена)
-/// входит с начала, грув подключается со второй половины интро
-/// в порядке сида.
-fn stage_gains_for(section: SongSection, progress: f32, seed_hash: u64) -> [f32; 8] {
-    let mut gains = STAGE_GAINS[section as usize];
-    // Текстуры (последняя колонка) идут ровным слоем всегда.
-    let last = gains.len() - 1;
-    let edge = match section {
-        SongSection::Intro => 0.45 + 0.55 * progress,
-        _ => 1.0,
-    };
-    // Поворот порядка грува: та же лесенка, другой первый инструмент.
-    let rot = (seed_hash % LATE_JOIN.len() as u64) as usize;
-    for (i, gain) in gains.iter_mut().enumerate() {
-        if i == last {
-            continue;
-        }
-        *gain *= edge;
-        // В интро инструменты подключаются постепенно.
-        if section == SongSection::Intro {
-            if let Some(k) = EARLY_JOIN.iter().position(|r| *r as usize == i) {
-                *gain *= smoothstep((progress - k as f32 * 0.06) / 0.15);
-            } else if let Some(k) = LATE_JOIN.iter().position(|r| *r as usize == i) {
-                let pos = (k + rot) % LATE_JOIN.len();
-                *gain *= smoothstep((progress - 0.28 - pos as f32 * 0.07) / 0.18);
-            }
-        }
-    }
-    gains
+/// Громкости секции из таблицы. Стыки текут глиссандо в advance_measure,
+// никто не гаснет и не врывается внезапно.
+fn stage_gains_for(section: SongSection) -> [f32; 8] {
+    STAGE_GAINS[section as usize]
 }
 
 impl Arranger {
@@ -271,7 +215,6 @@ impl Arranger {
         }
         let mut a = Self {
             score,
-            in_intro: true,
             idx: 0,
             section_measure_count: 0,
             section_len: 0,
@@ -285,21 +228,15 @@ impl Arranger {
             motif,
             motif_b,
             prog: PROGS[(seed_hash % PROGS.len() as u64) as usize],
-            prev_gains: [1.0; 8],
+            // Старт в полную: первый такт — уже тема, без разогрева.
+            prev_gains: stage_gains_for(score.cycle[0].0),
         };
         a.enter_section();
-        // Старт без лага: сглаживание начинается с цели первого такта,
-        // глиссандо работает только на СМЕНАХ таблицы.
-        a.prev_gains = stage_gains_for(a.section(), 1.0 / a.section_len as f32, seed_hash);
         a
     }
 
     fn current(&self) -> (SongSection, usize) {
-        if self.in_intro {
-            self.score.intro[self.idx]
-        } else {
-            self.score.cycle[self.idx]
-        }
+        self.score.cycle[self.idx]
     }
 
     /// Вход в секцию: длина и монотонная соль визита.
@@ -319,16 +256,9 @@ impl Arranger {
         self.total_measures += 1;
 
         if self.section_measure_count > self.section_len {
-            // Переход: внутри части — дальше, в конце части —
-            // интро разворачивается в цикл, цикл замыкается.
-            if self.in_intro {
-                if self.idx + 1 < self.score.intro.len() {
-                    self.idx += 1;
-                } else {
-                    self.in_intro = false;
-                    self.idx = 0;
-                }
-            } else if self.idx + 1 < self.score.cycle.len() {
+            // Переход: внутри круга — дальше, в конце — замыкаем,
+            // круг считается. Разогрева нет: первый такт уже тема.
+            if self.idx + 1 < self.score.cycle.len() {
                 self.idx += 1;
             } else {
                 self.idx = 0;
@@ -347,7 +277,8 @@ impl Arranger {
             + (self.cycle as usize).wrapping_mul(CYCLE_PHRASE_JUMP);
         // Глиссандо громкостей: полпути к таблице за такт. Стыки секций
         // текут, а не щелкают — никто не гаснет и не врывается внезапно.
-        let target = stage_gains_for(section, progress, self.seed_hash);
+        // Первый такт уже в цели (prev_gains инициализированы таблицей).
+        let target = stage_gains_for(section);
         let mut gains = self.prev_gains;
         for (g, t) in gains.iter_mut().zip(target) {
             *g += (t - *g) * 0.5;
@@ -387,13 +318,11 @@ impl Arranger {
 }
 
 /// Открытость фильтра формы 0..1: движок домножает на нее срез верхов.
-/// Интро приоткрывается по мере входа инструментов, тема держит середину,
-/// билд свистит вверх весь разгон и раскрывается на дропе, передышка
-/// прикрывается обратно. Чистая функция — тестируется без аудио.
+/// Тема держит середину, билд свистит вверх весь разгон и раскрывается
+/// на дропе, передышка прикрывается обратно. Чистая функция.
 pub fn section_openness(section: SongSection, progress: f32) -> f32 {
     let p = progress.clamp(0.0, 1.0);
     match section {
-        SongSection::Intro => 0.15 + 0.25 * p,
         SongSection::MainMotif => 0.4,
         SongSection::BuildUp => 0.4 + 0.6 * p,
         SongSection::Drop => 1.0,
@@ -403,7 +332,6 @@ pub fn section_openness(section: SongSection, progress: f32) -> f32 {
 
 fn energy_for(section: SongSection, progress: f32, cycle: u64, seed_hash: u64, salt: u64) -> f32 {
     let base = match section {
-        SongSection::Intro => 0.2 + progress * 0.2,
         SongSection::MainMotif => 0.55,
         SongSection::BuildUp => 0.6 + progress * 0.4,
         SongSection::Drop => return 1.0,
@@ -421,9 +349,8 @@ mod tests {
 
     #[test]
     fn filter_opens_toward_drop() {
-        // Свип формы: интро растет, билд доходит до 1.0, дроп открыт,
+        // Свип формы: билд доходит до 1.0, дроп открыт,
         // передышка ниже темы.
-        assert!(section_openness(SongSection::Intro, 0.0) < section_openness(SongSection::Intro, 1.0));
         assert_eq!(section_openness(SongSection::BuildUp, 1.0), 1.0);
         assert_eq!(section_openness(SongSection::Drop, 0.5), 1.0);
         assert!(
@@ -434,15 +361,14 @@ mod tests {
 
     #[test]
     fn full_cycle_visits_every_section_no_outro() {
-        // Круг активных: интро, тема, разгон, дроп, передышка — и никаких
-        // финалов: генерация бесконечная.
+        // Круг активных: тема, разгон, дроп, передышка — и никаких
+        // финалов и разогревов: генерация бесконечная и сразу в полную.
         let mut a = Arranger::new(1);
         let mut seen = std::collections::HashSet::new();
         for _ in 0..96 {
             seen.insert(a.advance_measure().section);
         }
         for s in [
-            SongSection::Intro,
             SongSection::MainMotif,
             SongSection::BuildUp,
             SongSection::Drop,
@@ -455,6 +381,7 @@ mod tests {
     #[test]
     fn stages_follow_the_score() {
         // Один проход круга: тема → разгон → дроп → передышка.
+        // Разогрева нет: первый визит — сразу тема.
         let mut a = Arranger::new(1);
         let mut order = Vec::new();
         let mut last = SongSection::PostChorus;
@@ -473,15 +400,15 @@ mod tests {
         use SongSection::*;
         assert_eq!(
             order,
-            vec![Intro, MainMotif, BuildUp, Drop, PostChorus],
+            vec![MainMotif, BuildUp, Drop, PostChorus],
             "{order:?}"
         );
     }
 
     #[test]
     fn calm_score_breathes_main_with_rare_variety() {
-        // Спокойная форма: интро один раз, дальше почти всегда тема,
-        // подъем и передышка — редкие гости.
+        // Спокойная форма: почти всегда тема, подъем и передышка —
+        // редкие гости. Разогрева нет.
         let mut a = Arranger::with_score(1, CALM_SCORE);
         let mut order = Vec::new();
         let mut last = SongSection::Drop;
@@ -495,12 +422,10 @@ mod tests {
             }
         }
         use SongSection::*;
-        let intros = order.iter().filter(|s| **s == Intro).count();
-        assert_eq!(intros, 1, "intro must play once: {order:?}");
         // Смежные повторы темы сливаются в один визит.
         assert_eq!(
-            &order[..6],
-            &[Intro, MainMotif, BuildUp, MainMotif, PostChorus, MainMotif],
+            &order[..5],
+            &[MainMotif, BuildUp, MainMotif, PostChorus, MainMotif],
             "{order:?}"
         );
         let mains = order.iter().filter(|s| **s == MainMotif).count();
@@ -607,7 +532,7 @@ mod tests {
             let mut a = Arranger::new(seed);
             let first = a.advance_measure();
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
-            assert!(!first.use_alt_motif, "intro must start with A");
+            assert!(!first.use_alt_motif, "starts with A");
             for v in first.motif_b {
                 assert!(v <= 4, "motif_b out of range: {v}");
             }
@@ -699,52 +624,16 @@ mod tests {
     }
 
     #[test]
-    fn intro_joins_instruments_gradually() {
-        // В начале интро звучат единицы, к концу — почти все:
-        // инструменты подключаются постепенно.
-        let mut a = Arranger::new(1);
-        let mut first_count = None;
-        let mut last_count = None;
-        for _ in 0..200 {
-            let ctx = a.advance_measure();
-            if ctx.cycle > 0 {
-                break;
-            }
-            if ctx.section == SongSection::Intro {
-                let n = ctx.stage_gains[..7].iter().filter(|g| **g > 0.3).count();
-                if first_count.is_none() {
-                    first_count = Some(n);
-                }
-                last_count = Some(n);
-            }
-        }
-        assert!(
-            last_count.unwrap() > first_count.unwrap(),
-            "intro must build up"
-        );
-    }
-
-    #[test]
-    fn intro_builds_theme_before_groove() {
-        // Первый такт интро: heartbeat бочки уже стучит,
-        // остальной грув (бас/снейр/хэт) еще молчит.
-        // Порядок: пульс, потом мясо.
+    fn starts_at_full_strength() {
+        // Разогрева нет: первый такт — уже тема в полную силу,
+        // все роли слышны (гейны > 0.3), heartbeat бочки стучит.
         let mut a = Arranger::new(3);
         let ctx = a.advance_measure();
-        assert_eq!(ctx.section, SongSection::Intro);
-        let g = ctx.stage_gains;
-        let bass = InstrumentRole::Bass.index();
-        let kick = InstrumentRole::Kick.index();
-        let snare = InstrumentRole::Snare.index();
-        let hat = InstrumentRole::Hat.index();
-        assert!(g[kick] > 0.1, "no heartbeat: {}", g[kick]);
-        assert!(
-            g[bass] < 0.05 && g[snare] < 0.05 && g[hat] < 0.05,
-            "groove leaked early: bass={} snare={} hat={}",
-            g[bass],
-            g[snare],
-            g[hat]
-        );
+        assert_eq!(ctx.section, SongSection::MainMotif);
+        assert!(!ctx.use_alt_motif, "starts with A");
+        for (i, g) in ctx.stage_gains[..7].iter().enumerate() {
+            assert!(*g > 0.3, "role {i} muted at start: {g}");
+        }
     }
 
     #[test]
