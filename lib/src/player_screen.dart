@@ -410,7 +410,8 @@ class _CenterColumn extends StatelessWidget {
                   text: diag,
                 ),
               // Бортовой журнал: видно без USB, что творится в тракте.
-              _DiagPanel(bridge: bridge, visible: c.running),
+              // Только пока жив pull-цикл (на десктопе его нет).
+              _DiagPanel(bridge: bridge, visible: bridge.pullActive),
             ],
           ),
         ),

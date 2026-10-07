@@ -120,6 +120,10 @@ class AudioBridge {
   /// Бортовой журнал pull-цикла для экрана диагностики.
   List<String> diagLog() => _pull?.diagLog.toList() ?? const [];
 
+  /// Pull-цикл жив (иначе журнал пуст не от хорошей жизни):
+  /// на десктопе pull нет вовсе, там cpal-тракт.
+  bool get pullActive => _pull?.running ?? false;
+
   /// Захват следующих 30 секунд потока в файл (экспертиза скачков).
   /// Путь — в журнале. null — не играет или уже пишем.
   Future<String?> startCapture() => _pull?.startCapture() ?? Future.value(null);

@@ -39,6 +39,11 @@ class ContAudioTrack {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                 )
+                // Низкая задержка вместо offload/глубокого буфера:
+                // файловый плеер идёт тем же трактом ровно, а наш стрим
+                // без флага получал порционную выдачу (скачки при
+                // идеальных метриках цикла).
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(ENCODING)
