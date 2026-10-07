@@ -43,6 +43,24 @@ class PullPlayer {
   int _partials = 0;
   DateTime? _lastRenderEnd;
 
+  /// Бортовой самописец: последние строки для экрана диагностики.
+  /// Кап 60 — память не течет на длинных сессиях.
+  final List<String> diagLog = [];
+  static const int _diagCap = 60;
+
+  void _log(String s) {
+    final t = DateTime.now();
+    final hh = t.hour.toString().padLeft(2, '0');
+    final mm = t.minute.toString().padLeft(2, '0');
+    final ss = t.second.toString().padLeft(2, '0');
+    final line = '[$hh:$mm:$ss] $s';
+    debugPrint('[pull] $s');
+    diagLog.add(line);
+    if (diagLog.length > _diagCap) {
+      diagLog.removeRange(0, diagLog.length - _diagCap);
+    }
+  }
+
   /// Старт: подготовить трек и гнать цикл. false — трек не создался.
   Future<bool> start() async {
     if (_running) return true;
@@ -61,11 +79,13 @@ class PullPlayer {
       _gaps = 0;
       _partials = 0;
       _lastRenderEnd = null;
+      diagLog.clear();
+      _log('start: track prepared, loop running');
       await _channel.invokeMethod<void>('playTrack');
       unawaited(_loop(myId));
       return true;
     } catch (e) {
-      debugPrint('[pull] start failed: $e');
+      _log('start failed: $e');
       _running = false;
       return false;
     }
@@ -94,8 +114,14 @@ class PullPlayer {
         try {
           final now = DateTime.now();
           final prev = _lastRenderEnd;
-          if (prev != null && now.difference(prev).inMilliseconds > 150) {
-            _gaps++;
+          if (prev != null) {
+            final gapMs = now.difference(prev).inMilliseconds;
+            if (gapMs > 150) {
+              _gaps++;
+              if (gapMs > 1000) {
+                _log('loop stall ${gapMs}ms (dart jank?)');
+              }
+            }
           }
           _lastRenderEnd = now;
           sw.reset();
@@ -109,7 +135,7 @@ class PullPlayer {
           _renderMsTotal += sw.elapsedMilliseconds;
           if (sw.elapsedMilliseconds > 50) {
             _slowChunks++;
-            debugPrint('[pull] SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
+            _log('SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
                 '(budget 100ms, slow=$_slowChunks)');
           } else if (_chunks % 100 == 0) {
             // Глубина очереди из бэкенда: растет — насос отстает
@@ -118,11 +144,11 @@ class PullPlayer {
             try {
               queued = (await playbackEngineStats()).queued.toInt();
             } catch (_) {}
-            debugPrint('[pull] render avg ${_renderMsTotal ~/ _chunks}ms '
+            _log('render avg ${_renderMsTotal ~/ _chunks}ms '
                 '(slow=$_slowChunks/$_chunks gaps=$_gaps partials=$_partials queued=$queued)');
           }
         } catch (e) {
-          debugPrint('[pull] render failed: $e');
+          _log('render failed: $e');
           await Future<void>.delayed(const Duration(milliseconds: 200));
           continue;
         }
@@ -137,7 +163,9 @@ class PullPlayer {
         final written = await _channel.invokeMethod<int>('feed', {'pcm': pcm});
         if (written == null || written < 0) {
           feedErrors++;
-          debugPrint('[pull] feed error #$feedErrors, retrying');
+          if (feedErrors == 1 || feedErrors % 10 == 0) {
+            _log('feed error #$feedErrors, retrying');
+          }
           if (feedErrors >= 10) {
             // Трек мертв (маршрут умер без события): пересоздаем
             // и продолжаем с пустого буфера, а не крутим вхолостую.
@@ -147,9 +175,10 @@ class PullPlayer {
               final ok = await _channel.invokeMethod<bool>('prepare');
               if (ok == true) {
                 await _channel.invokeMethod<void>('playTrack');
+                _log('track recreated after feed errors');
               }
             } catch (e) {
-              debugPrint('[pull] heal failed: $e');
+              _log('heal failed: $e');
             }
           }
           await Future<void>.delayed(const Duration(milliseconds: 200));

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:cont/src/audio_bridge.dart';
 import 'package:cont/src/player_controller.dart';
@@ -408,6 +409,8 @@ class _CenterColumn extends StatelessWidget {
                   color: Colors.amber,
                   text: diag,
                 ),
+              // Бортовой журнал: видно без USB, что творится в тракте.
+              _DiagPanel(bridge: bridge, visible: c.running),
             ],
           ),
         ),
@@ -456,6 +459,80 @@ class _CenterColumn extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Бортовой журнал pull-цикла: последние строки + кнопка копирования.
+/// Обновляется опросом (раз в 3с, пока играет) — живого тика нет,
+/// чтобы не будить перестройки ради диагностики.
+class _DiagPanel extends StatefulWidget {
+  const _DiagPanel({required this.bridge, required this.visible});
+
+  final AudioBridge bridge;
+  final bool visible;
+
+  @override
+  State<_DiagPanel> createState() => _DiagPanelState();
+}
+
+class _DiagPanelState extends State<_DiagPanel> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.visible) return const SizedBox.shrink();
+    final lines = widget.bridge.diagLog();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: () => setState(() => _open = !_open),
+            child: Text(
+              _open
+                  ? 'Скрыть журнал'
+                  : 'Журнал тракта (${lines.length})',
+              style: const TextStyle(fontSize: 11, color: Colors.white54),
+            ),
+          ),
+          if (_open) ...[
+            const SizedBox(height: 4),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 160),
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  lines.isEmpty
+                      ? 'пока пусто — запусти генерацию'
+                      : lines.join('\n'),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Colors.white70,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: lines.isEmpty
+                  ? null
+                  : () => Clipboard.setData(
+                      ClipboardData(text: lines.join('\n'))),
+              icon: const Icon(Icons.copy, size: 14),
+              label: const Text(
+                'Копировать',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
