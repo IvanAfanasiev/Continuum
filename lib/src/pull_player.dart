@@ -36,6 +36,12 @@ class PullPlayer {
   int _chunks = 0;
   int _slowChunks = 0;
   int _renderMsTotal = 0;
+  /// Разрывы цикла: паузы между рендерами дольше 150мс (Dart-джанк,
+  /// GC, подвисший канал) — главный кандидат в «скачки ритма».
+  /// Частичные feed'ы (буфер трека полон) — противодавление в норме.
+  int _gaps = 0;
+  int _partials = 0;
+  DateTime? _lastRenderEnd;
 
   /// Старт: подготовить трек и гнать цикл. false — трек не создался.
   Future<bool> start() async {
@@ -52,6 +58,9 @@ class PullPlayer {
       _chunks = 0;
       _slowChunks = 0;
       _renderMsTotal = 0;
+      _gaps = 0;
+      _partials = 0;
+      _lastRenderEnd = null;
       await _channel.invokeMethod<void>('playTrack');
       unawaited(_loop(myId));
       return true;
@@ -83,6 +92,12 @@ class PullPlayer {
         pcm = rest;
       } else {
         try {
+          final now = DateTime.now();
+          final prev = _lastRenderEnd;
+          if (prev != null && now.difference(prev).inMilliseconds > 150) {
+            _gaps++;
+          }
+          _lastRenderEnd = now;
           sw.reset();
           sw.start();
           pcm = await playbackPullRender(
@@ -97,8 +112,14 @@ class PullPlayer {
             debugPrint('[pull] SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
                 '(budget 100ms, slow=$_slowChunks)');
           } else if (_chunks % 100 == 0) {
+            // Глубина очереди из бэкенда: растет — насос отстает
+            // от композера (ноты опаздывают и дропаются).
+            var queued = -1;
+            try {
+              queued = (await playbackEngineStats()).queued.toInt();
+            } catch (_) {}
             debugPrint('[pull] render avg ${_renderMsTotal ~/ _chunks}ms '
-                '(slow=$_slowChunks/$_chunks)');
+                '(slow=$_slowChunks/$_chunks gaps=$_gaps partials=$_partials queued=$queued)');
           }
         } catch (e) {
           debugPrint('[pull] render failed: $e');
@@ -136,6 +157,7 @@ class PullPlayer {
           // Буфер почти полон: съедено частично — остаток следующим,
           // рендерить нечего, ждем место.
           feedErrors = 0;
+          _partials++;
           pending = Float32List.sublistView(pcm, written * 2);
           await Future<void>.delayed(const Duration(milliseconds: 30));
         } else {
