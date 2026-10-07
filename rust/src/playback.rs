@@ -769,6 +769,10 @@ impl PlaybackController {
     /// Замок сессии держим только на клонирование shared-частей —
     /// сам рендер идет без него (иначе лаги UI). Без сессии — пусто.
     /// Кап 4 секунд за вызов от дурака.
+    /// Квант планирования — внутри: блок режется на субблоки ~12мс,
+    /// очередь разбирается в начале каждого (а не раз на весь блок).
+    /// Иначе все ноты блока стартуют разом — залп вместо грува.
+    /// Десктопные колбэки и так мелкие, им это ничего не меняет.
     pub fn render_pull(&self, frames: u64, sample_rate: f32) -> Vec<f32> {
         let n = (frames as usize).min(192_000);
         if n == 0 {
@@ -827,7 +831,12 @@ impl PlaybackController {
             }
         };
         let mut out = vec![0.0f32; n * 2];
-        pump.fill(&mut out, 2, f32_identity);
+        // Субблоки по ~12мс (как десктопные колбэки): онсеты точнее
+        // шага сетки при любом размере запроса фронтенда.
+        const SUB_FRAMES: usize = 600;
+        for chunk in out.chunks_mut(SUB_FRAMES * 2) {
+            pump.fill(chunk, 2, f32_identity);
+        }
         out
     }
 
@@ -1409,6 +1418,40 @@ mod tests {
         for h in hs {
             h.join().unwrap();
         }
+    }
+
+    #[test]
+    fn pull_backlog_spreads_across_subblocks() {
+        // Залп вместо грува: backlog после stall'а разбирается порциями
+        // по субблокам (~12мс), а не одним махом в начале блока.
+        // Один субблок (600 фреймов) съедает не больше капа — остальное
+        // ждет следующих субблоков. Композер подсыпает сверху, поэтому
+        // границы с запасом, но разрыв кратный.
+        let c = PlaybackController::new();
+        c.start("club", 42, false);
+        let push100 = || {
+            let guard = c.session.lock().unwrap_or_else(|e| e.into_inner());
+            let s = guard.as_ref().expect("session");
+            for i in 0..100 {
+                let _ = s.queue.push(NoteEvent::new(PLUCK_ID, 60 + (i % 12) as u8, 0.8, 0.2));
+            }
+        };
+        push100();
+        let before = c.engine_stats().consumed;
+        let out = c.render_pull(600, 44_100.0);
+        assert_eq!(out.len(), 1200);
+        assert!(out.iter().all(|s| s.is_finite()));
+        let eaten = c.engine_stats().consumed - before;
+        assert!(eaten < 60, "backlog volley in one subblock: {eaten}");
+        // А весь блок 4800 разбирает все восемью порциями.
+        push100();
+        let before = c.engine_stats().consumed;
+        let out = c.render_pull(4800, 44_100.0);
+        assert_eq!(out.len(), 9600);
+        assert!(out.iter().all(|s| s.is_finite()));
+        let eaten = c.engine_stats().consumed - before;
+        assert!(eaten >= 100, "subblocks do not drain: {eaten}");
+        let _ = c.stop();
     }
 
     #[test]

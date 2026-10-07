@@ -284,6 +284,9 @@ impl RenderState {
 /// Один код для всех форматов сэмплов: часть Android-девайсов отдает
 /// только I16/U16, и мономорфный F32-поток там не строился (тишина
 /// без видимой ошибки). Конвертация — в тонких замыканиях `run`.
+///
+/// Потолок разбора очереди за подготовку блока (см. begin_block).
+const MAX_DRAIN_PER_BLOCK: u64 = 32;
 pub(crate) struct Pump {
     queue: Arc<ArrayQueue<NoteEvent>>,
     mixer: Arc<RwLock<MixerState>>,
@@ -362,7 +365,14 @@ impl Pump {
             }
         }
         let mut eaten = 0u64;
-        while let Some(note) = self.queue.pop() {
+        // Потолок разбора за вызов: backlog после stall'а раскладывается
+        // по субблокам (~12мс друг от друга — почти вовремя), а не
+        // выстреливает разом. Живой поток (<32 нот на 12мс невозможны
+        // музыкально) потолок не замечает.
+        while eaten < MAX_DRAIN_PER_BLOCK {
+            let Some(note) = self.queue.pop() else {
+                break;
+            };
             self.state.push_note(&note);
             eaten += 1;
         }
