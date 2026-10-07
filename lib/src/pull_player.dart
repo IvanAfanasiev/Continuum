@@ -30,6 +30,10 @@ class PullPlayer {
 
   bool get running => _running;
 
+  /// Поколение цикла: stop/start впритык не должны плодить два
+  /// параллельных цикла (старый застрял в feed, новый уже гоняет).
+  int _runId = 0;
+
   /// Скормлено треку за этот старт (фреймы): вместе с иглой трека
   /// задает темп цикла (см. _loop). Сбрасывается на старте.
   int _fedFrames = 0;
@@ -51,12 +55,14 @@ class PullPlayer {
         return false;
       }
       _running = true;
+      _runId++;
+      final myId = _runId;
       _fedFrames = 0;
       _chunks = 0;
       _slowChunks = 0;
       _renderMsTotal = 0;
       await _channel.invokeMethod<void>('playTrack');
-      unawaited(_loop());
+      unawaited(_loop(myId));
       return true;
     } catch (e) {
       debugPrint('[pull] start failed: $e');
@@ -65,28 +71,61 @@ class PullPlayer {
     }
   }
 
-  Future<void> _loop() async {
+  Future<void> _loop(int myId) async {
     final sw = Stopwatch();
-    while (_running) {
-      // Темп ровно realtime: держим не больше чанка впереди иглы.
+    // Самолечение трека: если игла стоит дольше 4с (маршрут умер,
+    // трек не играет) — пересоздаем трек и продолжаем, а не висим.
+    // Иначе ожидание иглы превращается в вечный stall.
+    var lastHead = -1;
+    var stuckSince = DateTime.now();
+    var healed = false;
+    bool alive() => _running && myId == _runId;
+    while (alive()) {
+      // Темп ровно realtime: держим не больше двух чанков впереди иглы.
       // Без этого цикл рендерит вперед на всю мощь CPU (старт —
       // пачкой, дальше впритык) — телефон висит целиком, а не только
       // приложение. Игла — часы трека, дрейфа нет. Ошибка иглы —
       // работаем как раньше (fail-open).
       try {
         for (;;) {
-          if (!_running) break;
+          if (!alive()) break;
           final head = await _channel.invokeMethod<int>('head');
           if (head == null) break;
           // Игла 32-битная (оборот ~за 24 часа): отрицательное = старшие.
           final h = head < 0 ? head + 4294967296 : head;
-          if (_fedFrames - h <= maxAheadFrames) break;
+          if (_fedFrames - h <= maxAheadFrames) {
+            lastHead = -1;
+            healed = false;
+            break;
+          }
+          if (h != lastHead) {
+            lastHead = h;
+            stuckSince = DateTime.now();
+            healed = false;
+          } else if (!healed &&
+              DateTime.now().difference(stuckSince).inSeconds >= 4) {
+            debugPrint('[pull] head stuck at $h, recreating track');
+            healed = true;
+            try {
+              final ok =
+                  await _channel.invokeMethod<bool>('prepare');
+              if (ok == true) {
+                await _channel.invokeMethod<void>('playTrack');
+                _fedFrames = 0;
+                lastHead = -1;
+                break;
+              }
+            } catch (e) {
+              debugPrint('[pull] heal failed: $e');
+            }
+            stuckSince = DateTime.now();
+          }
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
       } catch (_) {
         // Нет иглы — без pacing, как раньше.
       }
-      if (!_running) break;
+      if (!alive()) break;
       late final Float32List pcm;
       try {
         sw.reset();
@@ -111,7 +150,7 @@ class PullPlayer {
         await Future<void>.delayed(const Duration(milliseconds: 200));
         continue;
       }
-      if (!_running) break;
+      if (!alive()) break;
       if (pcm.isEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 200));
         continue;
@@ -133,6 +172,7 @@ class PullPlayer {
 
   Future<void> stop() async {
     _running = false;
+    _runId++;
     try {
       await _channel.invokeMethod<void>('pauseTrack');
     } catch (e) {
