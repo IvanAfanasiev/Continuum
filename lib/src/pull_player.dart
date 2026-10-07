@@ -33,6 +33,11 @@ class PullPlayer {
   int _slowChunks = 0;
   int _renderMsTotal = 0;
 
+  /// Сводка для экрана (без USB-логов): средний рендер и доля медленных.
+  int get chunks => _chunks;
+  int get slowChunks => _slowChunks;
+  int get avgRenderMs => _chunks == 0 ? 0 : _renderMsTotal ~/ _chunks;
+
   /// Старт: подготовить трек и гнать цикл. false — трек не создался.
   Future<bool> start() async {
     if (_running) return true;
