@@ -57,11 +57,14 @@ class PullPlayer {
   static const int _captureChunks = 300; // 30 секунд по 0.1с.
 
   /// Начать захват следующих 30 секунд. Путь файла — в логе.
-  /// Работает только во время игры.
+  /// Работает только во время игры. Папка — публичная данных
+  /// приложения (видна по USB/файловым менеджерам без рута),
+  /// а не закрытый кэш.
   Future<String?> startCapture() async {
     if (!_running || _captureFile != null) return null;
     try {
-      final dir = await getTemporaryDirectory();
+      final ext = await getExternalStorageDirectory();
+      final dir = ext ?? await getTemporaryDirectory();
       final path =
           '${dir.path}/cont_capture_${DateTime.now().millisecondsSinceEpoch}.f32';
       _captureFile = await File(path).open(mode: FileMode.write);
