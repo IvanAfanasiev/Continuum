@@ -20,10 +20,6 @@ class PullPlayer {
   /// «несколько нот выстреливают одновременно».
   static const int chunkFrames = 4800;
 
-  /// Впереди иглы держим не больше двух чанков (0.2с): темп realtime,
-  /// запас на джиттер рендера, без рендера впрок.
-  static const int maxAheadFrames = chunkFrames * 2;
-
   static const _channel = MethodChannel('cont/audio');
 
   bool _running = false;
@@ -73,59 +69,17 @@ class PullPlayer {
 
   Future<void> _loop(int myId) async {
     final sw = Stopwatch();
-    // Самолечение трека: если игла стоит дольше 4с (маршрут умер,
-    // трек не играет) — пересоздаем трек и продолжаем, а не висим.
-    // Иначе ожидание иглы превращается в вечный stall.
-    var lastHead = -1;
-    var stuckSince = DateTime.now();
-    var healed = false;
+    // Самолечение трека: серия ошибок подачи — пересоздаем трек,
+    // а не крутим рендер вхолостую.
+    var feedErrors = 0;
     bool alive() => _running && myId == _runId;
     while (alive()) {
-      // Темп ровно realtime: держим не больше двух чанков впереди иглы.
-      // Без этого цикл рендерит вперед на всю мощь CPU (старт —
-      // пачкой, дальше впритык) — телефон висит целиком, а не только
-      // приложение. Игла — часы трека, дрейфа нет. Ошибка иглы —
-      // работаем как раньше (fail-open).
-      try {
-        for (;;) {
-          if (!alive()) break;
-          final head = await _channel.invokeMethod<int>('head');
-          if (head == null) break;
-          // Игла 32-битная (оборот ~за 24 часа): отрицательное = старшие.
-          final h = head < 0 ? head + 4294967296 : head;
-          if (_fedFrames - h <= maxAheadFrames) {
-            lastHead = -1;
-            healed = false;
-            break;
-          }
-          if (h != lastHead) {
-            lastHead = h;
-            stuckSince = DateTime.now();
-            healed = false;
-          } else if (!healed &&
-              DateTime.now().difference(stuckSince).inSeconds >= 4) {
-            debugPrint('[pull] head stuck at $h, recreating track');
-            healed = true;
-            try {
-              final ok =
-                  await _channel.invokeMethod<bool>('prepare');
-              if (ok == true) {
-                await _channel.invokeMethod<void>('playTrack');
-                _fedFrames = 0;
-                lastHead = -1;
-                break;
-              }
-            } catch (e) {
-              debugPrint('[pull] heal failed: $e');
-            }
-            stuckSince = DateTime.now();
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
-      } catch (_) {
-        // Нет иглы — без pacing, как раньше.
-      }
-      if (!alive()) break;
+      // Каденс ровно realtime: чанк покрывает 0.1с звука — отработали
+      // быстрее, спим остаток. Отстали (медленный рендер) — догоняем
+      // без сна, заикание увидим в SLOW-строках. Спинить нечему:
+      // темп ограничен часами, а не буфером. Плюс блокирующий feed
+      // дает противодавление, когда буфер трека полон.
+      final cycleStart = DateTime.now();
       late final Float32List pcm;
       try {
         sw.reset();
@@ -157,15 +111,37 @@ class PullPlayer {
       }
       try {
         final written = await _channel.invokeMethod<int>('feed', {'pcm': pcm});
-        if (written != null && written < 0) {
-          debugPrint('[pull] feed error, retrying');
+        if (written == null || written < 0) {
+          feedErrors++;
+          debugPrint('[pull] feed error #$feedErrors, retrying');
+          if (feedErrors >= 10) {
+            // Трек мертв (маршрут умер без события): пересоздаем
+            // и продолжаем с пустого буфера, а не крутим вхолостую.
+            feedErrors = 0;
+            try {
+              final ok = await _channel.invokeMethod<bool>('prepare');
+              if (ok == true) {
+                await _channel.invokeMethod<void>('playTrack');
+                _fedFrames = 0;
+              }
+            } catch (e) {
+              debugPrint('[pull] heal failed: $e');
+            }
+          }
           await Future<void>.delayed(const Duration(milliseconds: 200));
-        } else if (written != null) {
+        } else {
+          feedErrors = 0;
           _fedFrames += written;
         }
       } catch (e) {
         debugPrint('[pull] feed failed: $e');
         await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      // Каденс: чанк 0.1с — спим остаток цикла.
+      final elapsed = DateTime.now().difference(cycleStart);
+      const quantum = Duration(milliseconds: 100);
+      if (elapsed < quantum) {
+        await Future<void>.delayed(quantum - elapsed);
       }
     }
   }
