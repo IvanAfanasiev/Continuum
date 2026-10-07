@@ -6,6 +6,7 @@ pub mod engine;
 pub mod instruments;
 pub mod mixer;
 pub mod playback;
+pub mod proto;
 pub mod seed;
 pub mod space;
 pub mod styles;

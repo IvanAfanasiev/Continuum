@@ -20,7 +20,7 @@ use rust_lib_cont::core::DEFAULT_SEED;
 use rust_lib_cont::playback::{
     render_offline, render_wav, soak_render, PlaybackController, RenderReport, SoakReport,
 };
-use rust_lib_cont::styles;
+use rust_lib_cont::{proto, styles};
 
 const DEFAULT_RENDER_STEPS: usize = 64;
 const DEFAULT_SOAK_SECS: f32 = 60.0;
@@ -34,6 +34,8 @@ struct Cli {
     soak_secs: Option<f32>,
     wav_path: Option<String>,
     wav_secs: Option<f32>,
+    /// Режим прототипа: pure-formula движок вместо основного.
+    proto: bool,
 }
 
 impl Cli {
@@ -45,6 +47,7 @@ impl Cli {
             soak_secs: None,
             wav_path: None,
             wav_secs: None,
+            proto: false,
         }
     }
 }
@@ -116,6 +119,8 @@ fn parse_cli(args: &[String]) -> Cli {
         } else if arg == "--help" || arg == "-h" {
             print_help();
             std::process::exit(0);
+        } else if arg == "--proto" {
+            cli.proto = true;
         } else if let Ok(n) = arg.parse::<u64>() {
             cli.seed = n;
         } else {
@@ -175,6 +180,52 @@ fn print_report(report: &RenderReport) {
 
 fn main() {
     let cli = parse_cli(&env::args().collect::<Vec<_>>());
+
+    // Прототип: тот же seed/wav/soak, но pure-formula движок.
+    if cli.proto {
+        if let Some(path) = cli.wav_path {
+            let secs = cli.wav_secs.unwrap_or(DEFAULT_WAV_SECS);
+            match proto::proto_wav(cli.seed, secs, 44_100.0, &path) {
+                Ok(r) => {
+                    println!(
+                        "proto: seed {}, audio {:.1}s, frames: {}",
+                        cli.seed, secs, r.frames
+                    );
+                    println!(
+                        "  peak: {:.3}, rms: {:.3}, non-finite: {}",
+                        r.peak, r.rms, r.non_finite
+                    );
+                    println!(
+                        "  wall: {:.1}s ({:.0}x realtime)",
+                        r.wall_secs,
+                        secs / r.wall_secs.max(0.001)
+                    );
+                    println!("  wrote: {path}");
+                }
+                Err(e) => eprintln!("{e}"),
+            }
+            return;
+        }
+        if let Some(secs) = cli.soak_secs.or(cli.render_steps.map(|_| DEFAULT_SOAK_SECS)) {
+            let r = proto::proto_soak(cli.seed, secs, 44_100.0);
+            println!(
+                "proto: seed {}, audio {:.1}s, frames: {}",
+                cli.seed, secs, r.frames
+            );
+            println!(
+                "  peak: {:.3}, rms: {:.3}, non-finite: {}",
+                r.peak, r.rms, r.non_finite
+            );
+            println!(
+                "  wall: {:.1}s ({:.0}x realtime)",
+                r.wall_secs,
+                secs / r.wall_secs.max(0.001)
+            );
+            return;
+        }
+        eprintln!("--proto needs --wav FILE or --soak SECS");
+        return;
+    }
 
     // Имя нормализуем через реестр: "Club", " LOFI " и т.п. тоже находятся.
     // Неизвестное имя — предупреждение + club, а не тихий чужой стиль.
