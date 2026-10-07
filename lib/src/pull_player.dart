@@ -13,8 +13,16 @@ class PullPlayer {
   /// Частота трека (универсальна для AudioTrack, ресемплит сам).
   static const double sampleRate = 48000;
 
-  /// Полсекунды звука за вызов: 24000 фреймов стерео (~192 КБ).
-  static const int chunkFrames = 24000;
+  /// Десятая секунды за вызов: 4800 фреймов стерео (~38 КБ).
+  /// Блок обязан быть не длиннее шага сетки (16-я при 126 BPM = 119мс):
+  /// насос разбирает очередь в начале блока, и все ноты блока
+  /// стартуют разом. Полсекундные блоки давали залп каждые 0.5с —
+  /// «несколько нот выстреливают одновременно».
+  static const int chunkFrames = 4800;
+
+  /// Впереди иглы держим не больше двух чанков (0.2с): темп realtime,
+  /// запас на джиттер рендера, без рендера впрок.
+  static const int maxAheadFrames = chunkFrames * 2;
 
   static const _channel = MethodChannel('cont/audio');
 
@@ -27,8 +35,8 @@ class PullPlayer {
   int _fedFrames = 0;
 
   /// Замеры темпа рендера для диагностики: сколько мс занимает блок.
-  /// Рендер медленнее realtime (блок 0.5с дольше 500мс) = заикания:
-  /// трек голодает. Пишем в лог только медленные и сводку каждых 20.
+  /// Рендер медленнее realtime (блок 0.1с дольше 100мс) = заикания:
+  /// трек голодает. Пишем в лог только медленные и сводку каждых 100.
   int _chunks = 0;
   int _slowChunks = 0;
   int _renderMsTotal = 0;
@@ -72,8 +80,8 @@ class PullPlayer {
           if (head == null) break;
           // Игла 32-битная (оборот ~за 24 часа): отрицательное = старшие.
           final h = head < 0 ? head + 4294967296 : head;
-          if (_fedFrames - h <= chunkFrames) break;
-          await Future<void>.delayed(const Duration(milliseconds: 50));
+          if (_fedFrames - h <= maxAheadFrames) break;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
         }
       } catch (_) {
         // Нет иглы — без pacing, как раньше.
@@ -90,11 +98,11 @@ class PullPlayer {
         sw.stop();
         _chunks++;
         _renderMsTotal += sw.elapsedMilliseconds;
-        if (sw.elapsedMilliseconds > 250) {
+        if (sw.elapsedMilliseconds > 50) {
           _slowChunks++;
           debugPrint('[pull] SLOW render #$_chunks: ${sw.elapsedMilliseconds}ms '
-              '(budget 500ms, slow=$_slowChunks)');
-        } else if (_chunks % 20 == 0) {
+              '(budget 100ms, slow=$_slowChunks)');
+        } else if (_chunks % 100 == 0) {
           debugPrint('[pull] render avg ${_renderMsTotal ~/ _chunks}ms '
               '(slow=$_slowChunks/$_chunks)');
         }

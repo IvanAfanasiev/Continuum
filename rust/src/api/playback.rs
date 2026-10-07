@@ -99,7 +99,8 @@ pub fn playback_pull_start(style_name: String, seed: u64) -> PlaybackStatus {
 }
 
 /// Pull-блок для фронтенда: стерео interleaved f32.
-/// Вызывать циклично (~4-8 раз в секунду), темп задает потребитель.
+/// Вызывать циклично мелкими блоками (~10 раз в секунду — онсеты
+/// точнее шага сетки), темп задает потребитель.
 pub fn playback_pull_render(frames: u64, sample_rate: f32) -> Vec<f32> {
     controller().render_pull(frames, sample_rate)
 }
