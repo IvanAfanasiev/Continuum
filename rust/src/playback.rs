@@ -1455,6 +1455,29 @@ mod tests {
     }
 
     #[test]
+    fn live_tempo_and_intensity_reach_composer() {
+        // Ручки фронта доходят до генерации: статус отражает,
+        // плотность нот следует за intensity.
+        let c = PlaybackController::new();
+        c.start("club", 11, false);
+        let s = c.set_intensity(0.1);
+        assert!((s.intensity - 0.1).abs() < 1e-5, "intensity ignored");
+        let s = c.set_tempo_bpm(100.0);
+        assert!((s.tempo_bpm - 100.0).abs() < 1e-3, "tempo ignored");
+        // Тихая генерация дает меньше нот, чем горячая.
+        std::thread::sleep(Duration::from_millis(300));
+        c.set_intensity(0.1);
+        let _ = c.render_pull(4800, 44_100.0);
+        let cold = c.engine_stats().pushed;
+        c.set_intensity(2.0);
+        std::thread::sleep(Duration::from_millis(1500));
+        let _ = c.render_pull(4800, 44_100.0);
+        let hot = c.engine_stats().pushed;
+        assert!(hot > cold, "intensity does not drive density: {cold} vs {hot}");
+        let _ = c.stop();
+    }
+
+    #[test]
     fn pull_renders_finite_blocks() {
         // Pull-режим фронта: старт без аудио, затем блоки сэмплов.
         // Размер = фреймы × 2 канала, все конечно.
