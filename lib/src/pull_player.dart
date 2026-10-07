@@ -30,10 +30,6 @@ class PullPlayer {
   /// параллельных цикла (старый застрял в feed, новый уже гоняет).
   int _runId = 0;
 
-  /// Скормлено треку за этот старт (фреймы): вместе с иглой трека
-  /// задает темп цикла (см. _loop). Сбрасывается на старте.
-  int _fedFrames = 0;
-
   /// Замеры темпа рендера для диагностики: сколько мс занимает блок.
   /// Рендер медленнее realtime (блок 0.1с дольше 100мс) = заикания:
   /// трек голодает. Пишем в лог только медленные и сводку каждых 100.
@@ -53,7 +49,6 @@ class PullPlayer {
       _running = true;
       _runId++;
       final myId = _runId;
-      _fedFrames = 0;
       _chunks = 0;
       _slowChunks = 0;
       _renderMsTotal = 0;
@@ -122,7 +117,6 @@ class PullPlayer {
               final ok = await _channel.invokeMethod<bool>('prepare');
               if (ok == true) {
                 await _channel.invokeMethod<void>('playTrack');
-                _fedFrames = 0;
               }
             } catch (e) {
               debugPrint('[pull] heal failed: $e');
@@ -131,7 +125,6 @@ class PullPlayer {
           await Future<void>.delayed(const Duration(milliseconds: 200));
         } else {
           feedErrors = 0;
-          _fedFrames += written;
         }
       } catch (e) {
         debugPrint('[pull] feed failed: $e');
