@@ -12,9 +12,14 @@ cpal = "0.15"
 rand = "0.8"
 crossbeam = "0.8"
 
-# Только Android: JavaVM для ndk-context (cpal/Oboe без него падают).
+# Только Android: JavaVM для ndk-context (cpal/Oboe без него падают),
+# JNI-мост в AudioTrack для нативного аудио-потока (без участия Dart).
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-context = "0.1"
+jni = "0.22"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[features]
+jni = []
