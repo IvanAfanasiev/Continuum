@@ -154,146 +154,217 @@ fn audio_loop(gen: u64) {
     diag_push(format!("{} native audio loop running", diag_now()));
     let alive = || GEN.load(Ordering::Relaxed) == gen;
 
-    let mut scope = jni::ScopeToken::default();
-    // SAFETY: guard и scope живут на стеке этого потока до конца функции.
-    let attach = unsafe {
-        jvm().attach_current_thread_guard(jni::AttachConfig::new(), &mut scope)
-    };
-    let mut guard = match attach {
-        Ok(g) => g,
-        Err(e) => {
-            diag_push(format!("{} attach failed: {e}", diag_now()));
-            ALIVE.store(false, Ordering::Relaxed);
-            return;
-        }
-    };
-    let env = guard.borrow_env_mut();
+    // Весь цикл внутри attach-callback: поток приаттачен, пока
+    // замыкание не вернется (detach автоматический в конце).
+    let res: jni::errors::Result<()> = jvm().attach_current_thread(|env| {
+        // --- Сборка AudioTrack через Builder-цепочку (без Activity) ---
+        let attrs_builder_cls =
+            env.find_class(jni::jni_str!("android/media/AudioAttributes$Builder"))?;
+        let attrs_builder = env.new_object(attrs_builder_cls, jni::jni_sig!("()V"), &[])?;
+        let attrs_builder = env
+            .call_method(
+                &attrs_builder,
+                jni::jni_str!("setUsage"),
+                jni::jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
+                &[JValue::Int(1)],
+            )?
+            .l()?;
+        let attrs_builder = env
+            .call_method(
+                &attrs_builder,
+                jni::jni_str!("setContentType"),
+                jni::jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
+                &[JValue::Int(2)],
+            )?
+            .l()?;
+        let attrs = env
+            .call_method(
+                &attrs_builder,
+                jni::jni_str!("build"),
+                jni::jni_sig!("()Landroid/media/AudioAttributes;"),
+                &[],
+            )?
+            .l()?;
 
-    // --- Сборка AudioTrack через Builder-цепочку (без Activity) ---
-    let track: jni::objects::JObject<'_> = match (|| -> jni::errors::Result<_> {
-        let attrs_builder_cls = env.find_class("android/media/AudioAttributes$Builder")?;
-        let attrs_builder = env.new_object(attrs_builder_cls, "()V", &[])?;
-        let attrs_builder = env.call_method(&attrs_builder, "setUsage", "(I)Landroid/media/AudioAttributes$Builder;", &[JValue::Int(1)])?.l()?;
-        let attrs_builder = env.call_method(&attrs_builder, "setContentType", "(I)Landroid/media/AudioAttributes$Builder;", &[JValue::Int(2)])?.l()?;
-        let attrs = env.call_method(&attrs_builder, "build", "()Landroid/media/AudioAttributes;", &[])?.l()?;
+        let fmt_builder_cls =
+            env.find_class(jni::jni_str!("android/media/AudioFormat$Builder"))?;
+        let fmt_builder = env.new_object(fmt_builder_cls, jni::jni_sig!("()V"), &[])?;
+        let fmt_builder = env
+            .call_method(
+                &fmt_builder,
+                jni::jni_str!("setEncoding"),
+                jni::jni_sig!("(I)Landroid/media/AudioFormat$Builder;"),
+                &[JValue::Int(4)],
+            )?
+            .l()?;
+        let fmt_builder = env
+            .call_method(
+                &fmt_builder,
+                jni::jni_str!("setSampleRate"),
+                jni::jni_sig!("(I)Landroid/media/AudioFormat$Builder;"),
+                &[JValue::Int(48000)],
+            )?
+            .l()?;
+        let fmt_builder = env
+            .call_method(
+                &fmt_builder,
+                jni::jni_str!("setChannelMask"),
+                jni::jni_sig!("(I)Landroid/media/AudioFormat$Builder;"),
+                &[JValue::Int(12)],
+            )?
+            .l()?;
+        let fmt = env
+            .call_method(
+                &fmt_builder,
+                jni::jni_str!("build"),
+                jni::jni_sig!("()Landroid/media/AudioFormat;"),
+                &[],
+            )?
+            .l()?;
 
-        let fmt_builder_cls = env.find_class("android/media/AudioFormat$Builder")?;
-        let fmt_builder = env.new_object(fmt_builder_cls, "()V", &[])?;
-        let fmt_builder = env.call_method(&fmt_builder, "setEncoding", "(I)Landroid/media/AudioFormat$Builder;", &[JValue::Int(4)])?.l()?;
-        let fmt_builder = env.call_method(&fmt_builder, "setSampleRate", "(I)Landroid/media/AudioFormat$Builder;", &[JValue::Int(48000)])?.l()?;
-        let fmt_builder = env.call_method(&fmt_builder, "setChannelMask", "(I)Landroid/media/AudioFormat$Builder;", &[JValue::Int(12)])?.l()?;
-        let fmt = env.call_method(&fmt_builder, "build", "()Landroid/media/AudioFormat;", &[])?.l()?;
-
-        let track_builder_cls = env.find_class("android/media/AudioTrack$Builder")?;
-        let track_builder = env.new_object(track_builder_cls, "()V", &[])?;
-        let track_builder = env.call_method(&track_builder, "setAudioAttributes", "(Landroid/media/AudioAttributes;)Landroid/media/AudioTrack$Builder;", &[JValue::Object(&attrs)])?.l()?;
-        let track_builder = env.call_method(&track_builder, "setAudioFormat", "(Landroid/media/AudioFormat;)Landroid/media/AudioTrack$Builder;", &[JValue::Object(&fmt)])?.l()?;
-        let track_builder = env.call_method(&track_builder, "setBufferSizeInBytes", "(I)Landroid/media/AudioTrack$Builder;", &[JValue::Int(TRACK_BUF_BYTES)])?.l()?;
-        let track_builder = env.call_method(&track_builder, "setTransferMode", "(I)Landroid/media/AudioTrack$Builder;", &[JValue::Int(1)])?.l()?;
-        let track_builder = env.call_method(&track_builder, "setPerformanceMode", "(I)Landroid/media/AudioTrack$Builder;", &[JValue::Int(10)])?.l()?;
-        let track = env.call_method(&track_builder, "build", "()Landroid/media/AudioTrack;", &[])?.l()?;
-        let state: i32 = env.call_method(&track, "getState", "()I", &[])?.i()?;
+        let track_builder_cls =
+            env.find_class(jni::jni_str!("android/media/AudioTrack$Builder"))?;
+        let track_builder = env.new_object(track_builder_cls, jni::jni_sig!("()V"), &[])?;
+        let track_builder = env
+            .call_method(
+                &track_builder,
+                jni::jni_str!("setAudioAttributes"),
+                jni::jni_sig!(
+                    "(Landroid/media/AudioAttributes;)Landroid/media/AudioTrack$Builder;"
+                ),
+                &[JValue::Object(&attrs)],
+            )?
+            .l()?;
+        let track_builder = env
+            .call_method(
+                &track_builder,
+                jni::jni_str!("setAudioFormat"),
+                jni::jni_sig!(
+                    "(Landroid/media/AudioFormat;)Landroid/media/AudioTrack$Builder;"
+                ),
+                &[JValue::Object(&fmt)],
+            )?
+            .l()?;
+        let track_builder = env
+            .call_method(
+                &track_builder,
+                jni::jni_str!("setBufferSizeInBytes"),
+                jni::jni_sig!("(I)Landroid/media/AudioTrack$Builder;"),
+                &[JValue::Int(TRACK_BUF_BYTES)],
+            )?
+            .l()?;
+        let track_builder = env
+            .call_method(
+                &track_builder,
+                jni::jni_str!("setTransferMode"),
+                jni::jni_sig!("(I)Landroid/media/AudioTrack$Builder;"),
+                &[JValue::Int(1)],
+            )?
+            .l()?;
+        let track_builder = env
+            .call_method(
+                &track_builder,
+                jni::jni_str!("setPerformanceMode"),
+                jni::jni_sig!("(I)Landroid/media/AudioTrack$Builder;"),
+                &[JValue::Int(10)],
+            )?
+            .l()?;
+        let track = env
+            .call_method(
+                &track_builder,
+                jni::jni_str!("build"),
+                jni::jni_sig!("()Landroid/media/AudioTrack;"),
+                &[],
+            )?
+            .l()?;
+        let state: i32 = env
+            .call_method(&track, jni::jni_str!("getState"), jni::jni_sig!("()I"), &[])?
+            .i()?;
         if state != 1 {
+            diag_push(format!("{} bad track state: {state}", diag_now()));
             return Err(jni::errors::Error::JavaException);
         }
-        Ok(track)
-    })() {
-        Ok(t) => t,
-        Err(e) => {
-            diag_push(format!("{} track build failed: {e}", diag_now()));
-            ALIVE.store(false, Ordering::Relaxed);
-            return;
-        }
-    };
-    // Глобальная ссылка: переживает локальные фреймы цикла.
-    // Локальную тут же удаляем (иначе копится в таблице ссылок).
-    let track_global = match env.new_global_ref(&track) {
-        Ok(g) => g,
-        Err(e) => {
-            diag_push(format!("{} global ref failed: {e}", diag_now()));
-            ALIVE.store(false, Ordering::Relaxed);
-            return;
-        }
-    };
-    let _ = env.delete_local_ref(track);
-    let track = track_global;
+        // Глобальная ссылка: переживает локальные фреймы цикла.
+        // Локальную тут же удаляем (иначе копится в таблице ссылок).
+        let track_global = env.new_global_ref(&track)?;
+        env.delete_local_ref(track)?;
 
-    if env
-        .call_method(track.as_obj(), "play", "()V", &[])
-        .is_err()
-    {
-        diag_push(format!("{} track play failed", diag_now()));
-        ALIVE.store(false, Ordering::Relaxed);
-        return;
-    }
+        env.call_method(&track_global, jni::jni_str!("play"), jni::jni_sig!("()V"), &[])?;
 
-    let mut counters = Counters {
-        chunks: 0,
-        slow: 0,
-        render_ms_total: 0,
-    };
-    let controller = crate::api::playback::shared_controller();
-    while alive() {
-        let t0 = Instant::now();
-        let pcm = controller.render_pull(CHUNK_FRAMES as u64, TRACK_SR);
-        let ms = t0.elapsed().as_millis() as u64;
-        counters.chunks += 1;
-        counters.render_ms_total += ms;
-        if ms > 50 {
-            counters.slow += 1;
-            diag_push(format!(
-                "{} SLOW render: {ms}ms (slow={})",
-                diag_now(),
-                counters.slow
-            ));
-        } else if counters.chunks % 100 == 0 {
-            let avg = counters.render_ms_total / counters.chunks.max(1);
-            let queued = controller.engine_stats().queued;
-            diag_push(format!(
-                "{} render avg {avg}ms (slow={} queued={queued})",
-                diag_now(),
-                counters.slow
-            ));
-        }
-        if pcm.is_empty() {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            continue;
-        }
-        capture_write(&pcm);
-        // Запись одним куском в локальном фрейме: массив удаляется
-        // сразу, таблица ссылок не растет весь трек.
-        let write_res: jni::errors::Result<i32> = env.with_local_frame(8, |env| {
-            let arr = env.new_float_array(pcm.len())?;
-            env.set_float_array_region(&arr, 0, &pcm)?;
-            let n = env.call_method(
-                track.as_obj(),
-                "write",
-                "([FIII)I",
-                &[
-                    JValue::Object(&arr),
-                    JValue::Int(0),
-                    JValue::Int(pcm.len() as i32),
-                    JValue::Int(1),
-                ],
-            )?.i()?;
-            Ok(n)
-        });
-        match write_res {
-            Ok(n) if n >= 0 => {}
-            _ => {
-                // Трек умер (маршрут без события): выходим, Dart
-                // пересоздаст цикл по команде play (как раньше heal).
-                diag_push(format!("{} track write failed, exiting", diag_now()));
-                break;
+        let mut counters = Counters {
+            chunks: 0,
+            slow: 0,
+            render_ms_total: 0,
+        };
+        let controller = crate::api::playback::shared_controller();
+        while alive() {
+            let t0 = Instant::now();
+            let pcm = controller.render_pull(CHUNK_FRAMES as u64, TRACK_SR);
+            let ms = t0.elapsed().as_millis() as u64;
+            counters.chunks += 1;
+            counters.render_ms_total += ms;
+            if ms > 50 {
+                counters.slow += 1;
+                diag_push(format!(
+                    "{} SLOW render: {ms}ms (slow={})",
+                    diag_now(),
+                    counters.slow
+                ));
+            } else if counters.chunks % 100 == 0 {
+                let avg = counters.render_ms_total / counters.chunks.max(1);
+                let queued = controller.engine_stats().queued;
+                diag_push(format!(
+                    "{} render avg {avg}ms (slow={} queued={queued})",
+                    diag_now(),
+                    counters.slow
+                ));
+            }
+            if pcm.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
+            capture_write(&pcm);
+            // Запись одним куском в локальном фрейме: массив удаляется
+            // сразу, таблица ссылок не растет весь трек.
+            let write_res: jni::errors::Result<i32> =
+                env.with_local_frame(8, |env| {
+                    let arr = env.new_float_array(pcm.len())?;
+                    env.set_float_array_region(&arr, 0, &pcm)?;
+                    let n = env
+                        .call_method(
+                            &track_global,
+                            jni::jni_str!("write"),
+                            jni::jni_sig!("([FIII)I"),
+                            &[
+                                JValue::Object(&arr),
+                                JValue::Int(0),
+                                JValue::Int(pcm.len() as i32),
+                                JValue::Int(1),
+                            ],
+                        )?
+                        .i()?;
+                    Ok(n)
+                });
+            match write_res {
+                Ok(n) if n >= 0 => {}
+                _ => {
+                    // Трек умер (маршрут без события): выходим, Dart
+                    // пересоздаст цикл по команде play (как раньше heal).
+                    diag_push(format!("{} track write failed, exiting", diag_now()));
+                    break;
+                }
             }
         }
-    }
 
-    // Уборка: пауза, сброс буфера, release, detach через guard.
-    let env = guard.borrow_env_mut();
-    let _ = env.call_method(track.as_obj(), "pause", "()V", &[]);
-    let _ = env.call_method(track.as_obj(), "flush", "()V", &[]);
-    let _ = env.call_method(track.as_obj(), "release", "()V", &[]);
+        // Уборка: пауза, сброс буфера, release.
+        let _ = env.call_method(&track_global, jni::jni_str!("pause"), jni::jni_sig!("()V"), &[]);
+        let _ = env.call_method(&track_global, jni::jni_str!("flush"), jni::jni_sig!("()V"), &[]);
+        let _ = env.call_method(&track_global, jni::jni_str!("release"), jni::jni_sig!("()V"), &[]);
+        Ok(())
+    });
+    if let Err(e) = res {
+        diag_push(format!("{} audio loop failed: {e}", diag_now()));
+    }
     ALIVE.store(false, Ordering::Relaxed);
     diag_push(format!("{} native audio loop stopped", diag_now()));
 }
