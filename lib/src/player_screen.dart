@@ -410,8 +410,8 @@ class _CenterColumn extends StatelessWidget {
                   text: diag,
                 ),
               // Бортовой журнал: видно без USB, что творится в тракте.
-              // Только пока жив pull-цикл (на десктопе его нет).
-              _DiagPanel(bridge: bridge, visible: bridge.pullActive),
+              // Жив ли поток — панель выяснит сама опросом.
+              _DiagPanel(bridge: bridge, visible: c.running),
             ],
           ),
         ),
@@ -464,8 +464,8 @@ class _CenterColumn extends StatelessWidget {
   }
 }
 
-/// Бортовой журнал pull-цикла: последние строки + кнопка копирования.
-/// Обновляется опросом (раз в 3с, пока играет) — живого тика нет,
+/// Бортовой журнал нативного потока: последние строки + кнопки.
+/// Опрашивается раз в 3с (в ритме поллера статуса) — живых тиков нет,
 /// чтобы не будить перестройки ради диагностики.
 class _DiagPanel extends StatefulWidget {
   const _DiagPanel({required this.bridge, required this.visible});
@@ -479,11 +479,42 @@ class _DiagPanel extends StatefulWidget {
 
 class _DiagPanelState extends State<_DiagPanel> {
   bool _open = false;
+  bool _alive = false;
+  List<String> _lines = const [];
+  Timer? _poller;
+
+  @override
+  void initState() {
+    super.initState();
+    _poller = Timer.periodic(const Duration(seconds: 3), (_) => _poll());
+    _poll();
+  }
+
+  @override
+  void dispose() {
+    _poller?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _poll() async {
+    if (!mounted) return;
+    try {
+      final alive = await widget.bridge.pullActive();
+      final lines = alive ? await widget.bridge.diagLog() : const <String>[];
+      if (!mounted) return;
+      setState(() {
+        _alive = alive;
+        _lines = lines;
+      });
+    } catch (_) {
+      // Диагностика необязательна — молча пропускаем.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     if (!widget.visible) return const SizedBox.shrink();
-    final lines = widget.bridge.diagLog();
+    final lines = _lines;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Column(
@@ -494,7 +525,7 @@ class _DiagPanelState extends State<_DiagPanel> {
             child: Text(
               _open
                   ? 'Скрыть журнал'
-                  : 'Журнал тракта (${lines.length})',
+                  : 'Журнал тракта (${lines.length})${_alive ? '' : ' — поток спит'}',
               style: const TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ),
@@ -520,35 +551,43 @@ class _DiagPanelState extends State<_DiagPanel> {
                 ),
               ),
             ),
-            TextButton.icon(
-              onPressed: lines.isEmpty
-                  ? null
-                  : () => Clipboard.setData(
-                      ClipboardData(text: lines.join('\n'))),
-              icon: const Icon(Icons.copy, size: 14),
-              label: const Text(
-                'Копировать',
-                style: TextStyle(fontSize: 11),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: () async {
-                final path = await widget.bridge.startCapture();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(path == null
-                          ? 'Запись не стартовала (нет игры)'
-                          : 'Пишу 30с сюда: $path'),
-                    ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.fiber_manual_record, size: 14),
-              label: const Text(
-                'Запись 30с',
-                style: TextStyle(fontSize: 11),
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton.icon(
+                  onPressed: lines.isEmpty
+                      ? null
+                      : () => Clipboard.setData(
+                          ClipboardData(text: lines.join('\n'))),
+                  icon: const Icon(Icons.copy, size: 14),
+                  label: const Text(
+                    'Копировать',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: !_alive
+                      ? null
+                      : () async {
+                          final path =
+                              await widget.bridge.startCapture();
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(path == null
+                                    ? 'Запись не стартовала'
+                                    : 'Пишу 30с сюда: $path'),
+                              ),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.fiber_manual_record, size: 14),
+                  label: const Text(
+                    'Запись 30с',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ],
             ),
           ],
         ],

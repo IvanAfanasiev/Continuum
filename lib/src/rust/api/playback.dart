@@ -95,7 +95,8 @@ Future<PlaybackStatus> playbackPullStart({
 );
 
 /// Pull-блок для фронтенда: стерео interleaved f32.
-/// Вызывать циклично (~4-8 раз в секунду), темп задает потребитель.
+/// Вызывать циклично мелкими блоками (~10 раз в секунду — онсеты
+/// точнее шага сетки), темп задает потребитель.
 Future<Float32List> playbackPullRender({
   required BigInt frames,
   required double sampleRate,
@@ -103,6 +104,33 @@ Future<Float32List> playbackPullRender({
   frames: frames,
   sampleRate: sampleRate,
 );
+
+/// Нативный аудио-поток (Android): сессия + рендер + запись в трек
+/// целиком в Rust, Dart шлет только команды. Статус — для UI.
+Future<PlaybackStatus> playbackPullThreadStart({
+  required String styleName,
+  required BigInt seed,
+}) => RustLib.instance.api.crateApiPlaybackPlaybackPullThreadStart(
+  styleName: styleName,
+  seed: seed,
+);
+
+/// Останов нативного потока. Сессия живет (пауза держится бэкендом).
+Future<PlaybackStatus> playbackPullThreadStop() =>
+    RustLib.instance.api.crateApiPlaybackPlaybackPullThreadStop();
+
+/// Жив ли нативный поток (для UI и самодиагностики).
+Future<bool> playbackPullAlive() =>
+    RustLib.instance.api.crateApiPlaybackPlaybackPullAlive();
+
+/// Захват потока в файл (30 секунд, экспертиза скачков).
+/// Путь — публичная папка приложения снаружи.
+Future<bool> playbackPullCapture({required String path}) =>
+    RustLib.instance.api.crateApiPlaybackPlaybackPullCapture(path: path);
+
+/// Журнал нативного потока для экрана диагностики.
+Future<List<String>> playbackPullDiag() =>
+    RustLib.instance.api.crateApiPlaybackPlaybackPullDiag();
 
 Future<List<String>> playbackStyleNames() =>
     RustLib.instance.api.crateApiPlaybackPlaybackStyleNames();

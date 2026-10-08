@@ -9,11 +9,14 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:cont/src/player_controller.dart';
-import 'package:cont/src/pull_player.dart';
+import 'package:cont/src/rust/api/playback.dart';
 
 /// Мост к системному плееру: фоновая служба, уведомление с паузой,
 /// аудиофокус («главный звуковой поток»). Весь звук по-прежнему
 /// синтезирует Rust — мост только управляет и показывает состояние.
+///
+/// На Android звук идет из нативного Rust-потока (свой AudioTrack
+/// по JNI): Dart шлет только команды play/pause, в тракте его нет.
 ///
 /// Если нативная служба недоступна (десктоп, ошибка init), мост
 /// тихо деградирует до прямых вызовов контроллера — UI не замечает.
@@ -25,21 +28,12 @@ class AudioBridge {
   StreamSubscription? _interruptionSub;
   StreamSubscription? _noisySub;
 
-  /// На Android Rust только рендерит (pull), играет AudioTrack.
-  /// Создается лениво при первом play, живет пока жив мост.
-  PullPlayer? _pull;
-
   bool get available => _handler != null;
-
-  PullPlayer _pullPlayer() => _pull ??= PullPlayer();
 
   Future<void> init() async {
     try {
       debugPrint('[audio] AudioService.init...');
-      final handler = ContAudioHandler(
-        _controller,
-        pull: Platform.isAndroid ? _pullPlayer() : null,
-      );
+      final handler = ContAudioHandler(_controller);
       await AudioService.init(
         builder: () => handler,
         config: const AudioServiceConfig(
@@ -86,14 +80,17 @@ class AudioBridge {
     }
   }
 
-  /// Play через pull-плеер на Android (true = трек создан).
+  /// Play на Android: сессия бэкенда + нативный аудио-поток.
   /// Остальные платформы — как раньше, через контроллер напрямую.
   Future<bool> play() async {
     if (Platform.isAndroid) {
       await _controller.ensurePlaying();
-      final ok = await _pullPlayer().start();
+      await playbackPullThreadStart(
+        styleName: _controller.styleName,
+        seed: _controller.currentSeed,
+      );
       await sync();
-      return ok;
+      return true;
     }
     if (_handler != null) {
       await _handler!.play();
@@ -105,7 +102,7 @@ class AudioBridge {
 
   Future<void> pause() async {
     if (Platform.isAndroid) {
-      await _pullPlayer().stop();
+      await playbackPullThreadStop();
       await _controller.ensurePaused();
       await sync();
       return;
@@ -117,16 +114,30 @@ class AudioBridge {
     }
   }
 
-  /// Бортовой журнал pull-цикла для экрана диагностики.
-  List<String> diagLog() => _pull?.diagLog.toList() ?? const [];
+  /// Нативный поток жив (для экрана диагностики).
+  Future<bool> pullActive() => Platform.isAndroid
+      ? playbackPullAlive()
+      : Future.value(false);
 
-  /// Pull-цикл жив (иначе журнал пуст не от хорошей жизни):
-  /// на десктопе pull нет вовсе, там cpal-тракт.
-  bool get pullActive => _pull?.running ?? false;
+  /// Журнал нативного потока для экрана диагностики.
+  Future<List<String>> diagLog() => Platform.isAndroid
+      ? playbackPullDiag()
+      : Future.value(const <String>[]);
 
   /// Захват следующих 30 секунд потока в файл (экспертиза скачков).
-  /// Путь — в журнале. null — не играет или уже пишем.
-  Future<String?> startCapture() => _pull?.startCapture() ?? Future.value(null);
+  /// Путь — публичная папка приложения. null — не играет.
+  Future<String?> startCapture() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final ext = await getExternalStorageDirectory();
+      final dir = ext ?? await getTemporaryDirectory();
+      final path =
+          '${dir.path}/cont_capture_${DateTime.now().millisecondsSinceEpoch}.f32';
+      return await playbackPullCapture(path: path) ? path : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Прогрев кэша артов после загрузки списка стилей: первый тап
   /// play/стиль не будет тормозить на декоде картинки в UI-потоке.
@@ -154,12 +165,11 @@ class AudioBridge {
 
 /// Хендлер системных кнопок (уведомление, гарнитура, Android Auto).
 /// Делегирует в PlayerController, затем публикует состояние.
-/// На Android в пару к состоянию запускает/останавливает pull-цикл.
+/// На Android в пару к состоянию стартует/останавливает нативный поток.
 class ContAudioHandler extends BaseAudioHandler {
-  ContAudioHandler(this.controller, {this.pull});
+  ContAudioHandler(this.controller);
 
   final PlayerController controller;
-  final PullPlayer? pull;
 
   Future<void> _sync() async {
     final s = controller.status;
@@ -187,13 +197,20 @@ class ContAudioHandler extends BaseAudioHandler {
   @override
   Future<void> play() async {
     await controller.ensurePlaying();
-    await pull?.start();
+    if (Platform.isAndroid) {
+      await playbackPullThreadStart(
+        styleName: controller.styleName,
+        seed: controller.currentSeed,
+      );
+    }
     await _sync();
   }
 
   @override
   Future<void> pause() async {
-    await pull?.stop();
+    if (Platform.isAndroid) {
+      await playbackPullThreadStop();
+    }
     await controller.ensurePaused();
     await _sync();
   }
@@ -201,7 +218,9 @@ class ContAudioHandler extends BaseAudioHandler {
   @override
   Future<void> stop() async {
     // У плеера stop = пауза + убрать уведомление.
-    await pull?.stop();
+    if (Platform.isAndroid) {
+      await playbackPullThreadStop();
+    }
     await controller.ensurePaused();
     playbackState.add(playbackState.value.copyWith(
       controls: const [MediaControl.play],
