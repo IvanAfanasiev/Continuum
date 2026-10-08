@@ -19,6 +19,14 @@ fn controller() -> &'static PlaybackController {
     CONTROLLER.get_or_init(PlaybackController::new)
 }
 
+/// Доступ контроллера для нативного аудио-потока (тот же синглтон,
+/// те же замки — Dart и поток видят одно состояние).
+/// Только Android: больше его никто не зовет.
+#[cfg(target_os = "android")]
+pub(crate) fn shared_controller() -> &'static PlaybackController {
+    controller()
+}
+
 pub fn playback_start(style_name: String, seed: u64) -> PlaybackStatus {
     controller().start(&style_name, seed, true)
 }
@@ -103,6 +111,36 @@ pub fn playback_pull_start(style_name: String, seed: u64) -> PlaybackStatus {
 /// точнее шага сетки), темп задает потребитель.
 pub fn playback_pull_render(frames: u64, sample_rate: f32) -> Vec<f32> {
     controller().render_pull(frames, sample_rate)
+}
+
+/// Нативный аудио-поток (Android): сессия + рендер + запись в трек
+/// целиком в Rust, Dart шлет только команды. Статус — для UI.
+pub fn playback_pull_thread_start(style_name: String, seed: u64) -> PlaybackStatus {
+    let status = controller().start(&style_name, seed, false);
+    crate::pull_thread::thread_start();
+    status
+}
+
+/// Останов нативного потока. Сессия живет (пауза держится бэкендом).
+pub fn playback_pull_thread_stop() -> PlaybackStatus {
+    crate::pull_thread::thread_stop();
+    controller().status()
+}
+
+/// Жив ли нативный поток (для UI и самодиагностики).
+pub fn playback_pull_alive() -> bool {
+    crate::pull_thread::thread_alive()
+}
+
+/// Захват потока в файл (30 секунд, экспертиза скачков).
+/// Путь — публичная папка приложения снаружи.
+pub fn playback_pull_capture(path: String) -> bool {
+    crate::pull_thread::capture_start(&path)
+}
+
+/// Журнал нативного потока для экрана диагностики.
+pub fn playback_pull_diag() -> Vec<String> {
+    crate::pull_thread::diag_lines()
 }
 
 pub fn playback_style_names() -> Vec<String> {
