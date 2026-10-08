@@ -287,7 +287,7 @@ fn audio_loop(gen: u64) {
         // Глобальная ссылка: переживает локальные фреймы цикла.
         // Локальную тут же удаляем (иначе копится в таблице ссылок).
         let track_global = env.new_global_ref(&track)?;
-        env.delete_local_ref(track)?;
+        env.delete_local_ref(track);
 
         env.call_method(&track_global, jni::jni_str!("play"), jni::jni_sig!("()V"), &[])?;
 
@@ -329,7 +329,7 @@ fn audio_loop(gen: u64) {
             let write_res: jni::errors::Result<i32> =
                 env.with_local_frame(8, |env| {
                     let arr = env.new_float_array(pcm.len())?;
-                    env.set_float_array_region(&arr, 0, &pcm)?;
+                    arr.set_region(env, 0, &pcm)?;
                     let n = env
                         .call_method(
                             &track_global,
