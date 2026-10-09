@@ -444,7 +444,7 @@ class _CenterColumn extends StatelessWidget {
                 ),
               // Бортовой журнал: видно без USB, что творится в тракте.
               // Жив ли поток — панель выяснит сама опросом.
-              _DiagPanel(bridge: bridge, visible: c.running),
+              _DiagPanel(bridge: bridge, controller: c, visible: c.running),
             ],
           ),
         ),
@@ -501,9 +501,11 @@ class _CenterColumn extends StatelessWidget {
 /// Опрашивается раз в 3с (в ритме поллера статуса) — живых тиков нет,
 /// чтобы не будить перестройки ради диагностики.
 class _DiagPanel extends StatefulWidget {
-  const _DiagPanel({required this.bridge, required this.visible});
+  const _DiagPanel(
+      {required this.bridge, required this.controller, required this.visible});
 
   final AudioBridge bridge;
+  final PlayerController controller;
   final bool visible;
 
   @override
@@ -558,7 +560,7 @@ class _DiagPanelState extends State<_DiagPanel> {
             child: Text(
               _open
                   ? 'Скрыть журнал'
-                  : 'Журнал тракта (${lines.length})${_alive ? '' : ' — поток спит'}',
+                  : 'Журнал тракта (${lines.length})${_alive ? '' : ' — поток спит'} · движок v${widget.controller.status?.engineVersion ?? '?'}',
               style: const TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ),
