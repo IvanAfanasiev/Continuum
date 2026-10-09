@@ -143,6 +143,11 @@ pub fn playback_pull_diag() -> Vec<String> {
     crate::pull_thread::diag_lines()
 }
 
+/// Кадр визуалайзера из живой сессии. Без сессии — нули.
+pub fn playback_live_visual() -> crate::playback::LiveVisual {
+    controller().live_visual()
+}
+
 pub fn playback_style_names() -> Vec<String> {
     crate::styles::style_names()
         .iter()

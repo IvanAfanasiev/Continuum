@@ -73,6 +73,44 @@ class GroupInfo {
           volume == other.volume;
 }
 
+/// Живой кадр для кругового визуалайзера: позиция в такте,
+/// энергия, секция, мотив сида и позиция темы в нем.
+/// Конкретный тип без generic — безопасно для FFI-парсера.
+class LiveVisual {
+  final double barPhase;
+  final double energy;
+  final int section;
+  final Uint8List motif;
+  final int motifPos;
+
+  const LiveVisual({
+    required this.barPhase,
+    required this.energy,
+    required this.section,
+    required this.motif,
+    required this.motifPos,
+  });
+
+  @override
+  int get hashCode =>
+      barPhase.hashCode ^
+      energy.hashCode ^
+      section.hashCode ^
+      motif.hashCode ^
+      motifPos.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LiveVisual &&
+          runtimeType == other.runtimeType &&
+          barPhase == other.barPhase &&
+          energy == other.energy &&
+          section == other.section &&
+          motif == other.motif &&
+          motifPos == other.motifPos;
+}
+
 /// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.
 class PlaybackStatus {
   final bool running;

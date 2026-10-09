@@ -62,6 +62,25 @@ pub(crate) fn apply_leader_balance(notes: &mut [NoteEvent], leader: Option<usize
     }
 }
 
+/// Живой снимок для кругового визуалайзера: секция, энергия,
+/// мотив сида и позиция в нем. Обновляется композером каждый шаг
+/// (дешево: маленький Copy-набор), читается UI по опросу.
+#[derive(Clone, Debug, Default)]
+pub struct VisualSnap {
+    pub section: u8,
+    pub energy: f32,
+    pub motif: [u8; 16],
+    /// Позиция темы на этом шаге (индекс в motif).
+    pub motif_pos: u8,
+    /// Доля такта 0..1 (стрелка круга).
+    pub step_phase: f32,
+}
+
+/// Номер секции для снимка (порядок объявления SongSection).
+pub(crate) fn section_index(section: crate::arranger::SongSection) -> u8 {
+    section as u8
+}
+
 pub struct Composer {
     queue: Arc<ArrayQueue<NoteEvent>>,
     style: Arc<RwLock<Box<dyn Style>>>,
@@ -82,6 +101,8 @@ pub struct Composer {
     filter_open: Arc<RwLock<f32>>,
     /// Счетчик отданных в очередь нот (диагностика для UI).
     pushed: Arc<AtomicU64>,
+    /// Живой снимок для визуалайзера (делится с сессией).
+    visual: Arc<RwLock<VisualSnap>>,
     // Состояние генерации (бывшие локальные переменные run):
     rng: StdRng,
     arranger: Arranger,
@@ -115,6 +136,7 @@ impl Composer {
             Arc::new(RwLock::new(120.0)),
             Arc::new(RwLock::new(0.4)),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(RwLock::new(VisualSnap::default())),
         )
     }
 
@@ -131,6 +153,7 @@ impl Composer {
         bpm_out: Arc<RwLock<f32>>,
         filter_open: Arc<RwLock<f32>>,
         pushed: Arc<AtomicU64>,
+        visual: Arc<RwLock<VisualSnap>>,
     ) -> Self {
         let current_seed = snapshot(&seed);
         let score = match style.read() {
@@ -152,6 +175,7 @@ impl Composer {
             bpm_out,
             filter_open,
             pushed,
+            visual,
             rng: StdRng::seed_from_u64(current_seed),
             arranger,
             song,
@@ -274,6 +298,22 @@ impl Composer {
         // Лидер звучит, если все еще в миксе; иначе баланс не трогаем.
         let effective = self.leader.filter(|l| melodic.contains(l));
         apply_leader_balance(&mut notes, effective);
+
+        // Живой снимок для визуалайзера: позиция темы на этом шаге
+        // повторяет окно фразы из render_style (шаг/2 + ротация).
+        if let Ok(mut snap) = self.visual.write() {
+            let rot = self.song.phrase_index % self.song.motif.len().max(1);
+            let pos =
+                (step_in_measure / 2 + rot) % self.song.motif.len().max(1);
+            *snap = VisualSnap {
+                section: section_index(self.song.section),
+                energy: self.song.energy,
+                motif: self.song.motif,
+                motif_pos: pos as u8,
+                step_phase: step_in_measure as f32
+                    / steps_per_measure.max(1) as f32,
+            };
+        }
 
         self.step_count += 1;
         // Свинг сида поверх стиля: у каждого сида свой кач.

@@ -36,6 +36,9 @@ struct Cli {
     wav_secs: Option<f32>,
     /// Режим прототипа: pure-formula движок вместо основного.
     proto: bool,
+    /// Добавочные слоты в микс рендера (`--with 19`): прослушка
+    /// ручных голосов поверх дефолта стиля.
+    with: Vec<usize>,
 }
 
 impl Cli {
@@ -48,6 +51,7 @@ impl Cli {
             wav_path: None,
             wav_secs: None,
             proto: false,
+            with: Vec::new(),
         }
     }
 }
@@ -110,6 +114,20 @@ fn parse_cli(args: &[String]) -> Cli {
             }
         } else if let Some(value) = arg.strip_prefix("--secs=") {
             cli.wav_secs = value.parse().ok();
+        } else if arg == "--with" {
+            match args.get(i + 1) {
+                Some(next) if !next.starts_with("--") => {
+                    if let Ok(n) = next.parse::<usize>() {
+                        cli.with.push(n);
+                        i += 1;
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(value) = arg.strip_prefix("--with=") {
+            if let Ok(n) = value.parse::<usize>() {
+                cli.with.push(n);
+            }
         } else if let Some(value) = arg.strip_prefix("--seed=") {
             if let Ok(n) = value.parse::<u64>() {
                 cli.seed = n;
@@ -244,7 +262,7 @@ fn main() {
     if let Some(path) = cli.wav_path {
         let secs = cli.wav_secs.unwrap_or(DEFAULT_WAV_SECS);
         let wall = Instant::now();
-        match render_wav(&style_name, cli.seed, secs, 44_100.0, &path) {
+        match render_wav(&style_name, cli.seed, secs, 44_100.0, &path, &cli.with) {
             Ok(report) => {
                 print_soak(&report, wall.elapsed().as_secs_f32());
                 println!("  wrote: {path}");

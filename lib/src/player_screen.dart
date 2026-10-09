@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:cont/src/audio_bridge.dart';
 import 'package:cont/src/player_controller.dart';
+import 'package:cont/src/rust/api/playback.dart';
 import 'package:cont/src/rust/playback.dart';
 import 'package:cont/src/seed_input.dart';
 
@@ -208,6 +210,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   Timer? _poller;
 
+  /// Режим фона: фото стиля или живой круговой график мотива.
+  bool _graphMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -236,12 +241,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // держим узким — вертикальный стиль сохраняется.
     final landscape =
         MediaQuery.of(context).size.aspectRatio > 1.0;
+    // Фон: фото стиля или живой график (переключатель под сидом).
+    Widget background() => _graphMode
+        ? _MotifWheel(controller: c)
+        : StyleBackground(style: c.styleName);
     if (landscape) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            StyleBackground(style: c.styleName),
+            background(),
             SafeArea(
               child: Row(
                 children: [
@@ -254,6 +263,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           controller: c,
                           bridge: widget.bridge,
                           showSideButtons: false,
+                          graphMode: _graphMode,
+                          onToggleGraph: () =>
+                              setState(() => _graphMode = !_graphMode),
                         ),
                       ),
                     ),
@@ -290,7 +302,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           Drawer(child: _StylesPanelBody(controller: c, bridge: widget.bridge)),
       body: Stack(
         children: [
-          StyleBackground(style: c.styleName),
+          background(),
           SafeArea(
             child: _CenterColumn(
               controller: c,
@@ -298,6 +310,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
               showSideButtons: true,
               onOpenMix: () => _scaffoldKey.currentState?.openDrawer(),
               onOpenStyles: () => _scaffoldKey.currentState?.openEndDrawer(),
+              graphMode: _graphMode,
+              onToggleGraph: () =>
+                  setState(() => _graphMode = !_graphMode),
             ),
           ),
         ],
@@ -334,6 +349,8 @@ class _CenterColumn extends StatelessWidget {
     required this.showSideButtons,
     this.onOpenMix,
     this.onOpenStyles,
+    required this.graphMode,
+    required this.onToggleGraph,
   });
 
   final PlayerController controller;
@@ -341,6 +358,9 @@ class _CenterColumn extends StatelessWidget {
   final bool showSideButtons;
   final VoidCallback? onOpenMix;
   final VoidCallback? onOpenStyles;
+  /// Фон-график вместо фото + переключатель режима.
+  final bool graphMode;
+  final VoidCallback onToggleGraph;
 
   Future<void> _toggle(BuildContext context) async {
     FocusManager.instance.primaryFocus?.unfocus();
@@ -403,6 +423,18 @@ class _CenterColumn extends StatelessWidget {
                   color: Colors.redAccent,
                   text: err,
                 ),
+              // Переключатель фона: фото стиля / живой график мотива.
+              TextButton.icon(
+                onPressed: onToggleGraph,
+                icon: Icon(
+                  graphMode ? Icons.photo : Icons.donut_large,
+                  size: 14,
+                ),
+                label: Text(
+                  graphMode ? 'Фото' : 'График',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
               // Диагностика тракта: поток не стартует / генератор молчит.
               if (_statsDiag(c) case final diag? when diag.isNotEmpty)
                 _NoticeBanner(
@@ -595,6 +627,150 @@ class _DiagPanelState extends State<_DiagPanel> {
       ),
     );
   }
+}
+
+/// Круговой график мотива: 16 ступеней темы точками на круге
+/// (радиус — высота ступени), текущая подсвечена, стрелка — доля такта,
+/// свечение центра — энергия. Живые данные из движка, опрос 10 Гц
+/// только пока играет и виден график.
+class _MotifWheel extends StatefulWidget {
+  const _MotifWheel({required this.controller});
+
+  final PlayerController controller;
+
+  @override
+  State<_MotifWheel> createState() => _MotifWheelState();
+}
+
+class _MotifWheelState extends State<_MotifWheel> {
+  Timer? _ticker;
+  LiveVisual? _frame;
+
+  static const _sections = ['Main', 'Build', 'Drop', 'Post'];
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) async {
+      if (!mounted || !widget.controller.running) return;
+      try {
+        final v = await playbackLiveVisual();
+        if (mounted) setState(() => _frame = v);
+      } catch (_) {
+        // Кадр необязателен — колесо просто стоит.
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final v = _frame;
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 280,
+              height: 280,
+              child: CustomPaint(
+                painter: _WheelPainter(
+                  motif: v?.motif ?? List.filled(16, 0),
+                  pos: v?.motifPos ?? 0,
+                  phase: v?.barPhase ?? 0.0,
+                  energy: v?.energy ?? 0.0,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              v == null
+                  ? 'мотив появится с музыкой'
+                  : 'тема · ${_sections[v.section.clamp(0, 3)]}',
+              style: const TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WheelPainter extends CustomPainter {
+  _WheelPainter({
+    required this.motif,
+    required this.pos,
+    required this.phase,
+    required this.energy,
+  });
+
+  final List<int> motif;
+  final int pos;
+  final double phase;
+  final double energy;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final r = size.shortestSide / 2 * 0.92;
+    final n = motif.length;
+
+    // Обод круга.
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = const Color(0x33FFFFFF),
+    );
+
+    // Свечение центра от энергии.
+    final glow = (energy.clamp(0.0, 1.2) / 1.2 * r * 0.35).clamp(4.0, r * 0.4);
+    canvas.drawCircle(
+      center,
+      glow,
+      Paint()..color = const Color(0x22FFB300),
+    );
+
+    // Стрелка такта.
+    final a = phase * 6.2831853 - 1.5707963;
+    canvas.drawLine(
+      center,
+      center + Offset(r * 0.98 * math.cos(a), r * 0.98 * math.sin(a)),
+      Paint()
+        ..strokeWidth = 1.5
+        ..color = const Color(0x66FFFFFF),
+    );
+
+    // Узлы мотива: радиус — высота ступени 0..4.
+    for (var i = 0; i < n; i++) {
+      final deg = (i < motif.length ? motif[i] : 0).clamp(0, 6);
+      final rr = r * (0.45 + 0.55 * deg / 6.0);
+      final ang = i / n * 6.2831853 - 1.5707963;
+      final p = center + Offset(rr * math.cos(ang), rr * math.sin(ang));
+      final cur = i == pos % n;
+      canvas.drawCircle(
+        p,
+        cur ? 6.0 : 3.0,
+        Paint()..color = cur ? const Color(0xFFFFB300) : const Color(0xAAFFFFFF),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_WheelPainter old) =>
+      old.pos != pos ||
+      old.phase != phase ||
+      old.energy != energy ||
+      old.motif != motif;
 }
 
 /// Левая панель: темп и энергия сверху, затем группы.

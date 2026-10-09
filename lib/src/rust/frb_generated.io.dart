@@ -54,6 +54,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<TrackInfo> dco_decode_list_track_info(dynamic raw);
 
   @protected
+  LiveVisual dco_decode_live_visual(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -109,6 +112,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<TrackInfo> sse_decode_list_track_info(SseDeserializer deserializer);
+
+  @protected
+  LiveVisual sse_decode_live_visual(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -184,6 +190,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     List<TrackInfo> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_live_visual(LiveVisual self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

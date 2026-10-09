@@ -42,12 +42,14 @@ fn harm_phase(seed: u32, k: usize) -> f32 {
     ((h >> 7) & 0xFF) as f32 / 255.0 * TAU
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WavetableVoice {
     sample_rate: f32,
     /// Таблица на куче: голос живет в enum AnyVoice, и 4 КБ инлайном
-    /// раздували бы каждый вариант пула. Клон при краже — тот же мемкопи.
-    table: Box<[f32; TABLE_LEN]>,
+    /// раздували бы каждый вариант пула. Vec вместо Box<[...]>:
+    /// парсер FRB не переваривает массивы фиксированной длины
+    /// внутри enum (валит кодогенерацию).
+    table: Vec<f32>,
     phase: f32,
     step: f32,
     filter: Svf,
@@ -55,22 +57,6 @@ pub struct WavetableVoice {
     velocity: f32,
     t: f32,
     samples_left: usize,
-}
-
-impl Default for WavetableVoice {
-    fn default() -> Self {
-        Self {
-            sample_rate: 44_100.0,
-            table: Box::new([0.0; TABLE_LEN]),
-            phase: 0.0,
-            step: 0.0,
-            filter: Svf::default(),
-            gain: 0.0,
-            velocity: 0.0,
-            t: 0.0,
-            samples_left: 0,
-        }
-    }
 }
 
 impl Voice for WavetableVoice {
@@ -90,6 +76,7 @@ impl Voice for WavetableVoice {
         // громкие — пила с зубьями.
         let tilt = 0.4 + 0.9 * note.velocity;
         let mut peak = 1e-6f32;
+        self.table.resize(TABLE_LEN, 0.0);
         for i in 0..TABLE_LEN {
             let x = i as f32 / TABLE_LEN as f32 * TAU;
             let mut s = 0.0;
@@ -196,7 +183,7 @@ mod tests {
     fn tables_differ_across_pitches() {
         // Краска от ноты: разные питчи — разные таблицы
         // (иначе морф мертв и все звучит одним тембром).
-        fn table(pitch: u8) -> Box<[f32; TABLE_LEN]> {
+        fn table(pitch: u8) -> Vec<f32> {
             let mut v = WavetableVoice::default();
             v.set_sample_rate(44_100.0);
             v.trigger(&NoteEvent::new(19, pitch, 0.9, 0.5));

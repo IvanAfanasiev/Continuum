@@ -132,6 +132,10 @@ Future<bool> playbackPullCapture({required String path}) =>
 Future<List<String>> playbackPullDiag() =>
     RustLib.instance.api.crateApiPlaybackPlaybackPullDiag();
 
+/// Кадр визуалайзера из живой сессии. Без сессии — нули.
+Future<LiveVisual> playbackLiveVisual() =>
+    RustLib.instance.api.crateApiPlaybackPlaybackLiveVisual();
+
 Future<List<String>> playbackStyleNames() =>
     RustLib.instance.api.crateApiPlaybackPlaybackStyleNames();
 

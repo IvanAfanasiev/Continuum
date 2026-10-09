@@ -109,6 +109,30 @@ impl Default for PlaybackStatus {
     }
 }
 
+/// Живой кадр для кругового визуалайзера: позиция в такте,
+/// энергия, секция, мотив сида и позиция темы в нем.
+/// Конкретный тип без generic — безопасно для FFI-парсера.
+#[derive(Debug, Clone)]
+pub struct LiveVisual {
+    pub bar_phase: f32,
+    pub energy: f32,
+    pub section: u8,
+    pub motif: Vec<u8>,
+    pub motif_pos: u8,
+}
+
+impl Default for LiveVisual {
+    fn default() -> Self {
+        Self {
+            bar_phase: 0.0,
+            energy: 0.0,
+            section: 0,
+            motif: vec![0u8; 16],
+            motif_pos: 0,
+        }
+    }
+}
+
 /// Один слот микшера для UI: id, имена и живая громкость.
 /// `volume` — эффективная (слот × группа), то есть слышимая.
 /// `base_volume` — канонический уровень стиля (100% ползунка слота).
@@ -320,6 +344,8 @@ struct RunningSession {
     engine_error: Arc<Mutex<Option<String>>>,
     counters: EngineCounters,
     audio_config: Arc<RwLock<String>>,
+    /// Живой снимок для визуалайзера (пишет композер каждый шаг).
+    visual: Arc<RwLock<crate::composer::VisualSnap>>,
 }
 
 impl RunningSession {
@@ -342,6 +368,7 @@ impl RunningSession {
         let engine_error = Arc::new(Mutex::new(None));
         let counters = EngineCounters::default();
         let audio_config: Arc<RwLock<String>> = Arc::new(RwLock::new(String::new()));
+        let visual = Arc::new(RwLock::new(crate::composer::VisualSnap::default()));
 
         let instruments = build_instruments();
         {
@@ -362,6 +389,7 @@ impl RunningSession {
             Arc::clone(&bpm_lock),
             Arc::clone(&filter_open),
             Arc::clone(&counters.pushed),
+            Arc::clone(&visual),
         );
         let composer_handle = spawn_guarded("composer", &engine_error, || composer.run());
 
@@ -405,6 +433,7 @@ impl RunningSession {
             engine_error,
             counters,
             audio_config,
+            visual,
         }
     }
 
@@ -855,6 +884,22 @@ impl PlaybackController {
             None => PlaybackStatus::default(),
         }
     }
+
+    /// Кадр визуалайзера из живой сессии. Без сессии — нули.
+    pub fn live_visual(&self) -> LiveVisual {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let snap = guard.as_ref().map(|s| snapshot(&s.visual));
+        match snap {
+            Some(v) => LiveVisual {
+                bar_phase: v.step_phase,
+                energy: v.energy,
+                section: v.section,
+                motif: v.motif.to_vec(),
+                motif_pos: v.motif_pos,
+            },
+            None => LiveVisual::default(),
+        }
+    }
 }
 
 impl Default for PlaybackController {
@@ -1064,13 +1109,16 @@ pub fn soak_render(
 // ---------------------------------------------------------------------------
 
 /// Рендерит `seconds` секунд стиля/сида в WAV PCM16 stereo.
-/// Возвращает отчет (как soak) — пик/RMS файла видно до прослушивания.
+/// `extra` принудительно включает слоты на базовой громкости
+/// (прослушка ручных голосов: `--with 19`). Неизвестные id молча
+/// пропускаются. Возвращает отчет (как soak).
 pub fn render_wav(
     style_name: &str,
     seed: u64,
     seconds: f32,
     sample_rate: f32,
     path: &str,
+    extra: &[usize],
 ) -> Result<SoakReport, String> {
     use crate::core::MAX_ACTIVE_TRACKS;
     use crate::engine::RenderState;
@@ -1091,6 +1139,11 @@ pub fn render_wav(
     {
         let mut m = mixer.write().unwrap_or_else(|e| e.into_inner());
         apply_style_mix(&*style, &mut m, seed);
+        for id in extra {
+            if let Some(slot) = Slot::from_id(*id) {
+                m.set_track(slot.id(), slot.base_volume());
+            }
+        }
     }
     let queue = Arc::new(ArrayQueue::new(NOTE_QUEUE_CAPACITY));
     let style_shared: Arc<RwLock<Box<dyn Style>>> = Arc::new(RwLock::new(style));
@@ -1486,6 +1539,23 @@ mod tests {
     }
 
     #[test]
+    fn live_visual_tracks_song() {
+        // Снимок для визуалайзера: живая сессия отдает мотив/энергию,
+        // после стопа — нули без паники.
+        let c = PlaybackController::new();
+        c.start("club", 11, false);
+        std::thread::sleep(Duration::from_millis(400));
+        let v = c.live_visual();
+        assert_eq!(v.motif.len(), 16);
+        assert!(v.energy > 0.0, "snapshot stuck at default");
+        assert!((0.0..=1.0).contains(&v.bar_phase));
+        assert!(v.motif_pos < 16);
+        let _ = c.stop();
+        let v = c.live_visual();
+        assert_eq!(v.energy, 0.0);
+    }
+
+    #[test]
     fn status_carries_engine_version() {
         // Версия движка едет в статусе: объясняет смену звука сидов.
         let c = PlaybackController::new();
@@ -1703,7 +1773,7 @@ mod tests {
         // 2 секунды на пониженной частоте: быстро, но весь тракт настоящий.
         let path = std::env::temp_dir().join("cont_wav_export_test.wav");
         let path_str = path.to_string_lossy().to_string();
-        let report = render_wav("club", 11, 2.0, 22_050.0, &path_str).expect("renders wav");
+        let report = render_wav("club", 11, 2.0, 22_050.0, &path_str, &[]).expect("renders wav");
         assert_eq!(report.samples, 44_100);
         assert_eq!(report.non_finite, 0);
 
