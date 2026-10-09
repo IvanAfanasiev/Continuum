@@ -115,6 +115,7 @@ const _slotMeta = {
   'fuzz': 'Фазз',
   'shaker': 'Шейкер',
   'formula': 'Формула',
+  'wavetable': 'Вейвтейбл',
 };
 
 String _styleTitle(String style) {

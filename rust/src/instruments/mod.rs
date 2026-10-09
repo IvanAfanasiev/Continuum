@@ -17,6 +17,7 @@ pub mod shaker;
 pub mod snare;
 pub mod vinyl;
 pub mod vocal;
+pub mod wavetable;
 
 pub use bass::BassGuitar;
 pub use fuzz::FuzzVoice;
@@ -149,10 +150,11 @@ pub enum Slot {
     Fuzz = 16,
     Shaker = 17,
     Formula = 18,
+    Wavetable = 19,
 }
 
 impl Slot {
-    pub const COUNT: usize = 18;
+    pub const COUNT: usize = 19;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -172,6 +174,7 @@ impl Slot {
         Slot::Fuzz,
         Slot::Shaker,
         Slot::Formula,
+        Slot::Wavetable,
     ];
 
     pub fn id(self) -> usize {
@@ -203,6 +206,7 @@ impl Slot {
             Slot::Fuzz => "fuzz",
             Slot::Shaker => "shaker",
             Slot::Formula => "formula",
+            Slot::Wavetable => "wavetable",
         }
     }
 
@@ -221,7 +225,7 @@ impl Slot {
             Slot::Vocal => InstrumentRole::Vocal,
             Slot::Guitar => InstrumentRole::Lead,
             Slot::Rain => InstrumentRole::Texture,
-            Slot::Flute | Slot::Festival | Slot::Fuzz | Slot::Formula => InstrumentRole::Lead,
+            Slot::Flute | Slot::Festival | Slot::Fuzz | Slot::Formula | Slot::Wavetable => InstrumentRole::Lead,
         }
     }
 
@@ -235,7 +239,7 @@ impl Slot {
             Slot::Pluck | Slot::Laser => Group::Lead,
             Slot::Vocal => Group::Vocal,
             Slot::Vinyl | Slot::Rain => Group::Texture,
-            Slot::Flute | Slot::Festival | Slot::Guitar | Slot::Fuzz | Slot::Formula => Group::Lead,
+            Slot::Flute | Slot::Festival | Slot::Guitar | Slot::Fuzz | Slot::Formula | Slot::Wavetable => Group::Lead,
         }
     }
 
@@ -263,6 +267,7 @@ impl Slot {
             Slot::Fuzz => 0.7,
             Slot::Shaker => 0.55,
             Slot::Formula => 0.55,
+            Slot::Wavetable => 0.55,
         }
     }
 }
@@ -349,6 +354,7 @@ use festival::FestivalVoice;
 use flute::FluteVoice;
 use formula::FormulaVoice;
 use keys::KeysVoice;
+use wavetable::WavetableVoice;
 use laser::LaserVoice;
 use pad::PadVoice;
 use pluck::PluckVoice;
@@ -369,6 +375,7 @@ pub(crate) enum AnyVoice {
     Guitar(GuitarVoice),
     Fuzz(FuzzVoice),
     Formula(FormulaVoice),
+    Wavetable(WavetableVoice),
 }
 
 impl Voice for AnyVoice {
@@ -384,6 +391,7 @@ impl Voice for AnyVoice {
             AnyVoice::Guitar(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Fuzz(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Formula(v) => v.set_sample_rate(sample_rate),
+            AnyVoice::Wavetable(v) => v.set_sample_rate(sample_rate),
         }
     }
 
@@ -399,6 +407,7 @@ impl Voice for AnyVoice {
             AnyVoice::Guitar(v) => v.trigger(note),
             AnyVoice::Fuzz(v) => v.trigger(note),
             AnyVoice::Formula(v) => v.trigger(note),
+            AnyVoice::Wavetable(v) => v.trigger(note),
         }
     }
 
@@ -414,6 +423,7 @@ impl Voice for AnyVoice {
             AnyVoice::Guitar(v) => v.next_sample(),
             AnyVoice::Fuzz(v) => v.next_sample(),
             AnyVoice::Formula(v) => v.next_sample(),
+            AnyVoice::Wavetable(v) => v.next_sample(),
         }
     }
 
@@ -429,6 +439,7 @@ impl Voice for AnyVoice {
             AnyVoice::Guitar(v) => v.is_active(),
             AnyVoice::Fuzz(v) => v.is_active(),
             AnyVoice::Formula(v) => v.is_active(),
+            AnyVoice::Wavetable(v) => v.is_active(),
         }
     }
 
@@ -444,6 +455,7 @@ impl Voice for AnyVoice {
             AnyVoice::Guitar(v) => v.reset(),
             AnyVoice::Fuzz(v) => v.reset(),
             AnyVoice::Formula(v) => v.reset(),
+            AnyVoice::Wavetable(v) => v.reset(),
         }
     }
 }
@@ -684,6 +696,17 @@ impl VoicePool {
         )
     }
 
+    /// Вейвтейбл-лид: круговая волна из таблицы вместо осциллятора.
+    pub fn wavetables(id: usize, count: usize) -> Self {
+        Self::with_voices(
+            id,
+            InstrumentRole::Lead,
+            (0..count)
+                .map(|_| AnyVoice::Wavetable(WavetableVoice::default()))
+                .collect(),
+        )
+    }
+
     fn steal_or_free(&mut self) -> (usize, bool) {
         self.clock += 1;
         for (i, voice) in self.voices.iter().enumerate() {
@@ -836,6 +859,7 @@ mod tests {
             (Fuzz, 16),
             (Shaker, 17),
             (Formula, 18),
+            (Wavetable, 19),
         ];
         assert_eq!(frozen.len(), Slot::COUNT);
         for (slot, id) in frozen {

@@ -394,9 +394,21 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
         };
+        // Вейвтейбл вне автомикса: ручная краска для фронта.
+        let wavetable = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 1.0,
+            vel_base: 0.3,
+            voice: Voicing::Scale {
+                degree: 0,
+                octave: 2,
+                jitter: 2,
+            },
+            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
+        };
         [
             bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, shaker, formula,
+            festival, guitar, rain, fuzz, shaker, formula, wavetable,
         ]
     }
 }

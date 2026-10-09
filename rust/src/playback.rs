@@ -45,6 +45,7 @@ pub const RAIN_ID: usize = 15;
 pub const FUZZ_ID: usize = 16;
 pub const SHAKER_ID: usize = 17;
 pub const FORMULA_ID: usize = 18;
+pub const WAVETABLE_ID: usize = 19;
 
 /// Все id ансамбля — для валидации `set_track` из Flutter.
 pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
@@ -66,6 +67,7 @@ pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
     FUZZ_ID,
     SHAKER_ID,
     FORMULA_ID,
+    WAVETABLE_ID,
 ];
 
 /// Границы ручки темпа фронта, BPM.
@@ -158,6 +160,7 @@ pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
                 Slot::Fuzz => Box::new(VoicePool::fuzzes(slot.id(), 4)),
                 Slot::Shaker => Box::new(Shaker::new(slot.id())),
                 Slot::Formula => Box::new(VoicePool::formulas(slot.id(), 4)),
+                Slot::Wavetable => Box::new(VoicePool::wavetables(slot.id(), 4)),
             }
         })
         .collect()
@@ -1839,7 +1842,7 @@ mod tests {
         }
         for s in [
             Pad, Laser, Vocal, Flute, Guitar, Rain, Festival, Fuzz,
-            Kick808, Vinyl,
+            Kick808, Vinyl, Wavetable,
         ] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
         }
@@ -1853,7 +1856,7 @@ mod tests {
         // Плак вне дефолта: поверх Rhodes и гитары дает кашу —
         // включается вручную. Дождь тоже ручной (винил один держит
         // подложку). Остальные чужие — тоже вне набора.
-        for s in [Pluck, Kick808, Laser, Vocal, Festival, Formula, Rain] {
+        for s in [Pluck, Kick808, Laser, Vocal, Festival, Formula, Rain, Wavetable] {
             assert!(!lofi.contains(&s), "lofi: {s:?} should be off");
         }
 
@@ -1871,7 +1874,7 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Guitar, Fuzz] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Formula] {
+        for s in [Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Formula, Wavetable] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
 
@@ -1881,7 +1884,7 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Keys, Kick808, Shaker, Formula] {
             assert!(phonk.contains(&s), "phonk: {s:?} missing");
         }
-        for s in [Pad, Pluck, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz] {
+        for s in [Pad, Pluck, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz, Wavetable] {
             assert!(!phonk.contains(&s), "phonk: {s:?} should be off");
         }
 
@@ -1890,7 +1893,7 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Pluck] {
             assert!(proto.contains(&s), "proto: {s:?} missing");
         }
-        for s in [Pad, Keys, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz, Kick808, Shaker, Formula] {
+        for s in [Pad, Keys, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz, Kick808, Shaker, Formula, Wavetable] {
             assert!(!proto.contains(&s), "proto: {s:?} should be off");
         }
     }

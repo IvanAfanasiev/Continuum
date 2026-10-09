@@ -931,6 +931,7 @@ mod tests {
         use crate::playback::{
             BASS_ID, FESTIVAL_ID, FLUTE_ID, FORMULA_ID, FUZZ_ID, GUITAR_ID, HAT_ID, KEYS_ID,
             KICK808_ID, KICK_ID, LASER_ID, PAD_ID, PLUCK_ID, RAIN_ID, SNARE_ID, VINYL_ID, VOCAL_ID,
+            WAVETABLE_ID,
         };
         let sr = 44_100.0;
         let insts: Vec<Box<dyn Instrument>> = vec![
@@ -951,6 +952,7 @@ mod tests {
             Box::new(Rain::new(RAIN_ID)),
             Box::new(VoicePool::fuzzes(FUZZ_ID, 4)),
             Box::new(VoicePool::formulas(FORMULA_ID, 4)),
+            Box::new(VoicePool::wavetables(WAVETABLE_ID, 4)),
         ];
         let mut state = RenderState::new(insts, sr);
         let volumes: Vec<(usize, f32)> = crate::playback::ENSEMBLE_IDS
@@ -975,6 +977,7 @@ mod tests {
             (RAIN_ID, 60, 0.5, 2.0),
             (FUZZ_ID, 45, 0.8, 0.4),
             (FORMULA_ID, 62, 0.7, 0.3),
+            (WAVETABLE_ID, 64, 0.7, 0.3),
         ];
         for (id, pitch, vel, dur) in notes {
             state.push_note(&NoteEvent::new(id, pitch, vel, dur));
