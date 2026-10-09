@@ -85,10 +85,15 @@ class AudioBridge {
   Future<bool> play() async {
     if (Platform.isAndroid) {
       await _controller.ensurePlaying();
-      await playbackPullThreadStart(
-        styleName: _controller.styleName,
-        seed: _controller.currentSeed,
-      );
+      try {
+        await playbackPullThreadStart(
+          styleName: _controller.styleName,
+          seed: _controller.currentSeed,
+        );
+      } catch (e) {
+        debugPrint('[audio] thread start failed: $e');
+        return false;
+      }
       await sync();
       return true;
     }
@@ -198,10 +203,14 @@ class ContAudioHandler extends BaseAudioHandler {
   Future<void> play() async {
     await controller.ensurePlaying();
     if (Platform.isAndroid) {
-      await playbackPullThreadStart(
-        styleName: controller.styleName,
-        seed: controller.currentSeed,
-      );
+      try {
+        await playbackPullThreadStart(
+          styleName: controller.styleName,
+          seed: controller.currentSeed,
+        );
+      } catch (e) {
+        debugPrint('[audio] handler thread start failed: $e');
+      }
     }
     await _sync();
   }

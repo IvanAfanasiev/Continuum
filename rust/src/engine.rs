@@ -308,6 +308,18 @@ pub(crate) struct Pump {
     counters: EngineCounters,
     logged_first: bool,
     filter_open: Arc<RwLock<f32>>,
+    /// Отложенные ноты (due-кадр, нота), по возрастанию due.
+    /// Насос стреляет нотой точно в ее медиакадр, а не когда разобрал
+    /// очередь: таймингом владеет бэкенд, фронт — только байты.
+    pending: Vec<(u64, NoteEvent)>,
+    /// Медиачасы: отрендеренные кадры. Монотонны, дрейфа нет.
+    media_cursor: u64,
+    /// Якорь сетки: какому шагу соответствует какой кадр.
+    /// Ставится по первой штампованной ноте сухого потока;
+    /// пока поток сух — следующая нота стартует «сейчас».
+    anchor_step: u64,
+    anchor_frame: u64,
+    anchored: bool,
 }
 
 impl Pump {
@@ -343,6 +355,11 @@ impl Pump {
             counters,
             logged_first: false,
             filter_open,
+            pending: Vec::new(),
+            media_cursor: 0,
+            anchor_step: 0,
+            anchor_frame: 0,
+            anchored: false,
         }
     }
 
@@ -375,12 +392,43 @@ impl Pump {
         // по субблокам (~12мс друг от друга — почти вовремя), а не
         // выстреливает разом. Живой поток (<32 нот на 12мс невозможны
         // музыкально) потолок не замечает.
+        // Штампованные ноты уходят в due-расписание (точное время),
+        // legacy без штампа (тесты, прямые вызовы) — сразу в голоса.
+        let mut fresh: Vec<(u64, NoteEvent)> = Vec::new();
         while eaten < MAX_DRAIN_PER_BLOCK {
             let Some(note) = self.queue.pop() else {
                 break;
             };
-            self.state.push_note(&note);
+            if note.step_us == 0 {
+                self.state.push_note(&note);
+            } else {
+                let step_frames =
+                    note.step_us as u64 * self.state.sample_rate() as u64 / 1_000_000;
+                // Привязка свежая, пока поток сух или часы уплыли:
+                // сухой поток стартует «сейчас», опоздание больше шага
+                // (смена темпа, догон после stall'а) — тоже «сейчас»,
+                // а не накопленная ошибка. Иначе сетка держится
+                // от якоря с точностью до свинга (пары сходятся).
+                let mut due = self.anchor_frame.saturating_add(
+                    note.due_step.saturating_sub(self.anchor_step)
+                        * step_frames.max(1),
+                );
+                if !self.anchored
+                    || self.pending.is_empty() && fresh.is_empty()
+                    || due.saturating_add(step_frames.max(1)) < self.media_cursor
+                {
+                    self.anchor_step = note.due_step;
+                    self.anchor_frame = self.media_cursor;
+                    self.anchored = true;
+                    due = self.media_cursor;
+                }
+                fresh.push((due, note));
+            }
             eaten += 1;
+        }
+        if !fresh.is_empty() {
+            self.pending.extend(fresh);
+            self.pending.sort_by_key(|(due, _)| *due);
         }
         if eaten > 0 {
             self.counters
@@ -400,7 +448,16 @@ impl Pump {
     }
 
     /// Один стерео-фрейм f32 с подвижкой фейда паузы.
+    /// Перед рендером стреляют due-ноты, чье время пришло.
     fn next_frame(&mut self) -> (f32, f32) {
+        while let Some((due, _)) = self.pending.first() {
+            if *due > self.media_cursor {
+                break;
+            }
+            let (_, note) = self.pending.remove(0);
+            self.state.push_note(&note);
+        }
+        self.media_cursor += 1;
         let target = if self.is_paused.load(Ordering::Relaxed) {
             0.0
         } else {
@@ -435,6 +492,10 @@ impl Pump {
             for sample in data.iter_mut() {
                 *sample = conv(0.0);
             }
+            // В глухой паузе расписание сбрасывается: выход из нее —
+            // новые ноты «сейчас», а не догоняющий залп старого плана.
+            self.pending.clear();
+            self.anchored = false;
             self.counters
                 .frames
                 .fetch_add(frames_in_block as u64, Ordering::Relaxed);
@@ -919,6 +980,84 @@ mod tests {
         assert_eq!(f32_to_u16(1.0), 65535);
         assert_eq!(f32_to_u16(-1.0), 1);
         assert_eq!(f32_to_u16(-10.0), 1);
+    }
+
+    #[test]
+    fn stamped_notes_wait_for_due_frames() {
+        // Due-планирование: штампованные ноты ждут свой медиакадр,
+        // а не стреляют в момент разбора. 10 нот шагов 100..109
+        // по 0.1с (@44100: 4410 кадров/шаг): первый субблок (600 кадров)
+        // должен выстрелить только шаг 100, остальные — висеть
+        // в pending. Legacy без штампа стреляет сразу (тест ниже).
+        use crossbeam::queue::ArrayQueue;
+        let queue = Arc::new(ArrayQueue::new(128));
+        for step in 100..110u64 {
+            let mut n = NoteEvent::new(6, 60, 0.8, 0.2);
+            n.due_step = step;
+            n.step_us = 100_000;
+            queue.push(n).unwrap();
+        }
+        let mut pump = Pump::new(
+            queue,
+            Vec::new(),
+            Arc::new(RwLock::new(crate::mixer::MixerState::new())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RwLock::new(MasterFx::default())),
+            Arc::new(RwLock::new(126.0)),
+            44_100.0,
+            EngineCounters::default(),
+            Arc::new(RwLock::new(0.4)),
+        );
+        let mut block = vec![0.0f32; 600 * 2];
+        pump.fill(&mut block, 2, f32_identity);
+        assert!(
+            block.iter().all(|s| s.is_finite()),
+            "non-finite scheduled render"
+        );
+        assert_eq!(
+            pump.pending.len(),
+            9,
+            "due scheduling broken: pending={}",
+            pump.pending.len()
+        );
+        // Докатываем ~1 секунду: все 10 выстрелили по своим кадрам.
+        for _ in 0..10 {
+            let mut more = vec![0.0f32; 4410 * 2];
+            pump.fill(&mut more, 2, f32_identity);
+            assert!(more.iter().all(|s| s.is_finite()));
+        }
+        assert!(
+            pump.pending.is_empty(),
+            "stamped notes lost in pending"
+        );
+    }
+
+    #[test]
+    fn unstamped_notes_fire_immediately() {
+        // Legacy без штампа (тесты, прямые вызовы): разбор = выстрел,
+        // никакого расписания. 100 нот одним субблоком упираются
+        // только в кап разбора 32.
+        use crossbeam::queue::ArrayQueue;
+        let queue = Arc::new(ArrayQueue::new(128));
+        for i in 0..100 {
+            queue
+                .push(NoteEvent::new(6, 60 + (i % 12) as u8, 0.8, 0.2))
+                .unwrap();
+        }
+        let mut pump = Pump::new(
+            queue,
+            Vec::new(),
+            Arc::new(RwLock::new(crate::mixer::MixerState::new())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RwLock::new(MasterFx::default())),
+            Arc::new(RwLock::new(126.0)),
+            44_100.0,
+            EngineCounters::default(),
+            Arc::new(RwLock::new(0.4)),
+        );
+        let mut block = vec![0.0f32; 600 * 2];
+        pump.fill(&mut block, 2, f32_identity);
+        assert!(pump.pending.is_empty(), "legacy notes scheduled?!");
     }
 
     #[test]

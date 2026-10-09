@@ -319,6 +319,15 @@ impl Composer {
         // Свинг сида поверх стиля: у каждого сида свой кач.
         let swing = style.swing_ratio() * crate::styles::swing_var(self.song.seed_hash);
         let duration = swing_step_secs(base_step_secs, swing, step_in_measure);
+        // Due-штамп: нота знает свой шаг и его длительность —
+        // насос выстрелит точно в медиакадр, когда бы ни разобрал
+        // очередь (фронт больше не владеет таймингом).
+        let step_us = (duration.max(0.001) * 1_000_000.0) as u32;
+        let due_step = self.step_count as u64 - 1;
+        for note in notes.iter_mut() {
+            note.due_step = due_step;
+            note.step_us = step_us;
+        }
         (notes, duration)
     }
 
