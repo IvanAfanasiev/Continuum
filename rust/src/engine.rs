@@ -21,6 +21,7 @@ use crossbeam::queue::ArrayQueue;
 
 use crate::core::{snapshot, MASTER_DRIVE, MAX_ACTIVE_TRACKS};
 use crate::instruments::{dsp::Svf, Instrument, InstrumentRole, NoteEvent};
+use crate::instruments::dsp::MasterLimiter;
 use crate::mixer::MixerState;
 use crate::playback::EngineCounters;
 use crate::space::{Echo, SpaceBus};
@@ -94,6 +95,8 @@ pub(crate) struct RenderState {
     /// (свип формы), фильтр едет за ней ~120 мс вместо ступеньки —
     /// ступенька коэффициента SVF и была редким «всхлипом».
     treble_smooth: f32,
+    /// Пиковый лимитер мастера: мейкап + потолок после всей цепочки.
+    limiter: MasterLimiter,
 }
 
 impl RenderState {
@@ -132,6 +135,7 @@ impl RenderState {
             hp_r: Svf::default(),
             sample_rate,
             treble_smooth: 0.0,
+            limiter: MasterLimiter::default(),
         }
     }
 
@@ -274,7 +278,9 @@ impl RenderState {
         // музыка начинается с 32 Гц (808) — не задето.
         let (_, _, h_l) = self.hp_l.process(t_l, 28.0, 0.7, sample_rate);
         let (_, _, h_r) = self.hp_r.process(t_r, 28.0, 0.7, sample_rate);
-        (master_sample(h_l), master_sample(h_r))
+        // Лимитер последним: мейкап тела + потолок пиков, затем tanh.
+        let (l_l, l_r) = self.limiter.process(h_l, h_r, sample_rate);
+        (master_sample(l_l), master_sample(l_r))
     }
 }
 

@@ -83,6 +83,53 @@ impl Svf {
     }
 }
 
+/// Пиковый лимитер мастера со стерео-связкой: мейкап тянет тело
+/// вверх, огибающая пика (атака мгновенная, спад 50 мс) давит гейн,
+/// не превышая потолка. Стерео-пара делится одним гейном —
+/// образ не перекашивается. Тихие сигналы идут прозрачно.
+/// Держит rms коммерческих референсов без сквоша транзиентов.
+/// True-peak с предпросмотром здесь нет — только мгновенный пиковый.
+#[derive(Clone, Debug)]
+pub struct MasterLimiter {
+    env: f32,
+    /// Подъем тела, разы. Умеренный: лимитер ловит только freak-стеки,
+    /// характер микса (крест-фактор) цел.
+    pub makeup: f32,
+    /// Потолок пика до tanh-драйва мастера (редко достигается).
+    pub ceiling: f32,
+    /// Спад огибающей, секунды.
+    pub release_secs: f32,
+}
+
+impl Default for MasterLimiter {
+    fn default() -> Self {
+        Self {
+            env: 0.0,
+            makeup: 1.5,
+            ceiling: 2.5,
+            release_secs: 0.05,
+        }
+    }
+}
+
+impl MasterLimiter {
+    /// Стерео-фрейм после мейкапа и лимита (tanh-драйв — снаружи).
+    pub fn process(&mut self, l: f32, r: f32, sample_rate: f32) -> (f32, f32) {
+        let peak = l.abs().max(r.abs()) * self.makeup;
+        let rel = (-1.0 / (sample_rate.max(1.0) * self.release_secs)).exp();
+        self.env = peak.max(self.env * rel);
+        if self.env < 1e-12 {
+            self.env = 0.0;
+        }
+        let g = (self.ceiling / self.env.max(1e-6)).min(1.0);
+        (l * self.makeup * g, r * self.makeup * g)
+    }
+
+    pub fn reset(&mut self) {
+        self.env = 0.0;
+    }
+}
+
 /// Линейный фейд хвоста ноты: 1 в начале фейда → 0 на последнем семпле.
 /// Убирает щелчки жесткой отсечки по `samples_left == 0`.
 pub fn release_fade(samples_left: usize, fade_samples: usize) -> f32 {
@@ -127,6 +174,54 @@ mod tests {
         assert_eq!(release_fade(100, 10), 1.0);
         assert_eq!(release_fade(0, 10), 0.0);
         assert!((release_fade(5, 10) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn limiter_bounds_peaks_keeps_quiet_transparent() {
+        // Пик 3.0 давится к потолку, тишина 0.1 идет почти как есть,
+        // стерео-пара делится одним гейном (образ цел).
+        let sr = 44_100.0;
+        let mut lim = MasterLimiter::default();
+        let (mut peak_in, mut peak_out) = (0.0f32, 0.0f32);
+        for i in 0..(sr as usize) {
+            let t = i as f32 / sr;
+            let loud = (t * 440.0 * TAU).sin() * 3.0;
+            let (l, r) = lim.process(loud, loud * 0.5, sr);
+            peak_in = peak_in.max(loud.abs());
+            peak_out = peak_out.max(l.abs().max(r.abs()));
+        }
+        assert!(peak_in > 2.9);
+        assert!(
+            peak_out <= 2.6,
+            "limiter leaks peaks: {peak_out}"
+        );
+        // Тихий синус: гейн ~мейкап, без разбаланса каналов.
+        let mut lim = MasterLimiter::default();
+        let (l, r) = lim.process(0.1, 0.1, sr);
+        assert!((l - r).abs() < 1e-6, "stereo image skewed");
+        assert!(
+            (l - 0.1 * lim.makeup).abs() < 1e-3,
+            "quiet path colored: {l}"
+        );
+    }
+
+    #[test]
+    fn limiter_recovers_after_transient() {
+        // После громкого удара гейн возвращается за ~5 релизов:
+        // насос качает, а не душит все подряд.
+        let sr = 44_100.0;
+        let mut lim = MasterLimiter::default();
+        for _ in 0..1000 {
+            lim.process(3.0, 3.0, sr);
+        }
+        for _ in 0..(5.0 * 0.05 * sr) as usize {
+            lim.process(0.05, 0.05, sr);
+        }
+        let (l, _) = lim.process(0.05, 0.05, sr);
+        assert!(
+            (l - 0.05 * lim.makeup).abs() < 0.01,
+            "gain stuck down: {l}"
+        );
     }
 
     /// Энергия одной частотной корзины (Goertzel) — спектральный тест

@@ -1786,10 +1786,9 @@ mod tests {
     #[test]
     fn soak_proves_long_run_stability() {
         // Весь тракт (генерация + DSP) 6 секунд на пониженной частоте:
-        // конечность, уровень, генерация не глохнет. Окно почти целиком
-        // в интро (там тихо по построению), поэтому порог нот низкий —
-        // это детектор ступора, а не счетчик плотности. Часы/сутки —
-        // флагом --soak в CLI, код тот же самый.
+        // конечность, уровень, генерация не глохнет. Первый такт —
+        // уже тема в полную (разогрева нет), порог нот держит плотность.
+        // Часы/сутки — флагом --soak в CLI, код тот же самый.
         let report = soak_render("club", 11, 6.0, 22050.0).expect("soaks");
         assert_eq!(report.non_finite, 0);
         assert_eq!(report.samples, 132300);
@@ -1800,6 +1799,30 @@ mod tests {
             report.peak
         );
         assert!(report.rms > 0.005, "mix too quiet: {}", report.rms);
+    }
+
+    #[test]
+    fn loudness_holds_commercial_band() {
+        // Мастеринг-контракт: rms в полосе референсов (коммерция ~0.3,
+        // наши были ~0.1), пики в потолке лимитера, крест-фактор жив
+        // (транзиенты не сквошены: ниже 4.0 — каша, выше 13 — тихо).
+        let report = soak_render("club", 11, 12.0, 22050.0).expect("soaks");
+        assert_eq!(report.non_finite, 0);
+        assert!(
+            report.peak <= 1.0,
+            "limiter leaks: {}",
+            report.peak
+        );
+        assert!(
+            (0.12..=0.30).contains(&report.rms),
+            "rms out of band: {}",
+            report.rms
+        );
+        let crest = report.peak / report.rms.max(1e-6);
+        assert!(
+            (4.0..=13.0).contains(&crest),
+            "transients squashed or mix dead: crest {crest}"
+        );
     }
 
     #[test]
