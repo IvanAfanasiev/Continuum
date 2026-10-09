@@ -124,28 +124,31 @@ impl Group {
     }
 }
 /// Слот ансамбля: стабильная единица адресации для стилей, микшера и UI.
-/// id идут по порядку объявления (1-based) — фронт их не хранит,
-/// берет из бэкенда при каждом старте.
+/// Номера ЗАМОРОЖЕНЫ навсегда (явные дискриминанты): удаление слота
+/// оставляет дыру, а не сдвигает остальных — ручки фронта, сохраненные
+/// миксы и Wad-файлы привязок не гниют. Фронт id не хранит,
+/// берет из бэкенда при каждом старте. Порядок в ALL — только порядок
+/// гайдов и обхода, на id не влияет.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {
-    Bass,
-    Kick,
-    Pad,
-    Snare,
-    Hat,
-    Pluck,
-    Keys,
-    Kick808,
-    Laser,
-    Vinyl,
-    Vocal,
-    Flute,
-    Festival,
-    Guitar,
-    Rain,
-    Fuzz,
-    Shaker,
-    Formula,
+    Bass = 1,
+    Kick = 2,
+    Pad = 3,
+    Snare = 4,
+    Hat = 5,
+    Pluck = 6,
+    Keys = 7,
+    Kick808 = 8,
+    Laser = 9,
+    Vinyl = 10,
+    Vocal = 11,
+    Flute = 12,
+    Festival = 13,
+    Guitar = 14,
+    Rain = 15,
+    Fuzz = 16,
+    Shaker = 17,
+    Formula = 18,
 }
 
 impl Slot {
@@ -172,7 +175,8 @@ impl Slot {
     ];
 
     pub fn id(self) -> usize {
-        self as usize + 1
+        // Явный дискриминант, НЕ позиция в ALL: переживает удаления.
+        self as usize
     }
 
     pub fn from_id(id: usize) -> Option<Slot> {
@@ -805,6 +809,41 @@ mod tests {
         let n = NoteEvent::new(1, 60, 5.0, -1.0);
         assert_eq!(n.velocity, 1.0);
         assert_eq!(n.duration_secs, 0.0);
+    }
+
+    #[test]
+    fn slot_ids_are_frozen_forever() {
+        // Номера слотов — вечные: удаление слота оставляет дыру,
+        // остальные не сдвигаются. Этот тест прибит гвоздями:
+        // любое изменение id здесь — ломающее, требует версионирования.
+        use Slot::*;
+        let frozen = [
+            (Bass, 1),
+            (Kick, 2),
+            (Pad, 3),
+            (Snare, 4),
+            (Hat, 5),
+            (Pluck, 6),
+            (Keys, 7),
+            (Kick808, 8),
+            (Laser, 9),
+            (Vinyl, 10),
+            (Vocal, 11),
+            (Flute, 12),
+            (Festival, 13),
+            (Guitar, 14),
+            (Rain, 15),
+            (Fuzz, 16),
+            (Shaker, 17),
+            (Formula, 18),
+        ];
+        assert_eq!(frozen.len(), Slot::COUNT);
+        for (slot, id) in frozen {
+            assert_eq!(slot.id(), id, "{slot:?} moved!");
+            assert_eq!(Slot::from_id(id), Some(slot));
+        }
+        assert_eq!(Slot::from_id(0), None);
+        assert_eq!(Slot::from_id(999), None);
     }
 
     #[test]

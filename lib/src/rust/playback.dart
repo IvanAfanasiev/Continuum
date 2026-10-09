@@ -90,6 +90,10 @@ class PlaybackStatus {
   final double intensity;
   final String? engineError;
 
+  /// Версия звукового движка (см. ENGINE_VERSION): объясняет,
+  /// почему любимый сид звучит иначе после апдейта.
+  final int engineVersion;
+
   const PlaybackStatus({
     required this.running,
     required this.paused,
@@ -99,6 +103,7 @@ class PlaybackStatus {
     required this.tempoBpm,
     required this.intensity,
     this.engineError,
+    required this.engineVersion,
   });
 
   @override
@@ -110,7 +115,8 @@ class PlaybackStatus {
       seedCode.hashCode ^
       tempoBpm.hashCode ^
       intensity.hashCode ^
-      engineError.hashCode;
+      engineError.hashCode ^
+      engineVersion.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -124,7 +130,8 @@ class PlaybackStatus {
           seedCode == other.seedCode &&
           tempoBpm == other.tempoBpm &&
           intensity == other.intensity &&
-          engineError == other.engineError;
+          engineError == other.engineError &&
+          engineVersion == other.engineVersion;
 }
 
 /// Стиль каталога для UI: имя и полка (`club`/`rock`/`chill`).

@@ -86,6 +86,9 @@ pub struct PlaybackStatus {
     /// Ручка intensity фронта («температура» генерации).
     pub intensity: f32,
     pub engine_error: Option<String>,
+    /// Версия звукового движка (см. ENGINE_VERSION): объясняет,
+    /// почему любимый сид звучит иначе после апдейта.
+    pub engine_version: u32,
 }
 
 impl Default for PlaybackStatus {
@@ -99,6 +102,7 @@ impl Default for PlaybackStatus {
             tempo_bpm: 126.0,
             intensity: 1.0,
             engine_error: None,
+            engine_version: crate::core::ENGINE_VERSION,
         }
     }
 }
@@ -486,6 +490,7 @@ impl RunningSession {
                 .lock()
                 .map(|g| g.clone())
                 .unwrap_or_else(|e| e.into_inner().clone()),
+            engine_version: crate::core::ENGINE_VERSION,
         }
     }
 
@@ -1474,6 +1479,22 @@ mod tests {
         let _ = c.render_pull(4800, 44_100.0);
         let hot = c.engine_stats().pushed;
         assert!(hot > cold, "intensity does not drive density: {cold} vs {hot}");
+        let _ = c.stop();
+    }
+
+    #[test]
+    fn status_carries_engine_version() {
+        // Версия движка едет в статусе: объясняет смену звука сидов.
+        let c = PlaybackController::new();
+        assert_eq!(
+            c.status().engine_version,
+            crate::core::ENGINE_VERSION
+        );
+        c.start("club", 11, false);
+        assert_eq!(
+            c.status().engine_version,
+            crate::core::ENGINE_VERSION
+        );
         let _ = c.stop();
     }
 

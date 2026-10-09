@@ -1073,6 +1073,7 @@ impl SseDecode for crate::playback::PlaybackStatus {
         let mut var_tempoBpm = <f32>::sse_decode(deserializer);
         let mut var_intensity = <f32>::sse_decode(deserializer);
         let mut var_engineError = <Option<String>>::sse_decode(deserializer);
+        let mut var_engineVersion = <u32>::sse_decode(deserializer);
         return crate::playback::PlaybackStatus {
             running: var_running,
             paused: var_paused,
@@ -1082,6 +1083,7 @@ impl SseDecode for crate::playback::PlaybackStatus {
             tempo_bpm: var_tempoBpm,
             intensity: var_intensity,
             engine_error: var_engineError,
+            engine_version: var_engineVersion,
         };
     }
 }
@@ -1115,6 +1117,13 @@ impl SseDecode for crate::playback::TrackInfo {
             volume: var_volume,
             base_volume: var_baseVolume,
         };
+    }
+}
+
+impl SseDecode for u32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u32::<NativeEndian>().unwrap()
     }
 }
 
@@ -1303,6 +1312,7 @@ impl flutter_rust_bridge::IntoDart for crate::playback::PlaybackStatus {
             self.tempo_bpm.into_into_dart().into_dart(),
             self.intensity.into_into_dart().into_dart(),
             self.engine_error.into_into_dart().into_dart(),
+            self.engine_version.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1477,6 +1487,7 @@ impl SseEncode for crate::playback::PlaybackStatus {
         <f32>::sse_encode(self.tempo_bpm, serializer);
         <f32>::sse_encode(self.intensity, serializer);
         <Option<String>>::sse_encode(self.engine_error, serializer);
+        <u32>::sse_encode(self.engine_version, serializer);
     }
 }
 
@@ -1497,6 +1508,13 @@ impl SseEncode for crate::playback::TrackInfo {
         <String>::sse_encode(self.group, serializer);
         <f32>::sse_encode(self.volume, serializer);
         <f32>::sse_encode(self.base_volume, serializer);
+    }
+}
+
+impl SseEncode for u32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
     }
 }
 

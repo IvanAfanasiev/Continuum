@@ -1046,8 +1046,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PlaybackStatus dco_decode_playback_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return PlaybackStatus(
       running: dco_decode_bool(arr[0]),
       paused: dco_decode_bool(arr[1]),
@@ -1057,6 +1057,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       tempoBpm: dco_decode_f_32(arr[5]),
       intensity: dco_decode_f_32(arr[6]),
       engineError: dco_decode_opt_String(arr[7]),
+      engineVersion: dco_decode_u_32(arr[8]),
     );
   }
 
@@ -1086,6 +1087,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       volume: dco_decode_f_32(arr[4]),
       baseVolume: dco_decode_f_32(arr[5]),
     );
+  }
+
+  @protected
+  int dco_decode_u_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -1236,6 +1243,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_tempoBpm = sse_decode_f_32(deserializer);
     var var_intensity = sse_decode_f_32(deserializer);
     var var_engineError = sse_decode_opt_String(deserializer);
+    var var_engineVersion = sse_decode_u_32(deserializer);
     return PlaybackStatus(
       running: var_running,
       paused: var_paused,
@@ -1245,6 +1253,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       tempoBpm: var_tempoBpm,
       intensity: var_intensity,
       engineError: var_engineError,
+      engineVersion: var_engineVersion,
     );
   }
 
@@ -1273,6 +1282,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       volume: var_volume,
       baseVolume: var_baseVolume,
     );
+  }
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint32();
   }
 
   @protected
@@ -1423,6 +1438,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_f_32(self.tempoBpm, serializer);
     sse_encode_f_32(self.intensity, serializer);
     sse_encode_opt_String(self.engineError, serializer);
+    sse_encode_u_32(self.engineVersion, serializer);
   }
 
   @protected
@@ -1441,6 +1457,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.group, serializer);
     sse_encode_f_32(self.volume, serializer);
     sse_encode_f_32(self.baseVolume, serializer);
+  }
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint32(self);
   }
 
   @protected
