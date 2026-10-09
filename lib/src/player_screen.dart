@@ -646,16 +646,38 @@ class _MotifWheelState extends State<_MotifWheel> {
   Timer? _ticker;
   LiveVisual? _frame;
 
+  /// Последние два замера (время, фаза) для сглаживания стрелки
+  /// между опросами 10 Гц: фаза экстраполируется, а не прыгает.
+  DateTime? _t0;
+  double _p0 = 0.0;
+  DateTime? _t1;
+  double _p1 = 0.0;
+
   static const _sections = ['Main', 'Build', 'Drop', 'Post'];
 
   @override
   void initState() {
     super.initState();
-    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) async {
+    // Тик 50мс: опрос движка раз в 5 тиков, между — экстраполяция.
+    var n = 0;
+    _ticker = Timer.periodic(const Duration(milliseconds: 50), (_) async {
       if (!mounted || !widget.controller.running) return;
+      n++;
+      if (n % 5 != 0) {
+        setState(() {});
+        return;
+      }
       try {
         final v = await playbackLiveVisual();
-        if (mounted) setState(() => _frame = v);
+        if (mounted) {
+          setState(() {
+            _t0 = _t1;
+            _p0 = _p1;
+            _t1 = DateTime.now();
+            _p1 = v.barPhase;
+            _frame = v;
+          });
+        }
       } catch (_) {
         // Кадр необязателен — колесо просто стоит.
       }
@@ -668,9 +690,26 @@ class _MotifWheelState extends State<_MotifWheel> {
     super.dispose();
   }
 
+  /// Сглаженная фаза стрелки: экстраполяция по двум замерам.
+  double _smoothPhase() {
+    if (_t0 == null || _t1 == null) return _p1;
+    var rate = (_p1 - _p0) / _t1!.difference(_t0!).inMilliseconds * 1000.0;
+    if (rate < -0.5) rate += 1.0; // оборот через 0
+    if (rate < 0) rate = 0;
+    if (rate > 2) rate = 2; // подозрительный скачок — не верим
+    final dt =
+        DateTime.now().difference(_t1!).inMilliseconds / 1000.0;
+    return (_p1 + rate * dt.clamp(0.0, 0.5)) % 1.0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final v = _frame;
+    // Подсветка — текущая доля такта (куда указывает стрелка),
+    // а не индекс темы: тема движется вдвое медленнее руки.
+    final pos = (v == null)
+        ? 0
+        : ((_smoothPhase() * v.motif.length).floor() % v.motif.length);
     return Container(
       color: Colors.black,
       child: Center(
@@ -683,8 +722,8 @@ class _MotifWheelState extends State<_MotifWheel> {
               child: CustomPaint(
                 painter: _WheelPainter(
                   motif: v?.motif ?? List.filled(16, 0),
-                  pos: v?.motifPos ?? 0,
-                  phase: v?.barPhase ?? 0.0,
+                  pos: pos,
+                  phase: _smoothPhase(),
                   energy: v?.energy ?? 0.0,
                 ),
               ),
@@ -750,27 +789,26 @@ class _WheelPainter extends CustomPainter {
         ..color = const Color(0x66FFFFFF),
     );
 
-    // Узлы мотива: радиус — высота ступени 0..4.
+    // Узлы строго на круге (как в референсе): высота ступени —
+    // размером и яркостью точки, а не радиусом.
     for (var i = 0; i < n; i++) {
       final deg = (i < motif.length ? motif[i] : 0).clamp(0, 6);
-      final rr = r * (0.45 + 0.55 * deg / 6.0);
       final ang = i / n * 6.2831853 - 1.5707963;
-      final p = center + Offset(rr * math.cos(ang), rr * math.sin(ang));
+      final p = center + Offset(r * math.cos(ang), r * math.sin(ang));
       final cur = i == pos % n;
+      final bright = 0x66 + (deg * 0x22).clamp(0, 0x99);
       canvas.drawCircle(
         p,
-        cur ? 6.0 : 3.0,
-        Paint()..color = cur ? const Color(0xFFFFB300) : const Color(0xAAFFFFFF),
+        (cur ? 5.0 : 2.5) + deg * 0.5,
+        Paint()..color = cur
+            ? const Color(0xFFFFB300)
+            : Color.fromARGB(0xFF, bright, bright, bright),
       );
     }
   }
 
   @override
-  bool shouldRepaint(_WheelPainter old) =>
-      old.pos != pos ||
-      old.phase != phase ||
-      old.energy != energy ||
-      old.motif != motif;
+  bool shouldRepaint(_WheelPainter old) => true;
 }
 
 /// Левая панель: темп и энергия сверху, затем группы.

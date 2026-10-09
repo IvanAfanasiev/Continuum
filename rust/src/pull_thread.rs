@@ -124,13 +124,19 @@ pub(crate) fn thread_start() {
     if thread_alive() {
         return;
     }
+    // След первого шага: виден ли вообще запуск (spawn мог молча
+    // не состояться — тогда тишина без единой строчки).
+    diag_push(format!("{} thread_start requested", diag_now()));
     let gen = GEN.fetch_add(1, Ordering::Relaxed) + 1;
-    std::thread::Builder::new()
+    if std::thread::Builder::new()
         .name("cont-audio".to_string())
         .spawn(move || {
             audio_loop(gen);
         })
-        .ok();
+        .is_err()
+    {
+        diag_push(format!("{} thread spawn failed", diag_now()));
+    }
 }
 
 #[cfg(not(target_os = "android"))]
