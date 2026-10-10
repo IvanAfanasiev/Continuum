@@ -300,8 +300,14 @@ fn audio_loop(gen: u64) {
             pending_max: 0,
         };
         let mut last_summary = Instant::now();
+        let mut last_pushed = 0u64;
         let controller = crate::api::playback::shared_controller();
         while alive() {
+            // Каденс realtime: чанк покрывает 0.1с — отработали быстрее,
+            // ждем остаток. Без этого при незапирающей записи цикл
+            // крутит сотни чанков в секунду (видели 670/с), съедает ядро
+            // и морит композер голодом — отсюда редкие ноты.
+            let chunk_start = Instant::now();
             let t0 = Instant::now();
             let pcm = controller.render_pull(CHUNK_FRAMES as u64, TRACK_SR);
             let ms = t0.elapsed().as_millis() as u64;
@@ -334,8 +340,13 @@ fn audio_loop(gen: u64) {
                     )
                     .map(|v| v.i().unwrap_or(-99))
                     .unwrap_or(-99);
+                // Темп композера: сколько нот сгенерировано за окно.
+                // ~300 = полный микс, ~10 = композер стоит.
+                let pushed_now = controller.engine_stats().pushed;
+                let pushed_delta = pushed_now.saturating_sub(last_pushed);
+                last_pushed = pushed_now;
                 diag_push(format!(
-                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0}/s playstate={play_state})",
+                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0}/s playstate={play_state} pushed={pushed_delta})",
                     diag_now(),
                     counters.slow,
                     counters.pending_max
@@ -360,6 +371,13 @@ fn audio_loop(gen: u64) {
                 continue;
             }
             capture_write(&pcm);
+            // Каденс: чанк покрывает 0.1с звука — ждем остаток.
+            // (см. выше: без каденса цикл уходит в сотни чанков/с).
+            let spent = chunk_start.elapsed();
+            let quantum = std::time::Duration::from_millis(100);
+            if spent < quantum {
+                std::thread::sleep(quantum - spent);
+            }
             // Запись одним куском в локальном фрейме: массив удаляется
             // сразу, таблица ссылок не растет весь трек.
             let write_res: jni::errors::Result<i32> =
