@@ -335,7 +335,7 @@ fn audio_loop(gen: u64) {
                     .map(|v| v.i().unwrap_or(-99))
                     .unwrap_or(-99);
                 diag_push(format!(
-                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0f}/s playstate={play_state})",
+                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0}/s playstate={play_state})",
                     diag_now(),
                     counters.slow,
                     counters.pending_max
