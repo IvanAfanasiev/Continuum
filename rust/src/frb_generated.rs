@@ -1092,6 +1092,10 @@ impl SseDecode for crate::playback::LiveVisual {
         let mut var_motif = <Vec<u8>>::sse_decode(deserializer);
         let mut var_motifPos = <u8>::sse_decode(deserializer);
         let mut var_barHits = <u16>::sse_decode(deserializer);
+        let mut var_kickHits = <u16>::sse_decode(deserializer);
+        let mut var_snareHits = <u16>::sse_decode(deserializer);
+        let mut var_bassHits = <u16>::sse_decode(deserializer);
+        let mut var_themeHits = <u16>::sse_decode(deserializer);
         return crate::playback::LiveVisual {
             bar_phase: var_barPhase,
             energy: var_energy,
@@ -1099,6 +1103,10 @@ impl SseDecode for crate::playback::LiveVisual {
             motif: var_motif,
             motif_pos: var_motifPos,
             bar_hits: var_barHits,
+            kick_hits: var_kickHits,
+            snare_hits: var_snareHits,
+            bass_hits: var_bassHits,
+            theme_hits: var_themeHits,
         };
     }
 }
@@ -1372,6 +1380,10 @@ impl flutter_rust_bridge::IntoDart for crate::playback::LiveVisual {
             self.motif.into_into_dart().into_dart(),
             self.motif_pos.into_into_dart().into_dart(),
             self.bar_hits.into_into_dart().into_dart(),
+            self.kick_hits.into_into_dart().into_dart(),
+            self.snare_hits.into_into_dart().into_dart(),
+            self.bass_hits.into_into_dart().into_dart(),
+            self.theme_hits.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1559,6 +1571,10 @@ impl SseEncode for crate::playback::LiveVisual {
         <Vec<u8>>::sse_encode(self.motif, serializer);
         <u8>::sse_encode(self.motif_pos, serializer);
         <u16>::sse_encode(self.bar_hits, serializer);
+        <u16>::sse_encode(self.kick_hits, serializer);
+        <u16>::sse_encode(self.snare_hits, serializer);
+        <u16>::sse_encode(self.bass_hits, serializer);
+        <u16>::sse_encode(self.theme_hits, serializer);
     }
 }
 

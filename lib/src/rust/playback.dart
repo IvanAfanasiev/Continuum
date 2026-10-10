@@ -74,8 +74,9 @@ class GroupInfo {
 }
 
 /// Живой кадр для кругового визуалайзера: позиция в такте,
-/// энергия, секция, мотив сида и позиция темы в нем.
-/// Конкретный тип без generic — безопасно для FFI-парсера.
+/// энергия, секция, мотив сида и позиция темы в нем + маски
+/// главных голосов по долям (точки колеса: кик, снейр+хэт,
+/// бас, тема). Конкретный тип без generic — безопасно для FFI-парсера.
 class LiveVisual {
   final double barPhase;
   final double energy;
@@ -86,6 +87,12 @@ class LiveVisual {
   /// Маска звучавших долей такта (бит = 16-я доля).
   final int barHits;
 
+  /// Маски по голосам (тот же бит = та же доля).
+  final int kickHits;
+  final int snareHits;
+  final int bassHits;
+  final int themeHits;
+
   const LiveVisual({
     required this.barPhase,
     required this.energy,
@@ -93,6 +100,10 @@ class LiveVisual {
     required this.motif,
     required this.motifPos,
     required this.barHits,
+    required this.kickHits,
+    required this.snareHits,
+    required this.bassHits,
+    required this.themeHits,
   });
 
   @override
@@ -102,7 +113,11 @@ class LiveVisual {
       section.hashCode ^
       motif.hashCode ^
       motifPos.hashCode ^
-      barHits.hashCode;
+      barHits.hashCode ^
+      kickHits.hashCode ^
+      snareHits.hashCode ^
+      bassHits.hashCode ^
+      themeHits.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -114,7 +129,11 @@ class LiveVisual {
           section == other.section &&
           motif == other.motif &&
           motifPos == other.motifPos &&
-          barHits == other.barHits;
+          barHits == other.barHits &&
+          kickHits == other.kickHits &&
+          snareHits == other.snareHits &&
+          bassHits == other.bassHits &&
+          themeHits == other.themeHits;
 }
 
 /// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.

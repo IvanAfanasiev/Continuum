@@ -4,9 +4,10 @@
 //! микшер — активные треки, темп — живую ручку BPM. Все три меняются
 //! на ходу без перезапуска потока.
 //!
-//! Лидер инструментов: каждые 2 фразы один из мелодических слотов
+//! Лидер инструментов: каждые 4 фразы один из мелодических слотов
 //! становится громче (лидер), остальные уходят в поддержку. Барабаны
 //! и бас не трогаем — грув стабилен, дышит только верх.
+//! Окно 4 фразы — в ногу с тоникой: баланс не перебивает тему.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -42,12 +43,12 @@ fn is_melodic(id: usize) -> bool {
 }
 
 /// Выбор лидера среди отсортированных кандидатов: детерминирован
-/// фразой, меняется каждые 2 фразы. Меньше двух кандидатов — без лидера.
+/// окном из 4 фраз. Меньше двух кандидатов — без лидера.
 pub(crate) fn pick_leader(candidates: &[usize], phrase_index: usize) -> Option<usize> {
     if candidates.len() < 2 {
         return None;
     }
-    Some(candidates[(phrase_index / 2) % candidates.len()])
+    Some(candidates[(phrase_index / 4) % candidates.len()])
 }
 
 /// Баланс партий: лидер громче, поддержка тише. Барабаны/бас не трогаем.
@@ -77,6 +78,14 @@ pub struct VisualSnap {
     /// Маска звучавших долей такта (бит = 16-я доля): точки инструментов.
     /// Сбрасывается на границе такта.
     pub bar_hits: u16,
+    /// Маски по главным голосам (тот же бит = та же доля):
+    /// кик, снейр+хэт, бас, тема (лид/вокал/аккорды).
+    /// Колесо ставит точку голоса на его долях: барабан 6 раз
+    /// за такт — 6 точек голоса по кругу.
+    pub kick_hits: u16,
+    pub snare_hits: u16,
+    pub bass_hits: u16,
+    pub theme_hits: u16,
 }
 
 /// Номер секции для снимка (порядок объявления SongSection).
@@ -278,11 +287,11 @@ impl Composer {
             .copied()
             .filter(|id| is_melodic(*id))
             .collect();
-        // Ротация лидера: каждые 2 новые фразы — новый лидер верха.
+        // Ротация лидера: каждые 4 новые фразы — новый лидер верха.
         if self.song.phrase_index != self.last_phrase {
             self.last_phrase = self.song.phrase_index;
             self.phrase_ticks += 1;
-            if self.phrase_ticks.is_multiple_of(2) {
+            if self.phrase_ticks.is_multiple_of(4) {
                 self.leader = pick_leader(&melodic, self.song.phrase_index);
             }
         }
@@ -303,18 +312,44 @@ impl Composer {
         apply_leader_balance(&mut notes, effective);
 
         // Живой снимок для визуалайзера: доля такта (стрелка делает
-        // оборот за такт, скорость — от BPM) + маска звучавших долей
-        // (точки инструментов, бит = 16-я доля, сброс на границе такта).
+        // оборот за такт, скорость — от BPM) + маски звучавших долей
+        // по главным голосам (точки колеса, бит = 16-я доля,
+        // сброс на границе такта). Окно темы — в ногу с движком (8 фраз).
         if let Ok(mut snap) = self.visual.write() {
-            let rot = self.song.phrase_index % self.song.motif.len().max(1);
+            let rot =
+                (self.song.phrase_index / 8) % self.song.motif.len().max(1);
             let pos =
                 (step_in_measure / 2 + rot) % self.song.motif.len().max(1);
             let mut hits = snap.bar_hits;
+            let mut kick = snap.kick_hits;
+            let mut snare = snap.snare_hits;
+            let mut bass = snap.bass_hits;
+            let mut theme = snap.theme_hits;
             if step_in_measure == 0 {
                 hits = 0;
+                kick = 0;
+                snare = 0;
+                bass = 0;
+                theme = 0;
             }
             if !notes.is_empty() {
-                hits |= 1u16 << step_in_measure.min(15);
+                let bit = 1u16 << step_in_measure.min(15);
+                hits |= bit;
+                for n in notes.iter() {
+                    match Slot::from_id(n.instrument_id).map(Slot::role) {
+                        Some(InstrumentRole::Kick) => kick |= bit,
+                        Some(InstrumentRole::Snare | InstrumentRole::Hat) => {
+                            snare |= bit
+                        }
+                        Some(InstrumentRole::Bass) => bass |= bit,
+                        Some(
+                            InstrumentRole::Lead
+                            | InstrumentRole::Vocal
+                            | InstrumentRole::Chords,
+                        ) => theme |= bit,
+                        _ => {}
+                    }
+                }
             }
             *snap = VisualSnap {
                 section: section_index(self.song.section),
@@ -324,6 +359,10 @@ impl Composer {
                 step_phase: step_in_measure as f32
                     / steps_per_measure.max(1) as f32,
                 bar_hits: hits,
+                kick_hits: kick,
+                snare_hits: snare,
+                bass_hits: bass,
+                theme_hits: theme,
             };
         }
 
@@ -396,13 +435,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn leader_rotates_every_two_phrases() {
+    fn leader_rotates_every_four_phrases() {
         let candidates = vec![3usize, 6, 7, 11];
-        // Фразы 0,1 → индекс 0; 2,3 → индекс 1; и так далее.
+        // Фразы 0–3 → индекс 0; 4–7 → индекс 1; и так далее.
+        // Окно 4 фразы — в ногу с тоникой: баланс не перебивает тему.
         assert_eq!(pick_leader(&candidates, 0), Some(3));
-        assert_eq!(pick_leader(&candidates, 1), Some(3));
-        assert_eq!(pick_leader(&candidates, 2), Some(6));
-        assert_eq!(pick_leader(&candidates, 5), Some(7));
+        assert_eq!(pick_leader(&candidates, 3), Some(3));
+        assert_eq!(pick_leader(&candidates, 4), Some(6));
+        assert_eq!(pick_leader(&candidates, 9), Some(7));
         // Меньше двух кандидатов — лидера нет, баланс не трогаем.
         assert_eq!(pick_leader(&[3], 4), None);
         assert_eq!(pick_leader(&[], 4), None);

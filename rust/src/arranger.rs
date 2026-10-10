@@ -188,30 +188,76 @@ impl Arranger {
 
     pub fn with_score(seed: u64, score: Score) -> Self {
         let seed_hash = splitmix64(seed ^ 0x51ED);
-        // Мотив сида: цепочка splitmix дает 16 ступеней 0..4 —
-        // длинная тема на 2 такта узким напевом.
-        // Создается в интро и живет весь круг неизменной.
+        // Мотив сида: поступенная напевная линия 0..4 (узкий напев),
+        // а не 16 независимых бросков. Случайное блуждание шагом ≤ 1
+        // с аркой (подъем к середине, спад к кадансу): мелодия цельная
+        // внутри сида, развивается окном фразы и тоникой, а не
+        // пересдается каждый шаг. Генерация — задом наперед от тоники:
+        // последний шаг всегда 0 (каданс), предпоследний — сосед
+        // (правильный подход, а не прыжок). Живет весь круг неизменной.
         let mut motif = [0u8; 16];
-        let mut m = seed_hash ^ 0x9071F;
-        for slot in motif.iter_mut() {
+        let mut m = splitmix64(seed_hash ^ 0x9071F);
+        motif[15] = 0;
+        let mut pos: i8 = 0;
+        let mut dir: i8 = 1;
+        for i in (0..15).rev() {
             m = splitmix64(m);
-            *slot = (m % 5) as u8;
+            let r = m % 100;
+            if r >= 20 {
+                // Смена направления — редко (напев, а не пила).
+                if r >= 94 {
+                    dir = -dir;
+                }
+                // Арка: к середине тянем вверх, к началу — к середине
+                // диапазона (пик где-то в первой половине пути назад).
+                if (6..11).contains(&i) && pos < 3 {
+                    dir = 1;
+                }
+                if i < 4 && pos > 2 {
+                    dir = -1;
+                }
+                if i < 4 && pos < 2 {
+                    dir = 1;
+                }
+                let mut next = pos + dir;
+                if !(0..=4).contains(&next) {
+                    dir = -dir;
+                    next = pos + dir;
+                }
+                pos = next.clamp(0, 4);
+            }
+            motif[i] = pos as u8;
         }
-        // Тема B: близкая вариация A — 3 точечные мутации (±ступень-две).
+        // Тема B: близкая вариация A — до 3 поступенных мутаций (±ступень).
         // Не «вторая композиция», а развитие той же: припев к куплету,
-        // а не другой трек. Позиции и сдвиги — от хэша сида.
+        // а не другой трек. Позиции — от хэша сида, шаг всегда соседний
+        // (кламп вместо модуля: модуль давал прыжок 4→0).
+        // Мутация, рвущая линию с соседями, отклоняется (другим
+        // направлением или пропуском): B тоже напев без прыжков.
         // Страж на случай вырождения мутаций в исходную тему.
         let mut motif_b = motif;
         let mut g = splitmix64(seed_hash ^ 0xB17B);
         for _ in 0..3 {
             g = splitmix64(g);
-            let pos = (g % 16) as usize;
+            // Позиции 0..14: каданс (шаг 15 = 0) мутации не трогают.
+            let pos = (g % 15) as usize;
             g = splitmix64(g);
-            let delta = 1 + (g % 2) as u8;
-            motif_b[pos] = (motif_b[pos] + delta) % 5;
+            let cur = motif_b[pos] as i8;
+            let left = if pos > 0 { motif_b[pos - 1] as i8 } else { cur };
+            let right = motif_b[pos + 1] as i8;
+            let mut done = false;
+            for d in [if g % 2 == 0 { 1 } else { -1 }, if g % 2 == 0 { -1 } else { 1 }] {
+                let v = (cur + d).clamp(0, 4);
+                if (v - left).abs() <= 1 && (v - right).abs() <= 1 {
+                    motif_b[pos] = v as u8;
+                    done = true;
+                    break;
+                }
+            }
+            let _ = done;
         }
         if motif_b == motif {
-            motif_b[0] = (motif_b[0] + 1) % 5;
+            motif_b[0] = if motif[0] < 4 { motif[0] + 1 } else { 3 };
         }
         let mut a = Self {
             score,
@@ -533,11 +579,18 @@ mod tests {
             let first = a.advance_measure();
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
             assert!(!first.use_alt_motif, "starts with A");
-            for v in first.motif_b {
-                assert!(v <= 4, "motif_b out of range: {v}");
-            }
-            for v in first.motif {
-                assert!(v <= 4, "motif out of range: {v}");
+            for (name, m) in [("motif", first.motif), ("motif_b", first.motif_b)] {
+                for v in m {
+                    assert!(v <= 4, "{name} out of range: {v}");
+                }
+                // Напев поступенный (шаг ≤ 1), каданс на тонике.
+                for w in m.windows(2) {
+                    assert!(
+                        (w[0] as i8 - w[1] as i8).abs() <= 1,
+                        "{name} leaps: {m:?}"
+                    );
+                }
+                assert_eq!(m[15], 0, "{name} without cadence: {m:?}");
             }
         }
         let mut a = Arranger::new(5);

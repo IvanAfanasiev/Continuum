@@ -633,12 +633,12 @@ class _DiagPanelState extends State<_DiagPanel> {
   }
 }
 
-/// Круговой график такта: 16 долей такта точками на круге
-/// (звучавшая доля светится, немая — едва видимая риска),
-/// стрелка делает оборот за такт (скорость — от BPM композитора),
-/// текущая доля под стрелкой подсвечена (рука «играет» ноты),
-/// свечение центра — энергия. Живые данные из движка, опрос 4 Гц
-/// + экстраполяция 20 Гц между опросами, только пока играет и виден график.
+/// Круговой график такта: точки — главные голоса по их долям
+/// (кик, снейр+хэт, бас, тема), строго на круге — никаких точек
+/// по радиусу. Рука идет сама от BPM (оборот за такт: при 120 BPM —
+/// 2 с), опрос движка лишь подправляет ее и отдает маски/энергию.
+/// Ход 20 Гц, опрос 4 Гц: рука плавная, не дергается за опросами
+/// и не зависает, даже если опрос встал. Только пока играет и виден график.
 class _MotifWheel extends StatefulWidget {
   const _MotifWheel({required this.controller});
 
@@ -652,24 +652,35 @@ class _MotifWheelState extends State<_MotifWheel> {
   Timer? _ticker;
   LiveVisual? _frame;
 
-  /// Последние два замера (время, фаза) для сглаживания стрелки
-  /// между опросами 10 Гц: фаза экстраполируется, а не прыгает.
-  DateTime? _t0;
-  double _p0 = 0.0;
-  DateTime? _t1;
-  double _p1 = 0.0;
+  /// Собственная фаза руки 0..1: движется от BPM, а не от опросов.
+  double _phase = 0.0;
+  DateTime _last = DateTime.now();
+
+  double _bpm() =>
+      (widget.controller.status?.tempoBpm ?? 126).toDouble();
 
   static const _sections = ['Main', 'Build', 'Drop', 'Post'];
 
   @override
   void initState() {
     super.initState();
-    // Тик 50мс: опрос движка раз в 5 тиков, между — экстраполяция.
+    _last = DateTime.now();
+    // Тик 50мс: рука идет сама от BPM; опрос движка раз в 5 тиков
+    // только подправляет ее и забирает маски голосов.
     var n = 0;
     _ticker = Timer.periodic(const Duration(milliseconds: 50), (_) async {
-      if (!mounted || !widget.controller.running) return;
+      if (!mounted) return;
+      final running =
+          widget.controller.running && !widget.controller.paused;
+      final now = DateTime.now();
+      final dt = now.difference(_last).inMilliseconds / 1000.0;
+      _last = now;
+      if (running) {
+        // Оборот за такт (4 доли): при 120 BPM такт 2 с.
+        _phase = (_phase + dt * _bpm() / 240.0) % 1.0;
+      }
       n++;
-      if (n % 5 != 0) {
+      if (n % 5 != 0 || !running) {
         setState(() {});
         return;
       }
@@ -677,15 +688,17 @@ class _MotifWheelState extends State<_MotifWheel> {
         final v = await playbackLiveVisual();
         if (mounted) {
           setState(() {
-            _t0 = _t1;
-            _p0 = _p1;
-            _t1 = DateTime.now();
-            _p1 = v.barPhase;
             _frame = v;
+            // Подтяжка к движку: большое расхождение (смена сида/стиля,
+            // пропуск опросов) — прыгаем; мелочь — игнорируем, чтобы
+            // рука не дергалась за каждым опросом.
+            var d = (v.barPhase - _phase) % 1.0;
+            if (d > 0.5) d -= 1.0;
+            if (d.abs() > 0.25) _phase = v.barPhase;
           });
         }
       } catch (_) {
-        // Кадр необязателен — колесо просто стоит.
+        // Кадр необязателен — рука идет сама, колесо живет.
       }
     });
   }
@@ -696,26 +709,13 @@ class _MotifWheelState extends State<_MotifWheel> {
     super.dispose();
   }
 
-  /// Сглаженная фаза стрелки: экстраполяция по двум замерам.
-  double _smoothPhase() {
-    if (_t0 == null || _t1 == null) return _p1;
-    var rate = (_p1 - _p0) / _t1!.difference(_t0!).inMilliseconds * 1000.0;
-    if (rate < -0.5) rate += 1.0; // оборот через 0
-    if (rate < 0) rate = 0;
-    if (rate > 2) rate = 2; // подозрительный скачок — не верим
-    final dt =
-        DateTime.now().difference(_t1!).inMilliseconds / 1000.0;
-    return (_p1 + rate * dt.clamp(0.0, 0.5)) % 1.0;
-  }
-
   @override
   Widget build(BuildContext context) {
     final v = _frame;
-    // Подсветка — доля под стрелкой (рука «играет» ноты):
-    // индекс слота из фазы такта, точки — звучавшие доли.
-    final pos = (v == null)
-        ? 0
-        : ((_smoothPhase() * 16).floor() % 16);
+    // Доля под рукой (рука «играет» ноты, проходя мимо).
+    final pos = (_phase * 16).floor() % 16;
+    final bpm = _bpm();
+    final barSecs = 240.0 / bpm;
     return Container(
       color: Colors.black,
       child: Center(
@@ -727,18 +727,38 @@ class _MotifWheelState extends State<_MotifWheel> {
               height: 280,
               child: CustomPaint(
                 painter: _WheelPainter(
-                  hits: v?.barHits ?? 0,
+                  kick: v?.kickHits ?? 0,
+                  snare: v?.snareHits ?? 0,
+                  bass: v?.bassHits ?? 0,
+                  theme: v?.themeHits ?? 0,
                   pos: pos,
-                  phase: _smoothPhase(),
+                  phase: _phase,
                   energy: v?.energy ?? 0.0,
                 ),
               ),
             ),
             const SizedBox(height: 8),
+            Text.rich(
+              TextSpan(
+                style:
+                    const TextStyle(fontSize: 12, color: Colors.white54),
+                children: [
+                  const TextSpan(text: '● ', style: TextStyle(color: Color(0xFFFF5252))),
+                  const TextSpan(text: 'кик  '),
+                  const TextSpan(text: '● ', style: TextStyle(color: Color(0xFF4FC3F7))),
+                  const TextSpan(text: 'снейр  '),
+                  const TextSpan(text: '● ', style: TextStyle(color: Color(0xFF9CCC65))),
+                  const TextSpan(text: 'бас  '),
+                  const TextSpan(text: '● ', style: TextStyle(color: Colors.white)),
+                  const TextSpan(text: 'тема'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 2),
             Text(
               v == null
-                  ? 'мотив появится с музыкой'
-                  : 'тема · ${_sections[v.section.clamp(0, 3)]}',
+                  ? 'точки появятся с музыкой'
+                  : 'такт ${barSecs.toStringAsFixed(1)}с · ${bpm.toStringAsFixed(0)} BPM · ${_sections[v.section.clamp(0, 3)]}',
               style: const TextStyle(fontSize: 12, color: Colors.white54),
             ),
           ],
@@ -750,14 +770,20 @@ class _MotifWheelState extends State<_MotifWheel> {
 
 class _WheelPainter extends CustomPainter {
   _WheelPainter({
-    required this.hits,
+    required this.kick,
+    required this.snare,
+    required this.bass,
+    required this.theme,
     required this.pos,
     required this.phase,
     required this.energy,
   });
 
-  /// Битовая маска звучавших долей такта (бит = 16-я доля).
-  final int hits;
+  /// Маски голосов по долям такта (бит = 16-я доля).
+  final int kick;
+  final int snare;
+  final int bass;
+  final int theme;
   final int pos;
   final double phase;
   final double energy;
@@ -786,7 +812,44 @@ class _WheelPainter extends CustomPainter {
       Paint()..color = const Color(0x22FFB300),
     );
 
-    // Стрелка такта: оборот за такт.
+    void voice(int mask, Color color, double size) {
+      for (var i = 0; i < n; i++) {
+        if ((mask & (1 << i)) == 0) continue;
+        final ang = i / n * 6.2831853 - 1.5707963;
+        // Все точки строго на круге — никакого радиуса.
+        final p = center + Offset(r * math.cos(ang), r * math.sin(ang));
+        final cur = i == pos % n;
+        canvas.drawCircle(
+          p,
+          cur ? 7.0 : size,
+          Paint()..color = cur ? const Color(0xFFFFB300) : color,
+        );
+      }
+    }
+
+    // Немые доли — едва видимые риски (сетка такта).
+    for (var i = 0; i < n; i++) {
+      final sounded = (kick | snare | bass | theme) & (1 << i) != 0;
+      if (sounded) continue;
+      final ang = i / n * 6.2831853 - 1.5707963;
+      final p = center + Offset(r * math.cos(ang), r * math.sin(ang));
+      canvas.drawCircle(
+        p,
+        i == pos % n ? 4.0 : 1.5,
+        Paint()
+          ..color = i == pos % n
+              ? const Color(0xFFFFB300)
+              : const Color(0x22FFFFFF),
+      );
+    }
+
+    // Голоса поверх сетки: тема сзади, кик впереди.
+    voice(theme, const Color(0xCCFFFFFF), 3.5);
+    voice(bass, const Color(0xFF9CCC65), 4.0);
+    voice(snare, const Color(0xFF4FC3F7), 4.0);
+    voice(kick, const Color(0xFFFF5252), 4.5);
+
+    // Рука такта: оборот за такт, идет от BPM.
     final a = phase * 6.2831853 - 1.5707963;
     canvas.drawLine(
       center,
@@ -795,32 +858,6 @@ class _WheelPainter extends CustomPainter {
         ..strokeWidth = 1.5
         ..color = const Color(0x66FFFFFF),
     );
-
-    // Доли такта на круге: звучавшая светится, текущая под стрелкой —
-    // ярче всех (рука «играет» ноту, проходя мимо).
-    for (var i = 0; i < n; i++) {
-      final ang = i / n * 6.2831853 - 1.5707963;
-      final p = center + Offset(r * math.cos(ang), r * math.sin(ang));
-      final sounded = (hits & (1 << i)) != 0;
-      final cur = i == pos % n;
-      if (!sounded && !cur) {
-        // Немая доля — едва видимая риска.
-        canvas.drawCircle(
-          p,
-          1.5,
-          Paint()..color = const Color(0x22FFFFFF),
-        );
-        continue;
-      }
-      canvas.drawCircle(
-        p,
-        cur ? 6.0 : 3.5,
-        Paint()
-          ..color = cur
-              ? const Color(0xFFFFB300)
-              : const Color(0xCCFFFFFF),
-      );
-    }
   }
 
   @override

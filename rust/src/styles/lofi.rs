@@ -239,8 +239,8 @@ impl Style for LofiStyle {
             vel_energy: 0.15,
             vel_jitter: 0.08,
             poles: Some(HAT_POLES),
-            // Пульс вместо сетки: пыльные тики дышат, а не тикают.
-            emergent_beats: 0.9,
+            // Хэт держит сетку полюсов: пульс вместо сетки сбивал ритм.
+            emergent_beats: 0.0,
             ..RoleGuide::kit(HAT_W, 42, 0.34)
         };
         // Нарезки гитары: тот же план боя, что у гитары (общий скелет

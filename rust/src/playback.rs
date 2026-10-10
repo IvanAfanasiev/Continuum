@@ -110,8 +110,9 @@ impl Default for PlaybackStatus {
 }
 
 /// Живой кадр для кругового визуалайзера: позиция в такте,
-/// энергия, секция, мотив сида и позиция темы в нем.
-/// Конкретный тип без generic — безопасно для FFI-парсера.
+/// энергия, секция, мотив сида и позиция темы в нем + маски
+/// главных голосов по долям (точки колеса: кик, снейр+хэт,
+/// бас, тема). Конкретный тип без generic — безопасно для FFI-парсера.
 #[derive(Debug, Clone)]
 pub struct LiveVisual {
     pub bar_phase: f32,
@@ -121,6 +122,11 @@ pub struct LiveVisual {
     pub motif_pos: u8,
     /// Маска звучавших долей такта (бит = 16-я доля).
     pub bar_hits: u16,
+    /// Маски по голосам (тот же бит = та же доля).
+    pub kick_hits: u16,
+    pub snare_hits: u16,
+    pub bass_hits: u16,
+    pub theme_hits: u16,
 }
 
 impl Default for LiveVisual {
@@ -132,6 +138,10 @@ impl Default for LiveVisual {
             motif: vec![0u8; 16],
             motif_pos: 0,
             bar_hits: 0,
+            kick_hits: 0,
+            snare_hits: 0,
+            bass_hits: 0,
+            theme_hits: 0,
         }
     }
 }
@@ -910,6 +920,10 @@ impl PlaybackController {
                 motif: v.motif.to_vec(),
                 motif_pos: v.motif_pos,
                 bar_hits: v.bar_hits,
+                kick_hits: v.kick_hits,
+                snare_hits: v.snare_hits,
+                bass_hits: v.bass_hits,
+                theme_hits: v.theme_hits,
             },
             None => LiveVisual::default(),
         }
@@ -1554,7 +1568,8 @@ mod tests {
     #[test]
     fn live_visual_tracks_song() {
         // Снимок для визуалайзера: живая сессия отдает фазу такта,
-        // энергию и маску звучавших долей; после стопа — нули без паники.
+        // энергию и маски звучавших долей (общую и кика);
+        // после стопа — нули без паники.
         let c = PlaybackController::new();
         c.start("club", 11, false);
         std::thread::sleep(Duration::from_millis(400));
@@ -1564,6 +1579,7 @@ mod tests {
         assert!((0.0..=1.0).contains(&v.bar_phase));
         assert!(v.motif_pos < 16);
         assert_ne!(v.bar_hits, 0, "no sounded steps in snapshot");
+        assert_ne!(v.kick_hits, 0, "kick mask empty: four-floor lost");
         let _ = c.stop();
         let v = c.live_visual();
         assert_eq!(v.energy, 0.0);
@@ -1892,7 +1908,9 @@ mod tests {
     fn loudness_holds_commercial_band() {
         // Мастеринг-контракт: rms в полосе референсов (коммерция ~0.3,
         // наши были ~0.1), пики в потолке лимитера, крест-фактор жив
-        // (транзиенты не сквошены: ниже 4.0 — каша, выше 13 — тихо).
+        // (транзиенты не сквошены: ниже 3.5 — каша, выше 13 — тихо).
+        // Пол 3.5 (был 4.0): хэты встали на сетку — микс плотнее,
+        // гребень ниже, это ровный бит, а не сквош.
         let report = soak_render("club", 11, 12.0, 22050.0).expect("soaks");
         assert_eq!(report.non_finite, 0);
         assert!(
@@ -1907,7 +1925,7 @@ mod tests {
         );
         let crest = report.peak / report.rms.max(1e-6);
         assert!(
-            (4.0..=13.0).contains(&crest),
+            (3.5..=13.0).contains(&crest),
             "transients squashed or mix dead: crest {crest}"
         );
     }

@@ -599,9 +599,11 @@ pub(crate) fn motif_octave(seed_hash: u64) -> i8 {
     (crate::arranger::splitmix64(seed_hash ^ 0x0C7A) % 3) as i8 - 1
 }
 
-/// Лидер темы на фразу: один носитель ведет в полную, остальные
-/// вторят эхом. Ротация детерминирована (сид, фраза). Пусто —
-/// вести некому (все молчат как написано).
+/// Лидер темы на окно из 2 фраз: один носитель ведет в полную,
+/// остальные вторят эхом. Ротация детерминирована (сид, окно).
+/// Окно, а не каждая фраза: первый голос держится и поется,
+/// а не перебивается сменой лидера. Пусто — вести некому
+/// (все молчат как написано).
 pub(crate) fn theme_leader(
     carriers: &[usize],
     seed_hash: u64,
@@ -611,7 +613,7 @@ pub(crate) fn theme_leader(
         return None;
     }
     let h = crate::arranger::splitmix64(
-        seed_hash ^ 0x1EAD ^ (phrase_index as u64).wrapping_mul(0x9E3779B9),
+        seed_hash ^ 0x1EAD ^ ((phrase_index / 2) as u64).wrapping_mul(0x9E3779B9),
     );
     Some(carriers[(h % carriers.len() as u64) as usize])
 }
@@ -789,13 +791,14 @@ fn play_guide(
     // плотность секции задают только энергия и структура.
     // Роль слота нужна рано (общий план и кик-якоря): чистая функция id.
     let role = Slot::from_id(instrument_id).map(|s| s.role());
-    // Общий план: носители темы кидают один гейт на роль — разреженные
-    // играют подмножество густых (те же шаги, не свои). Каждый слой
-    // уходит в свою краску (голос, октава, велосити), но бьет вместе.
+    // Общий план (общая фраза): все носители темы кидают один гейт —
+    // разреженные играют подмножество густых (те же шаги, не свои).
+    // Каждый слой уходит в свою краску (голос, октава, велосити),
+    // но бьет вместе: гетерофония вместо хора солистов.
     // Ударные, бас и аккомпанемент кидают свой: у каждой работы
     // свой рисунок, иначе грув слипнется в унисон.
     let groove_key = if guide.follow_motif || force_motif {
-        10_000 + role.map(|r| r.index()).unwrap_or(7)
+        10_077
     } else {
         slot_idx
     };
@@ -848,10 +851,12 @@ fn play_guide(
     }
 
     // Отдых фразами: носитель темы иногда молчит фразу целиком.
-    // Бросок независимый на слот: один поет — второй дышит
-    // (вопрос-ответ фразами вместо хора солистов). Подхват (ключи
+    // Вопрос-ответ фразами вместо хора солистов: лидер фразы
+    // не отдыхает никогда (иначе тема перебивается паузой),
+    // остальные дышат по независимому броску. Подхват (ключи
     // без темы) не отдыхает: одинокий носитель всегда ведет.
     if guide.follow_motif
+        && !theme_lead
         && guide.phrase_rest > 0.0
         && fixed_gate(
             song.seed_hash,
@@ -922,8 +927,10 @@ fn play_guide(
             return Vec::new();
         }
     }
-    // Иерархия темы: ведет один (лидер фразы), остальные — эхом.
+    // Иерархия темы: ведет один (лидер окна), остальные — эхом.
     // Общий бросок на всех вторящих: эхо звучит вместе, в те же шаги.
+    // Окно 2 фразы — в ногу с лидерством: состав эха не пересдается
+    // чаще, чем меняется лидер.
     // Вложенность базовых гейтов цела: разреженный и так подмножество.
     if (guide.follow_motif || force_motif)
         && !theme_lead
@@ -931,7 +938,7 @@ fn play_guide(
             song.seed_hash,
             7777,
             step_in_measure,
-            song.phrase_index as u64,
+            (song.phrase_index / 2) as u64,
         ) >= LEAD_ECHO
     {
         return Vec::new();
@@ -995,13 +1002,16 @@ fn play_guide(
             } else {
                 // Аккомпанемент идет за прогрессией: бас — корнями
                 // вместе со всеми (дрона на одной ноте больше нет),
-                // остальные — в полную. Регистр баса держит фолд,
-                // блуждание — джиттер гайда.
-                song.prog[(song.measure_index / 2) % song.prog.len()] as usize
+                // остальные — в полную. Гармонический ритм — 8 тактов:
+                // аккорд стоит и держит фразу, а не едет каждые 2 такта.
+                // Регистр баса держит фолд, блуждание — джиттер гайда.
+                song.prog[(song.measure_index / 8) % song.prog.len()] as usize
             };
             let (degree, jitter) = if use_motif {
                 // Живой мотив: тема секции (A везде, B на Drop/PostChorus)
-                // плюс ротация окном фразы. ДНК сида сохранена, но дословных повторов нет.
+                // плюс медленная ротация окном (8 фраз — тема стоит
+                // и поется, развивается мгновением, а не пересдается).
+                // ДНК сида сохранена, но дословных повторов нет.
                 // Без транспозиции ответа: терция вверх на нечетных фразах
                 // рассинхронизировала слои (полутоновые стычки до 37% шагов).
                 let theme = if song.use_alt_motif {
@@ -1009,7 +1019,7 @@ fn play_guide(
                 } else {
                     &song.motif
                 };
-                let rot = song.phrase_index % theme.len();
+                let rot = (song.phrase_index / 8) % theme.len();
                 let motif_step =
                     theme[(step_in_measure / 2 + rot) % theme.len()] as usize;
                 (motif_step, 0)
@@ -1027,23 +1037,25 @@ fn play_guide(
                 (d, jitter)
             };
             let drift = if jitter > 0 {
-                // Блуждание тоже фиксировано сидом и фразой: внутри фразы
-                // та же нота в том же месте, дальше — пересдача.
+                // Блуждание тоже фиксировано сидом и окном (4 фразы):
+                // внутри окна та же нота в том же месте, дальше — пересдача.
                 (crate::arranger::splitmix64(
                     song.seed_hash
                         ^ (slot_idx as u64).wrapping_mul(0xC0FFEE)
                         ^ (step_in_measure as u64).wrapping_mul(0x9E3779B9)
-                        ^ (song.phrase_index as u64).wrapping_mul(0x85EBCA6B)
+                        ^ ((song.phrase_index / 4) as u64).wrapping_mul(0x85EBCA6B)
                         ^ 0xD1F7,
                 ) % (jitter as u64 + 1)) as usize
             } else {
                 0
             };
-            // Тоника блуждает детерминированно (−1/0/+1 по битам хэша фраз):
-            // локально связно (стоит или шаг на ступень), глобально
-            // непериодично — скелет мелодии не замыкается в цикл длиной
-            // в лад, как раньше (там было +1 каждую фразу: период = лад).
-            let tonic = melodic_drift(song.seed_hash, song.phrase_index, scale.len());
+            // Тоника стоит 4 фразы и блуждает детерминированно
+            // (−1/0/+1 по битам хэша окна): локально связно (стоит или
+            // шаг на ступень), глобально непериодично — скелет мелодии
+            // не замыкается в цикл длиной в лад (там было +1 каждую
+            // фразу: период = лад). Окно, а не каждая фраза: тема
+            // не перебивается сменой центра.
+            let tonic = melodic_drift(song.seed_hash, song.phrase_index / 4, scale.len());
             let base = tonic + degree + drift + rotation;
             // Октава общая для тонов аккорда; подъем проверяем по корню.
             let root_idx = base % scale.len();
@@ -1054,12 +1066,13 @@ fn play_guide(
                 // Потолок регистра лидов: выше D6 (86) — ледяной свист,
                 // а не музыка. Берем минимум из гайда и колпака.
                 // Бросок общий на план: подъемы унисоном, а не вразнобой.
+                // Окно 4 фразы: регистр стоит вместе с тоникой.
                 && root.saturating_add(12) <= guide.top_pitch.min(86)
                 && fixed_gate(
                     song.seed_hash,
                     groove_key,
                     step_in_measure,
-                    0x0C74 ^ (song.phrase_index as u64),
+                    0x0C74 ^ ((song.phrase_index / 4) as u64),
                 ) < guide.octave_up;
             // Октава темы от сида: мотив и подхват едут вместе.
             // Верх страхует колпак ниже.
@@ -1256,6 +1269,8 @@ mod tests {
     }
 
     fn motif_pitches(motif: [u8; 16]) -> Vec<u8> {
+        // Проба скелета высоты через якорь-абсолют кик-роли (id 2):
+        // гейтов нет — в кадре чистая высота без дыхательных пропусков.
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
@@ -1276,7 +1291,7 @@ mod tests {
                     step * 2,
                     16,
                     0.1,
-                    6,
+                    2,
                     5,
                     1.0,
                     false,
@@ -1306,6 +1321,7 @@ mod tests {
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let mut rng = rand::SeedableRng::seed_from_u64(3);
+        // Проба через якорь-абсолют (id 2): высота без пропусков.
         let b: Vec<u8> = (0..8)
             .filter_map(|step| {
                 play_guide(
@@ -1316,7 +1332,7 @@ mod tests {
                     step * 2,
                     16,
                     0.1,
-                    6,
+                    2,
                     5,
                     1.0,
                     false,
@@ -1552,10 +1568,13 @@ mod tests {
     }
 
     #[test]
-    fn motif_skeleton_outgrows_rotation_templates() {
-        // Линия мотива: та же фраза — та же линия; соседние фразы разные;
-        // за 64 фразы различных линий больше 16 (потолок ротации 8 ×
-        // вопрос-ответ 2) — блуждание тоники рвет шаблонный цикл.
+    fn motif_skeleton_holds_window_develops_across_windows() {
+        // Общая фраза: соседние фразы делят скелет (окно темы 8 фраз,
+        // тоника 4 фразы) — мелодия цельная, а не пересдается.
+        // Развитие — окнами: фраза 0 vs 8 звучат по-разному,
+        // за 64 фразы в один шаблон не замыкается.
+        // Кик-роль (id 2): якорь-абсолют, гейтов нет — в кадре
+        // чистый скелет высоты без дыхательных пропусков.
         fn phrase_pitches(phrase: usize) -> Vec<u8> {
             let guide = RoleGuide {
                 weights: &[1.0; 16],
@@ -1569,7 +1588,7 @@ mod tests {
             (0..8)
                 .filter_map(|step| {
                     play_guide(
-                        &guide, &scale, &song, 1.0, step * 2, 16, 0.1, 6, 5, 1.0, false,
+                        &guide, &scale, &song, 1.0, step * 2, 16, 0.1, 2, 5, 1.0, false,
                         false, 0, false, true, &mut rng,
                     )
                     .into_iter()
@@ -1579,16 +1598,16 @@ mod tests {
                 .collect()
         }
         let p0 = phrase_pitches(0);
-        let p1 = phrase_pitches(1);
         assert_eq!(p0.len(), 8);
-        assert_ne!(p0, p1, "motif stuck across phrases");
         assert_eq!(p0, phrase_pitches(0), "same phrase must repeat");
-        // Блуждание рвет шаблон: различных линий за 64 фразы больше,
-        // чем может дать ротация без него.
+        assert_eq!(p0, phrase_pitches(1), "neighbor phrases share skeleton");
+        assert_ne!(p0, phrase_pitches(8), "windows must develop");
+        // Развитие без зацикливания: линий за 64 фразы больше,
+        // чем окон ротации (8) — блуждание тоники рвет шаблон.
         let distinct: std::collections::HashSet<Vec<u8>> =
             (0..64).map(phrase_pitches).collect();
         assert!(
-            distinct.len() > 16,
+            distinct.len() > 8,
             "skeleton loops: {} distinct",
             distinct.len()
         );
@@ -1612,18 +1631,24 @@ mod tests {
             ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, 1.0, 0.8)
         };
         let mut rng = rand::SeedableRng::seed_from_u64(21);
-        let full_line: Vec<u8> = (0..16)
-            .map(|step| {
+        // Эталон снимаем с допусками: якорь дышит (0.95) — пара шагов
+        // из 16 может молчать, сверка идет по звучавшим.
+        let full_line: Vec<(usize, u8)> = (0..16)
+            .filter_map(|step| {
                 play_guide(
                     &anchor_motif, scale, &song, 1.0, step, spm, 0.1, 6, 5, 1.0,
                     false, false, 0, false, true, &mut rng,
                 )
                 .into_iter()
                 .next()
-                .map(|n| n.midi_pitch)
-                .unwrap()
+                .map(|n| (step, n.midi_pitch))
             })
             .collect();
+        assert!(
+            full_line.len() >= 12,
+            "anchor lost face: {}/16",
+            full_line.len()
+        );
         // Клавиши без подхвата и с подхватом — разные линии.
         let line = |force: bool| -> Vec<(usize, u8)> {
             let mut rng = rand::SeedableRng::seed_from_u64(22);
@@ -1644,7 +1669,11 @@ mod tests {
         assert!(!forced.is_empty(), "fallback silent");
         assert_ne!(plain, forced, "fallback ignored");
         for (step, pitch) in &forced {
-            assert_eq!(*pitch, full_line[*step], "step {step}: not the motif");
+            if let Some((_, ref_pitch)) =
+                full_line.iter().find(|(s, _)| s == step)
+            {
+                assert_eq!(*pitch, *ref_pitch, "step {step}: not the motif");
+            }
         }
         // Уровень движка: активны только клавиши — подхват включается сам,
         // корень аккорда на каждом шаге лежит на линии мотива
@@ -1667,9 +1696,9 @@ mod tests {
                 rng: &mut rng,
                 intensity: 1.0,
             };
-            for (sim, expected) in full_line.iter().enumerate() {
-                sctx.step = sim;
-                sctx.step_in_measure = sim;
+            for (sim, expected) in full_line.iter() {
+                sctx.step = *sim;
+                sctx.step_in_measure = *sim;
                 let mut step_pitches = Vec::new();
                 for note in render_style(&*style, &mut sctx) {
                     assert_eq!(note.instrument_id, Slot::Keys.id());
@@ -2136,15 +2165,15 @@ mod tests {
 
     #[test]
     fn bass_line_stays_near_roots() {
-        // Бас почти стоит: по первым долям прог-цикла разброс ≤ 3 полутонов.
-        // Было: прогрессия таскала бас на ±ступени (то высоко, то низко).
+        // Бас ходит корнями за прогрессией, но гармонический ритм —
+        // 8 тактов: корни стоят и держат фразу, а не едут каждые 2 такта.
         let guide = RoleGuide {
             weights: &[1.0; 8],
             ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, 1.0, 0.8)
         };
         let scale = [48, 51, 53, 55, 58];
         let mut pitches = Vec::new();
-        for measure in 0..8usize {
+        for measure in (0..32usize).step_by(4) {
             let mut song = test_song(0.5);
             song.measure_index = measure;
             song.prog = [0, 3, 1, 2];
@@ -2542,8 +2571,9 @@ mod tests {
 
     #[test]
     fn progression_moves_accompaniment_not_motif() {
-        // Аккомпанемент следует прогрессии (разные такты — разные ступени),
-        // мотив при той же прогрессии стабилен. Смотрятся все шаги:
+        // Аккомпанемент следует прогрессии (разные окна — разные ступени),
+        // мотив при той же прогрессии стабилен. Гармонический ритм —
+        // 8 тактов: аккорд стоит и держит фразу. Смотрятся все шаги:
         // якорь фразы может пропустить даунбит (даунбит дышит) —
         // контракт про свойство, а не про нулевой шаг.
         fn degree_at(measure: usize, follow_motif: bool, step: usize) -> Option<u8> {
@@ -2562,16 +2592,16 @@ mod tests {
                 .next()
                 .map(|n| n.midi_pitch)
         }
-        // Такты 0–1 (прог 0) и 2–3 (прог 2): аккомпанемент сдвинут.
+        // Такты 1 (окно 0, прог 0) и 9 (окно 1, прог 2): аккомпанемент сдвинут.
         let mut shifted = false;
         // Мотив от такта не зависит.
         let mut stable = false;
         for step in 0..8 {
-            if let (Some(a), Some(b)) = (degree_at(1, false, step), degree_at(2, false, step)) {
+            if let (Some(a), Some(b)) = (degree_at(1, false, step), degree_at(9, false, step)) {
                 assert_ne!(a, b, "step {step}: accompaniment ignores progression");
                 shifted = true;
             }
-            if let (Some(a), Some(b)) = (degree_at(1, true, step), degree_at(2, true, step)) {
+            if let (Some(a), Some(b)) = (degree_at(1, true, step), degree_at(9, true, step)) {
                 assert_eq!(a, b, "step {step}: motif follows progression");
                 stable = true;
             }

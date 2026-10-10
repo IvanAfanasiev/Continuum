@@ -213,8 +213,8 @@ impl Style for RockStyle {
             vel_energy: 0.18,
             vel_jitter: 0.06,
             poles: Some(HAT_POLES),
-            // Пульс вместо сетки: живой хэт поверх механики.
-            emergent_beats: 0.5,
+            // Хэт держит сетку полюсов: пульс вместо сетки сбивал ритм.
+            emergent_beats: 0.0,
             ..RoleGuide::kit(HAT_W, 42, 0.42)
         };
         let pluck = RoleGuide {
