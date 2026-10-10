@@ -374,6 +374,11 @@ impl Pump {
         self.state.sample_rate()
     }
 
+    /// Длина due-расписания (нот ждет свой медиакадр).
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Подготовка блока: ноты, громкости, живые FX и время эха.
     fn begin_block(&mut self) {
         if let Ok(state) = self.mixer.try_read() {

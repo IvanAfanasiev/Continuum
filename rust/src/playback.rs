@@ -877,6 +877,16 @@ impl PlaybackController {
         out
     }
 
+    /// Длина due-расписания насоса (сколько нот ждет свой кадр).
+    /// Для диагностики: растет — расписание держит ноты в заложниках.
+    /// try_lock, чтобы не тормозить аудио-поток ради замера.
+    pub fn pump_pending_len(&self) -> usize {
+        self.pull_pump
+            .try_lock()
+            .map(|g| g.as_ref().map(|p| p.pending_len()).unwrap_or(0))
+            .unwrap_or(0)
+    }
+
     pub fn status(&self) -> PlaybackStatus {
         let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_ref() {

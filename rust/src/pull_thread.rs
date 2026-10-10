@@ -35,6 +35,7 @@ struct Counters {
     chunks: u64,
     slow: u64,
     render_ms_total: u64,
+    pending_max: usize,
 }
 
 pub(crate) fn diag_push(line: String) {
@@ -296,6 +297,7 @@ fn audio_loop(gen: u64) {
             chunks: 0,
             slow: 0,
             render_ms_total: 0,
+            pending_max: 0,
         };
         let controller = crate::api::playback::shared_controller();
         while alive() {
@@ -304,6 +306,8 @@ fn audio_loop(gen: u64) {
             let ms = t0.elapsed().as_millis() as u64;
             counters.chunks += 1;
             counters.render_ms_total += ms;
+            counters.pending_max =
+                counters.pending_max.max(controller.pump_pending_len());
             if ms > 50 {
                 counters.slow += 1;
                 diag_push(format!(
@@ -315,10 +319,12 @@ fn audio_loop(gen: u64) {
                 let avg = counters.render_ms_total / counters.chunks.max(1);
                 let queued = controller.engine_stats().queued;
                 diag_push(format!(
-                    "{} render avg {avg}ms (slow={} queued={queued})",
+                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={})",
                     diag_now(),
-                    counters.slow
+                    counters.slow,
+                    counters.pending_max
                 ));
+                counters.pending_max = 0;
             }
             if pcm.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(200));
