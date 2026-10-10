@@ -130,14 +130,17 @@ class AudioBridge {
       : Future.value(const <String>[]);
 
   /// Захват следующих 30 секунд потока в файл (экспертиза скачков).
+  /// Имя содержит стиль и сид — контекст гадать не надо.
   /// Путь — публичная папка приложения. null — не играет.
   Future<String?> startCapture() async {
     if (!Platform.isAndroid) return null;
     try {
       final ext = await getExternalStorageDirectory();
       final dir = ext ?? await getTemporaryDirectory();
+      final style = _controller.styleName.replaceAll(RegExp(r'[^a-z0-9]'), '');
+      final seed = _controller.seedCode.replaceAll('-', '');
       final path =
-          '${dir.path}/cont_capture_${DateTime.now().millisecondsSinceEpoch}.f32';
+          '${dir.path}/cont_capture_${style}_${seed}_${DateTime.now().millisecondsSinceEpoch}.f32';
       return await playbackPullCapture(path: path) ? path : null;
     } catch (_) {
       return null;

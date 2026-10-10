@@ -167,6 +167,10 @@ pub struct RoleGuide {
     /// партий действуют как обычно. Чистая функция глобального шага —
     /// состояния нет, тот же сид дает тот же поток.
     pub emergent_beats: f32,
+    /// Отдых фразами 0..1: доля фраз, которые носитель темы молчит
+    /// целиком (вопрос-ответ фразами: один поет — второй дышит).
+    /// Бросок независимый на слот. 0.0 = всегда играет.
+    pub phrase_rest: f32,
 }
 
 impl RoleGuide {
@@ -195,6 +199,7 @@ impl RoleGuide {
         bass_top: 45,
         arp: false,
         emergent_beats: 0.0,
+        phrase_rest: 0.0,
     };
 
     pub fn is_silent(&self) -> bool {
@@ -228,6 +233,7 @@ impl RoleGuide {
             bass_top: 45,
             arp: false,
             emergent_beats: 0.0,
+            phrase_rest: 0.0,
         }
     }
 
@@ -268,6 +274,7 @@ impl RoleGuide {
             bass_top: 45,
             arp: false,
             emergent_beats: 0.0,
+            phrase_rest: 0.0,
         }
     }
 }
@@ -840,6 +847,22 @@ fn play_guide(
         return Vec::new();
     }
 
+    // Отдых фразами: носитель темы иногда молчит фразу целиком.
+    // Бросок независимый на слот: один поет — второй дышит
+    // (вопрос-ответ фразами вместо хора солистов). Подхват (ключи
+    // без темы) не отдыхает: одинокий носитель всегда ведет.
+    if guide.follow_motif
+        && guide.phrase_rest > 0.0
+        && fixed_gate(
+            song.seed_hash,
+            slot_idx,
+            song.phrase_index % 64,
+            0x2E57,
+        ) < guide.phrase_rest
+    {
+        return Vec::new();
+    }
+
     // Emergent-пульс вместо сетки: бьет ли глобальный шаг.
     // Веса/морфинг/гейты пропускаем; структура выше уже отработала.
     // Акцент у четвертей — барабанщик выделяет доли (грув, а не стук).
@@ -970,15 +993,11 @@ fn play_guide(
             let prog_shift = if use_motif {
                 0
             } else {
-                // Аккомпанемент ползет за прогрессией вдвое медленнее баса:
-                // бас держит корни почти стоя (иначе гуляет по грифу
-                // и ощущается то высоким, то низким). Остальные — в полную.
-                let shift = song.prog[(song.measure_index / 2) % song.prog.len()] as usize;
-                if matches!(role, Some(InstrumentRole::Bass)) {
-                    shift / 2
-                } else {
-                    shift
-                }
+                // Аккомпанемент идет за прогрессией: бас — корнями
+                // вместе со всеми (дрона на одной ноте больше нет),
+                // остальные — в полную. Регистр баса держит фолд,
+                // блуждание — джиттер гайда.
+                song.prog[(song.measure_index / 2) % song.prog.len()] as usize
             };
             let (degree, jitter) = if use_motif {
                 // Живой мотив: тема секции (A везде, B на Drop/PostChorus)
@@ -1107,6 +1126,10 @@ fn play_guide(
             let octaves_above = ((tone as f32 - 40.0) / 12.0).max(0.0);
             v = (v * guide.vel_high_cut.powf(octaves_above)).clamp(0.05, 1.0);
         }
+        // Акценты долей: даунбит говорит громче всех, дальше по убывающей.
+        // Без иерархии громкости бит тонет в ровной стене (все стучат
+        // равно) — метр слышен, даже когда рисунок синкопирован.
+        v *= beat_accent(step_in_measure, steps_per_measure);
         // Громкость фразы: баланс партий по ступени круга.
         // Ноль таблицы = тишина (снейра в интро нет — и не должно быть).
         if let Some(r) = role {
@@ -1125,6 +1148,17 @@ fn play_guide(
         }
     }
     out
+}
+
+/// Акцент доли 1.0..1.25: даунбит — полный голос, третья доля —
+/// чуть тише, слабые — как написано. Чистая функция шага.
+pub(crate) fn beat_accent(step_in_measure: usize, steps_per_measure: usize) -> f32 {
+    let q = (steps_per_measure / 4).max(1);
+    match (step_in_measure / q) % 4 {
+        0 => 1.25,
+        2 => 1.12,
+        _ => 1.0,
+    }
 }
 
 /// Фабрика стилей по имени (регистр и пробелы игнорируются).
@@ -2126,8 +2160,18 @@ mod tests {
             }
         }
         assert!(pitches.len() >= 6, "bass gone: {pitches:?}");
+        // Бас ходит корнями за прогрессией (разброс есть — не дрон),
+        // но сидит в регистре (фолд держит ≤ bass_top) и не гуляет
+        // по грифу: разброс в пределах сексты.
         let spread = pitches.iter().max().unwrap() - pitches.iter().min().unwrap();
-        assert!(spread <= 3, "bass wanders: {pitches:?}");
+        assert!(
+            (4..=10).contains(&spread),
+            "bass drones or wanders: {pitches:?}"
+        );
+        assert!(
+            pitches.iter().all(|p| *p <= 45),
+            "bass escaped register: {pitches:?}"
+        );
     }
 
     #[test]
@@ -2286,7 +2330,7 @@ mod tests {
         let call = |fill: bool| {
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
-                &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false,
+                &guide, &scale, &song, 1.0, 2, 8, 0.1, 1, 0, 1.0, false,
                 false, 0, fill, true, &mut rng,
             )
             .into_iter()
@@ -2343,6 +2387,18 @@ mod tests {
         );
         assert_eq!(theme_leader(&[], 42, 0), None);
         assert_eq!(theme_leader(&[6], 42, 9), Some(6));
+    }
+
+    #[test]
+    fn beat_accent_orders_downbeat_first() {
+        // Иерархия долей: даунбит громче всех (вся первая четверть),
+        // третья доля — следом, слабые — как написано.
+        // Бит читается даже в синкопе.
+        assert_eq!(beat_accent(0, 16), 1.25);
+        assert_eq!(beat_accent(3, 16), 1.25);
+        assert_eq!(beat_accent(4, 16), 1.0);
+        assert!(beat_accent(8, 16) > beat_accent(4, 16));
+        assert_eq!(beat_accent(12, 16), 1.0);
     }
 
     #[test]

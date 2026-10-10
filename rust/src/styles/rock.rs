@@ -293,6 +293,7 @@ impl Style for RockStyle {
                 jitter: 0,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(RIFF_W, 0, 1, 0, 0.8, 0.3)
         };
         // Чистая гитара риффом по мотиву: тот же план, что у фазза
@@ -310,6 +311,7 @@ impl Style for RockStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             poles: Some(RIFF_POLES),
             ..RoleGuide::pitched(RIFF_W, 0, 1, 1, 1.0, 0.75)
         };
@@ -331,6 +333,7 @@ impl Style for RockStyle {
                 jitter: 0,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             poles: Some(RIFF_POLES),
             ..RoleGuide::pitched(RIFF_W, 0, 1, 0, 0.7, 0.65)
         };

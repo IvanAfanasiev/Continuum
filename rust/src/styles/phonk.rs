@@ -193,6 +193,7 @@ impl Style for PhonkStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(KEYS_PH, 0, 0, 1, 1.2, 0.55)
         };
         // 808 ведет баслайн слайдами, регистр рефа (фолд в mod.rs).
@@ -307,6 +308,7 @@ impl Style for PhonkStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(LEAD_PH, 2, 2, 1, 0.9, 0.45)
         };
         // Вейвтейбл вне автомикса: ручная краска для фронта.

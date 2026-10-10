@@ -160,6 +160,8 @@ impl Style for ClubStyle {
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
+        // Бас ходит корнями за прогрессией (джиттер 1 — соседние
+        // ступени, не прыжки): баслайн вместо дрона на одной ноте.
         let bass = RoleGuide {
             energy_response: 2.2,
             duration_mult: 1.8,
@@ -169,7 +171,7 @@ impl Style for ClubStyle {
             voice: Voicing::Scale {
                 degree: 0,
                 octave: -1,
-                jitter: 0,
+                jitter: 1,
             },
             octave_up: 0.08,
             top_pitch: 50,
@@ -182,7 +184,7 @@ impl Style for ClubStyle {
             // фундамент — чистый синус. Рок держит струну (0.0).
             // Громкость с запасом: саб без презенса тише струнного.
             sub_bias: 0.8,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 1.8, 0.78)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 1, 1.8, 0.78)
         };
         let kick = RoleGuide {
             // Заливка перед дропом умеренная: пулемет вместо брейка
@@ -233,6 +235,7 @@ impl Style for ClubStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(LEAD_W, 0, 2, 1, 1.6, 0.45)
         };
         let keys = RoleGuide {
@@ -275,6 +278,7 @@ impl Style for ClubStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(LEAD_W, 0, 2, 1, 1.0, 0.5)
         };
         // Хор deep house: редкие долгие «ah→oh» в эхе, сидят сзади.
@@ -324,6 +328,7 @@ impl Style for ClubStyle {
                 jitter: 1,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(LEAD_W, 0, 2, 1, 0.8, 0.5)
         };
         // Чужие мелодические/текстуры: разреженные направляющие.
@@ -381,7 +386,8 @@ impl Style for ClubStyle {
                 jitter: 1,
             },
             follow_motif: true,
-            ..RoleGuide::pitched(LEAD_W, 2, 2, 2, 1.6, 0.5)
+            phrase_rest: 0.2,
+            ..RoleGuide::pitched(LEAD_W, 2, 2, 1, 1.6, 0.5)
         };
         // Вейвтейбл вне автомикса: ручная краска для фронта.
         let wavetable = RoleGuide {
@@ -541,7 +547,12 @@ mod tests {
                     super::super::theme_leader(&carriers, seed_hash, *phrase).unwrap();
                 leaders.insert(leader);
                 if leader == FORMULA_ID {
+                    // Отдыхающую формулу (пустая фраза) пропускаем:
+                    // подмножество проверяется там, где оба звучат.
                     let fsteps = formula.get(phrase).cloned().unwrap_or_default();
+                    if fsteps.is_empty() {
+                        continue;
+                    }
                     assert!(
                         psteps.is_subset(&fsteps),
                         "seed {seed} phrase {phrase}: pluck strays off the lead"

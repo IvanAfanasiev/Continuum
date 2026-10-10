@@ -194,6 +194,7 @@ impl Style for LofiStyle {
         // не 1.0) — глухой синус вместо баса не нужен.
         // Уровень ниже гитары: замер спектра (Coming Home) — у нас доля
         // низа 0.38 против 0.25 у референса.
+        // Пыльный бас ходит корнями (джиттер 1 — соседние ступени).
         let bass = RoleGuide {
             energy_response: 0.8,
             duration_mult: 6.0,
@@ -202,11 +203,11 @@ impl Style for LofiStyle {
             voice: Voicing::Scale {
                 degree: 0,
                 octave: -1,
-                jitter: 0,
+                jitter: 1,
             },
             vel_high_cut: 0.6,
             sub_bias: 0.4,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 6.0, 0.5)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 1, 6.0, 0.5)
         };
         let kick = RoleGuide {
             energy_response: 0.8,
@@ -254,6 +255,7 @@ impl Style for LofiStyle {
                 jitter: 0,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 2.0, 0.5)
         };
         let keys = RoleGuide {
@@ -321,6 +323,7 @@ impl Style for LofiStyle {
                 jitter: 0,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             ..RoleGuide::pitched(FLUTE_W, 0, 1, 0, 6.0, 0.45)
         };
         let festival = RoleGuide {
@@ -352,6 +355,7 @@ impl Style for LofiStyle {
                 jitter: 0,
             },
             follow_motif: true,
+            phrase_rest: 0.2,
             chord: Some(STRUM_IV),
             arp: true,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 1.8, 0.85)
