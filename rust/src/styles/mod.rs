@@ -432,7 +432,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             carriers.push(fb);
         }
     }
-    let leader = theme_leader(&carriers, sctx.song.seed_hash, sctx.song.phrase_index);
+    let leader = theme_leader(&carriers, sctx.song.seed_hash, sctx.song.stage);
     // Фаза 1: кики. Заливка (сработал не якорь) запоминается —
     // бас во второй фазе под нее пригнется.
     let mut kick_fill = false;
@@ -599,21 +599,21 @@ pub(crate) fn motif_octave(seed_hash: u64) -> i8 {
     (crate::arranger::splitmix64(seed_hash ^ 0x0C7A) % 3) as i8 - 1
 }
 
-/// Лидер темы на окно из 2 фраз: один носитель ведет в полную,
-/// остальные вторят эхом. Ротация детерминирована (сид, окно).
-/// Окно, а не каждая фраза: первый голос держится и поется,
-/// а не перебивается сменой лидера. Пусто — вести некому
-/// (все молчат как написано).
+/// Лидер темы на визит секции: один носитель ведет в полную,
+/// остальные вторят эхом. Ротация детерминирована (сид, визит).
+/// Заморожено на секцию: первый голос держится весь раздел формы
+/// и меняется только на границе (состав не тасуется внутри песни).
+/// Пусто — вести некому (все молчат как написано).
 pub(crate) fn theme_leader(
     carriers: &[usize],
     seed_hash: u64,
-    phrase_index: usize,
+    stage: usize,
 ) -> Option<usize> {
     if carriers.is_empty() {
         return None;
     }
     let h = crate::arranger::splitmix64(
-        seed_hash ^ 0x1EAD ^ ((phrase_index / 2) as u64).wrapping_mul(0x9E3779B9),
+        seed_hash ^ 0x1EAD ^ (stage as u64).wrapping_mul(0x9E3779B9),
     );
     Some(carriers[(h % carriers.len() as u64) as usize])
 }
@@ -831,19 +831,14 @@ fn play_guide(
     if guide.climax_only && !climax {
         return Vec::new();
     }
-    // Акценты звучат не в каждой фразе, а в некоторых:
-    // крэш — каждый второй стык, лазеры/гимны/чопы — чаще, но тоже
-    // с пропусками. Шаг — фраза (2 такта), а не визит: дырки короткие,
-    // инструменты дышат, а не пропадают на всю секцию.
-    // Конкретный выбор — гейтом сида от номера фразы,
-    // поэтому это вариация сида, а не долбежка из раза в раз.
-    // Фундамент (барабаны, бас, пэды, гитара) играет всегда.
+    // Точечные акценты — аранжировка, а не мигание: присутствуют
+    // целыми секциями (гейт от визита), а не фразами.
     let prior = accent_prior(instrument_id);
     if prior < 1.0
         && fixed_gate(
             song.seed_hash,
             groove_key,
-            song.phrase_index % 64,
+            song.stage % 64,
             0xA66E47
         ) >= prior
     {
@@ -927,10 +922,10 @@ fn play_guide(
             return Vec::new();
         }
     }
-    // Иерархия темы: ведет один (лидер окна), остальные — эхом.
+    // Иерархия темы: ведет один (лидер секции), остальные — эхом.
     // Общий бросок на всех вторящих: эхо звучит вместе, в те же шаги.
-    // Окно 2 фразы — в ногу с лидерством: состав эха не пересдается
-    // чаще, чем меняется лидер.
+    // Соль — визит секции, в ногу с лидерством: состав эха стоит,
+    // пока стоит лидер.
     // Вложенность базовых гейтов цела: разреженный и так подмножество.
     if (guide.follow_motif || force_motif)
         && !theme_lead
@@ -938,7 +933,7 @@ fn play_guide(
             song.seed_hash,
             7777,
             step_in_measure,
-            (song.phrase_index / 2) as u64,
+            song.stage as u64,
         ) >= LEAD_ECHO
     {
         return Vec::new();
@@ -1029,8 +1024,8 @@ fn play_guide(
             };
             let (degree, jitter) = if use_motif {
                 // Живой мотив: тема секции (A везде, B на Drop/PostChorus)
-                // плюс медленная ротация окном (8 фраз — тема стоит
-                // и поется, развивается мгновением, а не пересдается).
+                // плюс окно визита (секции идут подряд — окно едет на шаг,
+                // тема развивается, а не пересдается и не стоит на месте).
                 // ДНК сида сохранена, но дословных повторов нет.
                 // Без транспозиции ответа: терция вверх на нечетных фразах
                 // рассинхронизировала слои (полутоновые стычки до 37% шагов).
@@ -1039,7 +1034,7 @@ fn play_guide(
                 } else {
                     &song.motif
                 };
-                let rot = (song.phrase_index / 8) % theme.len();
+                let rot = song.stage % theme.len();
                 let motif_step =
                     theme[(step_in_measure / 2 + rot) % theme.len()] as usize;
                 (motif_step, 0)
@@ -1057,25 +1052,26 @@ fn play_guide(
                 (d, jitter)
             };
             let drift = if jitter > 0 {
-                // Блуждание тоже фиксировано сидом и окном (4 фразы):
-                // внутри окна та же нота в том же месте, дальше — пересдача.
+                // Блуждание тоже фиксировано сидом и визитом секции:
+                // внутри раздела та же нота в том же месте, дальше —
+                // пересдача на границе (а не посреди песни).
                 (crate::arranger::splitmix64(
                     song.seed_hash
                         ^ (slot_idx as u64).wrapping_mul(0xC0FFEE)
                         ^ (step_in_measure as u64).wrapping_mul(0x9E3779B9)
-                        ^ ((song.phrase_index / 4) as u64).wrapping_mul(0x85EBCA6B)
+                        ^ (song.stage as u64).wrapping_mul(0x85EBCA6B)
                         ^ 0xD1F7,
                 ) % (jitter as u64 + 1)) as usize
             } else {
                 0
             };
-            // Тоника стоит 4 фразы и блуждает детерминированно
-            // (−1/0/+1 по битам хэша окна): локально связно (стоит или
+            // Тоника стоит парами секций и блуждает детерминированно
+            // (−1/0/+1 по битам хэша пары): локально связно (стоит или
             // шаг на ступень), глобально непериодично — скелет мелодии
             // не замыкается в цикл длиной в лад (там было +1 каждую
-            // фразу: период = лад). Окно, а не каждая фраза: тема
-            // не перебивается сменой центра.
-            let tonic = melodic_drift(song.seed_hash, song.phrase_index / 4, scale.len());
+            // фразу: период = лад). Визит, а не фраза: центр не
+            // перебивает тему внутри раздела формы.
+            let tonic = melodic_drift(song.seed_hash, song.stage / 2, scale.len());
             let base = tonic + degree + drift + rotation;
             // Октава общая для тонов аккорда; подъем проверяем по корню.
             let root_idx = base % scale.len();
@@ -1086,27 +1082,28 @@ fn play_guide(
                 // Потолок регистра лидов: выше D6 (86) — ледяной свист,
                 // а не музыка. Берем минимум из гайда и колпака.
                 // Бросок общий на план: подъемы унисоном, а не вразнобой.
-                // Окно 4 фразы: регистр стоит вместе с тоникой.
+                // Визит секции — в ногу с тоникой: регистр стоит весь раздел.
                 && root.saturating_add(12) <= guide.top_pitch.min(86)
                 && fixed_gate(
                     song.seed_hash,
                     groove_key,
                     step_in_measure,
-                    0x0C74 ^ ((song.phrase_index / 4) as u64),
+                    0x0C74 ^ (song.stage as u64),
                 ) < guide.octave_up;
             // Октава темы от сида: мотив и подхват едут вместе.
-            // Окно развития (8 фраз): четные окна — низко, нечетные —
+            // Контраст парами секций: четные пары — низко, нечетные —
             // октавой выше. Куплет/припев регистрами, а не только
-            // громкостью. Верх страхуют колпаки ниже.
+            // громкостью. Граница — граница раздела, не середина песни.
+            // Верх страхуют колпаки ниже.
             let seed_octave = if use_motif {
                 motif_octave(song.seed_hash)
             } else {
                 0
             };
             let window_octave = if use_motif {
-                let w = ((song.phrase_index / 8) % 2) as i8;
+                let w = ((song.stage / 2) % 2) as i8;
                 // Направление — от регистра голоса: фолд 86 съедает сдвиг
-                // вверх у высоких голосов целиком (74+12→86→74: окна
+                // вверх у высоких голосов целиком (74+12→86→74: разделы
                 // звучат одинаково), поэтому высокие уводим вниз.
                 // Правило статично (гайд+сид): унисон не расслаивается.
                 if octave + seed_octave >= 2 { -w } else { w }
@@ -1444,17 +1441,17 @@ mod tests {
 
     #[test]
     fn accents_skip_some_visits() {
-        // Акценты с prior звучат не в каждой фразе, но и не никогда:
-        // вариация сида, а не долбежка и не тишина. Шаг — фраза.
+        // Акценты с prior звучат не в каждой секции, но и не никогда:
+        // аранжировка сида, а не долбежка и не тишина. Шаг — визит.
         let guide = RoleGuide {
             climax_only: true,
             ..RoleGuide::kit(&[1.0; 8], 74, 0.8)
         };
         let mut hits = 0;
-        for phrase in 0..17usize {
+        for stage in 0..17usize {
             let mut song = test_song(0.9);
             song.is_last_measure = true;
-            song.phrase_index = phrase;
+            song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
             if !play_guide(&guide, &[48], &song, 1.0, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, true, &mut rng)
@@ -1463,7 +1460,7 @@ mod tests {
                 hits += 1;
             }
         }
-        assert!(hits > 0 && hits < 17, "laser phrases: {hits}/17");
+        assert!(hits > 0 && hits < 17, "laser sections: {hits}/17");
     }
 
     #[test]
@@ -1604,12 +1601,13 @@ mod tests {
 
     #[test]
     fn motif_skeleton_holds_window_develops_across_windows() {
-        // Общая фраза: соседние фразы делят скелет (окно темы 8 фраз,
-        // тоника 4 фразы) — мелодия цельная, а не пересдается.
-        // Развитие — окнами: фраза 0 vs 8 звучат по-разному,
-        // за 64 фразы в один шаблон не замыкается.
+        // Общая фраза: фразы одного раздела делят скелет (окно темы —
+        // визит секции, тоника — пара визитов) — мелодия цельная,
+        // а не пересдается. Развитие — разделами: фраза 0 vs 8
+        // звучат по-разному, за 64 фразы в один шаблон не замыкается.
         // Кик-роль (id 2): якорь-абсолют, гейтов нет — в кадре
         // чистый скелет высоты без дыхательных пропусков.
+        // Тестовый мир: раздел длится 4 фразы (stage = phrase / 4).
         fn phrase_pitches(phrase: usize) -> Vec<u8> {
             let guide = RoleGuide {
                 weights: &[1.0; 16],
@@ -1619,6 +1617,7 @@ mod tests {
             let scale = [48, 50, 52, 53, 55, 57, 59];
             let mut song = test_song(0.5);
             song.phrase_index = phrase;
+            song.stage = phrase / 4;
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             (0..8)
                 .filter_map(|step| {
@@ -1635,10 +1634,11 @@ mod tests {
         let p0 = phrase_pitches(0);
         assert_eq!(p0.len(), 8);
         assert_eq!(p0, phrase_pitches(0), "same phrase must repeat");
-        assert_eq!(p0, phrase_pitches(1), "neighbor phrases share skeleton");
-        assert_ne!(p0, phrase_pitches(8), "windows must develop");
-        // Развитие без зацикливания: линий за 64 фразы больше,
-        // чем окон ротации (8) — блуждание тоники рвет шаблон.
+        assert_eq!(p0, phrase_pitches(1), "same section shares skeleton");
+        assert_ne!(p0, phrase_pitches(8), "sections must develop");
+        // Развитие без зацикливания: линий за 64 фразы (16 разделов)
+        // больше, чем окон ротации-одиночки — блуждание тоники
+        // рвет шаблон.
         let distinct: std::collections::HashSet<Vec<u8>> =
             (0..64).map(phrase_pitches).collect();
         assert!(
@@ -2433,12 +2433,13 @@ mod tests {
 
     #[test]
     fn theme_leader_rotates_deterministically() {
-        // Лидерство: ротация по фразам (не залипает на одном),
+        // Лидерство: ротация по визитам секций (не залипает на одном),
         // детерминировано, пусто = некому вести, один = всегда он.
+        // Внутри раздела лидер стоит — состав не тасуется.
         use std::collections::HashSet;
         let carriers = vec![6usize, 18];
         let leaders: HashSet<usize> = (0..16usize)
-            .map(|p| theme_leader(&carriers, 42, p).unwrap())
+            .map(|s| theme_leader(&carriers, 42, s).unwrap())
             .collect();
         assert!(leaders.len() > 1, "leadership stuck: {leaders:?}");
         for l in &leaders {
@@ -2455,21 +2456,21 @@ mod tests {
 
     #[test]
     fn window_octave_shifts_theme_by_octave() {
-        // Окно развития (8 фраз): та же линия темы, сдвинутая ровно
+        // Контраст парами секций: та же линия темы, сдвинутая ровно
         // на октаву — куплет/припев регистрами. Плоский мотив: ротация
-        // нейтральна; сдвиг равномерный (форма цела), величина 12
-        // с допуском на дрейф тоники (±2 ступени за 2 шага блуждания).
+        // нейтральна; сдвиг равномерный (форма цела), величина октава
+        // с допуском на дрейф тоники. Разделы 0 vs 2 (разные пары).
         // Направление — от регистра (вниз у высоких): фолд 86 иначе
-        // съедает сдвиг вверх целиком и окна звучат одинаково.
+        // съедает сдвиг вверх целиком и разделы звучат одинаково.
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
             ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
-        let pitches = |phrase: usize| -> Vec<(usize, u8)> {
+        let pitches = |stage: usize| -> Vec<(usize, u8)> {
             let mut song = test_song(0.5);
-            song.phrase_index = phrase;
+            song.stage = stage;
             song.motif = [1; 16];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             (0..16)
@@ -2485,7 +2486,7 @@ mod tests {
                 .collect()
         };
         let a = pitches(0);
-        let b = pitches(8);
+        let b = pitches(2);
         assert!(!a.is_empty() && !b.is_empty(), "theme gone");
         // Сверка по общим звучавшим долям (якорь дышит — пропуски
         // возможны, но их мало и они не рвут линию).

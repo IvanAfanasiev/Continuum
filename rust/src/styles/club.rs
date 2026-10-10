@@ -491,10 +491,10 @@ mod tests {
 
     #[test]
     fn theme_layers_nest_on_shared_beat() {
-        // Общий план + иерархия: в фразах, где ведет формула, плак —
+        // Общий план + иерархия: в разделах, где ведет формула, плак —
         // строго ее подмножество (те же шаги, не своя композиция).
-        // В своих фразах плак ведет сам — там гарантий нет.
-        // Лидерство ротируется: за 512 шагов ведут минимум двое.
+        // В своих разделах плак ведет сам — там гарантий нет.
+        // Лидерство ротируется по визитам: за 1024 шага ведут минимум двое.
         use crate::playback::{FORMULA_ID, PLUCK_ID};
         use std::collections::{HashMap, HashSet};
         let mut checked_total = 0;
@@ -541,25 +541,25 @@ mod tests {
                     } else {
                         continue;
                     };
-                    table.entry(song.phrase_index).or_default().insert(step);
+                    table.entry(song.stage).or_default().insert(step);
                 }
             }
             let mut leaders = HashSet::new();
             let mut checked = 0;
-            for (phrase, psteps) in &pluck {
+            for (stage, psteps) in &pluck {
                 let leader =
-                    super::super::theme_leader(&carriers, seed_hash, *phrase).unwrap();
+                    super::super::theme_leader(&carriers, seed_hash, *stage).unwrap();
                 leaders.insert(leader);
                 if leader == FORMULA_ID {
-                    // Отдыхающую формулу (пустая фраза) пропускаем:
+                    // Отдыхающую формулу (пустой раздел) пропускаем:
                     // подмножество проверяется там, где оба звучат.
-                    let fsteps = formula.get(phrase).cloned().unwrap_or_default();
+                    let fsteps = formula.get(stage).cloned().unwrap_or_default();
                     if fsteps.is_empty() {
                         continue;
                     }
                     assert!(
                         psteps.is_subset(&fsteps),
-                        "seed {seed} phrase {phrase}: pluck strays off the lead"
+                        "seed {seed} stage {stage}: pluck strays off the lead"
                     );
                     checked += psteps.len();
                 }

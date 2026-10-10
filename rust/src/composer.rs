@@ -4,10 +4,10 @@
 //! микшер — активные треки, темп — живую ручку BPM. Все три меняются
 //! на ходу без перезапуска потока.
 //!
-//! Лидер инструментов: каждые 4 фразы один из мелодических слотов
-//! становится громче (лидер), остальные уходят в поддержку. Барабаны
-//! и бас не трогаем — грув стабилен, дышит только верх.
-//! Окно 4 фразы — в ногу с тоникой: баланс не перебивает тему.
+//! Лидер инструментов: на каждый визит секции один из мелодических
+//! слотов становится громче (лидер), остальные уходят в поддержку.
+//! Барабаны и бас не трогаем — грув стабилен, дышит только верх.
+//! Визит, а не фраза: баланс стоит весь раздел формы.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -43,12 +43,12 @@ fn is_melodic(id: usize) -> bool {
 }
 
 /// Выбор лидера среди отсортированных кандидатов: детерминирован
-/// окном из 4 фраз. Меньше двух кандидатов — без лидера.
-pub(crate) fn pick_leader(candidates: &[usize], phrase_index: usize) -> Option<usize> {
+/// визитом секции. Меньше двух кандидатов — без лидера.
+pub(crate) fn pick_leader(candidates: &[usize], stage: usize) -> Option<usize> {
     if candidates.len() < 2 {
         return None;
     }
-    Some(candidates[(phrase_index / 4) % candidates.len()])
+    Some(candidates[stage % candidates.len()])
 }
 
 /// Баланс партий: лидер громче, поддержка тише. Барабаны/бас не трогаем.
@@ -122,8 +122,7 @@ pub struct Composer {
     current_seed: u64,
     step_count: usize,
     last_style_name: String,
-    last_phrase: usize,
-    phrase_ticks: u64,
+    last_stage: usize,
     leader: Option<usize>,
 }
 
@@ -174,7 +173,7 @@ impl Composer {
         };
         let mut arranger = Arranger::with_score(current_seed, score);
         let song = arranger.advance_measure();
-        let last_phrase = song.phrase_index;
+        let last_stage = song.stage;
         Self {
             queue,
             style,
@@ -194,8 +193,7 @@ impl Composer {
             current_seed,
             step_count: 0,
             last_style_name: String::new(),
-            last_phrase,
-            phrase_ticks: 0,
+            last_stage,
             leader: None,
         }
     }
@@ -211,8 +209,7 @@ impl Composer {
         self.arranger = Arranger::with_score(seed, score);
         self.song = self.arranger.advance_measure();
         self.step_count = 0;
-        self.last_phrase = self.song.phrase_index;
-        self.phrase_ticks = 0;
+        self.last_stage = self.song.stage;
         self.leader = None;
     }
 
@@ -287,13 +284,12 @@ impl Composer {
             .copied()
             .filter(|id| is_melodic(*id))
             .collect();
-        // Ротация лидера: каждые 4 новые фразы — новый лидер верха.
-        if self.song.phrase_index != self.last_phrase {
-            self.last_phrase = self.song.phrase_index;
-            self.phrase_ticks += 1;
-            if self.phrase_ticks.is_multiple_of(4) {
-                self.leader = pick_leader(&melodic, self.song.phrase_index);
-            }
+        // Ротация лидера: новый визит секции — новый лидер верха.
+        // Пересчет идемпотентен внутри раздела (лидер от визита),
+        // поэтому состав стоит, а не тасуется.
+        if self.song.stage != self.last_stage {
+            self.last_stage = self.song.stage;
+            self.leader = pick_leader(&melodic, self.song.stage);
         }
 
         let mut sctx = StepContext {
@@ -314,10 +310,10 @@ impl Composer {
         // Живой снимок для визуалайзера: доля такта (стрелка делает
         // оборот за такт, скорость — от BPM) + маски звучавших долей
         // по главным голосам (точки колеса, бит = 16-я доля,
-        // сброс на границе такта). Окно темы — в ногу с движком (8 фраз).
+        // сброс на границе такта). Окно темы — в ногу с движком
+        // (визит секции).
         if let Ok(mut snap) = self.visual.write() {
-            let rot =
-                (self.song.phrase_index / 8) % self.song.motif.len().max(1);
+            let rot = self.song.stage % self.song.motif.len().max(1);
             let pos =
                 (step_in_measure / 2 + rot) % self.song.motif.len().max(1);
             let mut hits = snap.bar_hits;
@@ -435,14 +431,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn leader_rotates_every_four_phrases() {
+    fn leader_rotates_per_section_visit() {
         let candidates = vec![3usize, 6, 7, 11];
-        // Фразы 0–3 → индекс 0; 4–7 → индекс 1; и так далее.
-        // Окно 4 фразы — в ногу с тоникой: баланс не перебивает тему.
+        // Визиты 0,1,2,3 → индексы 0,1,2,3; визит 4 — снова 0.
+        // Лидерство стоит весь раздел формы, меняется на границе.
         assert_eq!(pick_leader(&candidates, 0), Some(3));
-        assert_eq!(pick_leader(&candidates, 3), Some(3));
-        assert_eq!(pick_leader(&candidates, 4), Some(6));
-        assert_eq!(pick_leader(&candidates, 9), Some(7));
+        assert_eq!(pick_leader(&candidates, 1), Some(6));
+        assert_eq!(pick_leader(&candidates, 2), Some(7));
+        assert_eq!(pick_leader(&candidates, 4), Some(3));
         // Меньше двух кандидатов — лидера нет, баланс не трогаем.
         assert_eq!(pick_leader(&[3], 4), None);
         assert_eq!(pick_leader(&[], 4), None);
