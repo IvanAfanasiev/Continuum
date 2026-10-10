@@ -6,25 +6,30 @@ use crate::core::midi_to_freq;
 use std::f32::consts::TAU;
 
 /// Лазерный лид: формульный запитч («pew») через резонансный свип.
-/// Высота падает с 3.5x к ноте, а тембр шагает чистыми отношениями
+/// Высота падает с 2.8x к ноте, а тембр шагает чистыми отношениями
 /// (фонк-строй 1, 10/9, 4/3, 3/2) — математика вместо пил.
-/// Резкий и пронзительный — для взрывных дропов,
-/// запрещен в мягких стилях.
+/// Было 3.5x: старт визжал за гранью строя; 2.8x держит пью
+/// в музыкальной полосе.
 const DETUNE: f32 = 1.004;
-const ZAP_AMOUNT: f32 = 2.5;
+const ZAP_AMOUNT: f32 = 1.8;
 const ZAP_RATE: f32 = 25.0;
 /// Чистые интервалы шага тембра внутри запитча.
 const PHONK_RATIOS: [f32; 4] = [1.0, 10.0 / 9.0, 4.0 / 3.0, 3.0 / 2.0];
 const FILTER_FLOOR_HZ: f32 = 600.0;
 const FILTER_SNAP_HZ: f32 = 4000.0;
 const FILTER_SNAP_RATE: f32 = 15.0;
-const FILTER_Q: f32 = 1.6;
+/// Резонанс укрощен (был 1.6 — свист на верхах): пью читается,
+/// не режет.
+const FILTER_Q: f32 = 1.3;
 const SUB_GAIN: f32 = 0.3;
 const AMP_DECAY_RATE: f32 = 6.0;
 const MAX_RING_SECS: f32 = 0.5;
 const ATTACK_SECS: f32 = 0.001;
 const FADE_SECS: f32 = 0.015;
 const VOICE_GAIN: f32 = 0.55;
+/// Глид между ступенями строя (1/с): запитч ступенчатый,
+/// щелчок переключения сглажен (~14 мс).
+const RATIO_GLIDE_RATE: f32 = 70.0;
 
 #[derive(Clone, Default)]
 pub struct LaserVoice {
@@ -37,6 +42,8 @@ pub struct LaserVoice {
     gain: f32,
     t: f32,
     samples_left: usize,
+    /// Сглаженное отношение строя: глид вместо ступеньки.
+    r_slew: f32,
 }
 
 impl Voice for LaserVoice {
@@ -52,6 +59,7 @@ impl Voice for LaserVoice {
         self.t = 0.0;
         self.phase = 0.0;
         self.phase_sub = 0.0;
+        self.r_slew = 1.0;
         self.filter.reset();
     }
 
@@ -62,7 +70,7 @@ impl Voice for LaserVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        // Запитч вниз: старт в 3.5 раза выше ноты, быстрое падение.
+        // Запитч вниз: старт в 2.8 раза выше ноты, быстрое падение.
         let zap = 1.0 + ZAP_AMOUNT * (-ZAP_RATE * self.t).exp();
         let freq = self.frequency * zap;
 
@@ -75,8 +83,13 @@ impl Voice for LaserVoice {
         self.phase = (self.phase + freq / sample_rate) % 4096.0;
         // Формула вместо пил: пара расстроенных чистых тонов, высота
         // каждого шагает отношениями — запитч с фонк-характером.
-        // Только синусы: алиасинга нет по построению.
-        let r = PHONK_RATIOS[(self.phase * 2.0).floor().rem_euclid(4.0) as usize];
+        // Только синусы: алиасинга нет по построению. Ступенька
+        // отношения глидирует (~14 мс): характер ступеней цел,
+        // щелчок переключения (разрыв фазы) убран.
+        let r_t = PHONK_RATIOS[(self.phase * 2.0).floor().rem_euclid(4.0) as usize];
+        let k = (RATIO_GLIDE_RATE / sample_rate).min(1.0);
+        self.r_slew += (r_t - self.r_slew) * k;
+        let r = self.r_slew;
         let tone = ((TAU * self.phase * r).sin()
             + (TAU * self.phase * r * DETUNE).sin())
             * 0.5;

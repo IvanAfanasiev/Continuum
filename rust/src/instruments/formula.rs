@@ -1,5 +1,5 @@
 use super::{
-    dsp::{release_fade, Svf},
+    dsp::{release_fade, square_blep, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -60,6 +60,10 @@ fn raw(mode: u8, x: f32, tune: u32) -> f32 {
     }
 }
 
+/// Скорость глида между ступенями строя (1/с): ступеньки слышны,
+/// щелчка переключения нет.
+const RATIO_GLIDE_RATE: f32 = 70.0;
+
 #[derive(Clone, Default)]
 pub struct FormulaVoice {
     sample_rate: f32,
@@ -71,6 +75,14 @@ pub struct FormulaVoice {
     tune: u32,
     t: f32,
     samples_left: usize,
+    /// Интегрированная фаза строя (режим 1): частота шагает, фаза
+    /// непрерывна — щелчка на границе полцикла нет.
+    fm_phase: f32,
+    /// Сглаженное отношение строя (режим 1): глид вместо ступеньки.
+    r_slew: f32,
+    /// Сглаженный выход bytebeat (режим 3): ступеньки 6-бит
+    /// квантования давятся питч-трекинг фильтром, характер остается.
+    bb_s: f32,
 }
 
 impl Voice for FormulaVoice {
@@ -87,6 +99,9 @@ impl Voice for FormulaVoice {
         self.velocity = note.velocity;
         self.gain = note.velocity;
         self.t = 0.0;
+        self.fm_phase = 0.0;
+        self.r_slew = 1.0;
+        self.bb_s = 0.0;
         self.filter.reset();
     }
 
@@ -98,7 +113,46 @@ impl Voice for FormulaVoice {
 
         let sample_rate = self.sample_rate;
         let x = self.t * self.frequency;
-        let r = raw(self.mode, x, self.tune);
+        let r = match self.mode {
+            // Эйсид: те же меандры, но бэндлимитные (BLEP) — гармоники
+            // выше Найквиста не foldятся в свист. Уровни как в raw().
+            0 => {
+                let f = self.frequency;
+                let m1 = square_blep(x % 1.0, f, sample_rate) * 0.5 + 0.5;
+                let m2 =
+                    square_blep((x * 2.0) % 1.0, f * 2.0, sample_rate) * 0.5 + 0.5;
+                let m4 =
+                    square_blep((x * 4.0) % 1.0, f * 4.0, sample_rate) * 0.5 + 0.5;
+                (-1.0 + 0.25 * m2 + m4 * m1 + 0.625) * 0.7
+            }
+            // Фонк-строй: отношение глидирует к цели (~14 мс), фаза
+            // интегрируется — ступеньки строя слышны, щелчка нет.
+            1 => {
+                let r_t =
+                    PHONK_RATIOS[(x * 2.0).floor().rem_euclid(4.0) as usize];
+                let k = (RATIO_GLIDE_RATE / sample_rate).min(1.0);
+                self.r_slew += (r_t - self.r_slew) * k;
+                self.fm_phase =
+                    (self.fm_phase + self.frequency * self.r_slew / sample_rate)
+                        % 1.0;
+                (TAU * self.fm_phase).sin()
+            }
+            // Bytebeat: 6-битные ступеньки сглажены однополюсником
+            // со срезом от высоты (8×freq, потолок 12 кГц) — чиптюн
+            // остается, ультразвуковые ступени и фолдбек уходят.
+            // Срез ниже (4×) душил уровень на низах: ступени несут
+            // энергию волны, давим только ультразвук.
+            // Коэффициент — точный (1−e^(−..)), а не линейный: линейный
+            // давал k≥1 на верхах и фильтр не работал вовсе.
+            3 => {
+                let step = raw(3, x, self.tune);
+                let cut = (self.frequency * 8.0).min(12000.0);
+                let k = 1.0 - (-TAU * cut / sample_rate).exp();
+                self.bb_s += (step - self.bb_s) * k;
+                self.bb_s
+            }
+            _ => raw(self.mode, x, self.tune),
+        };
 
         // Велосити открывает фильтр: тихие ноты темнее, громкие злее.
         let cutoff =

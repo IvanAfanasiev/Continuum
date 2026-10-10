@@ -17,9 +17,18 @@ const AMP_DECAY_RATE: f32 = 3.5;
 const SUSTAIN_LEVEL: f32 = 0.55;
 const FADE_SECS: f32 = 0.08;
 const VOICE_GAIN: f32 = 0.65;
-/// Полирующий lowpass: срезает цифровой блеск FM-боковых на самом верху.
+/// Полирующий lowpass: срез держит постоянное число гармоник
+/// (12×freq, потолок 9.5 кГц) — цифровой блеск FM-боковых давят
+/// у высоких нот, низкие не темнеют.
 const POLISH_HZ: f32 = 9500.0;
 const POLISH_Q: f32 = 0.7;
+const POLISH_HARMS: f32 = 12.0;
+const POLISH_FLOOR_HZ: f32 = 1800.0;
+/// Молоточек гаснет кверху: tine 3.98× на высоких нотах уходит
+/// за Найквист и foldится — гейн тает выше 3 кГц звона.
+const TINE_FULL_HZ: f32 = 3000.0;
+const TINE_GONE_HZ: f32 = 6000.0;
+const TINE_FLOOR: f32 = 0.15;
 
 /// Голос электро-пиано в духе Rhodes: FM-корпус с затухающим индексом
 /// (атака «кусается», сустейн — чистый синус) + металлический «tine»
@@ -55,8 +64,16 @@ impl Voice for KeysVoice {
         self.frequency = midi_to_freq(note.midi_pitch);
         self.samples_left = (note.duration_secs * self.sample_rate).max(1.0) as usize;
         self.gain = note.velocity;
-        self.index_start = 1.2 + 3.0 * note.velocity;
-        self.tine_gain = 0.12 + 0.45 * note.velocity;
+        // FM-индекс укушен сверху (макс 2.8 вместо 4.2): боковые
+        // держатся в полосе полировки, фолдбек не свистит.
+        // Лай молоточка цел — кусачесть остается.
+        self.index_start = 1.2 + 1.6 * note.velocity;
+        // Звон молоточка тает с высотой: наверху tine foldится.
+        let tine_hz = self.frequency * TINE_RATIO;
+        let tine_fade = ((TINE_GONE_HZ - tine_hz)
+            / (TINE_GONE_HZ - TINE_FULL_HZ))
+        .clamp(TINE_FLOOR, 1.0);
+        self.tine_gain = (0.12 + 0.45 * note.velocity) * tine_fade;
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
         self.hp.reset();
@@ -100,7 +117,12 @@ impl Voice for KeysVoice {
         let raw = (body * 0.75 + tine) * self.gain * amp * attack * fade * tremolo;
         // High-pass 180 Гц: низ под Rhodes вырезан, место басу и бочке.
         let (_, _, hipped) = self.hp.process(raw, HP_HZ, 0.7, sample_rate);
-        let (polished, _, _) = self.polish.process(hipped, POLISH_HZ, POLISH_Q, sample_rate);
+        // Полировка от высоты: постоянное число гармоник вместо
+        // фиксированных 9.5 кГц — верхние ноты не свистят.
+        let polish_cut = (self.frequency * POLISH_HARMS)
+            .clamp(POLISH_FLOOR_HZ, POLISH_HZ);
+        let (polished, _, _) =
+            self.polish.process(hipped, polish_cut, POLISH_Q, sample_rate);
         polished * VOICE_GAIN
     }
 
