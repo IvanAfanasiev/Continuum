@@ -980,16 +980,11 @@ fn play_guide(
                     shift
                 }
             };
-            // Вопрос-ответ: нечетные фразы отвечают транспозицией темы
-            // на терцию вверх — та же тема, другое дыхание.
-            let answer = if use_motif && song.phrase_index % 2 == 1 {
-                2
-            } else {
-                0
-            };
             let (degree, jitter) = if use_motif {
                 // Живой мотив: тема секции (A везде, B на Drop/PostChorus)
                 // плюс ротация окном фразы. ДНК сида сохранена, но дословных повторов нет.
+                // Без транспозиции ответа: терция вверх на нечетных фразах
+                // рассинхронизировала слои (полутоновые стычки до 37% шагов).
                 let theme = if song.use_alt_motif {
                     &song.motif_b
                 } else {
@@ -998,7 +993,7 @@ fn play_guide(
                 let rot = song.phrase_index % theme.len();
                 let motif_step =
                     theme[(step_in_measure / 2 + rot) % theme.len()] as usize;
-                (motif_step + answer, 0)
+                (motif_step, 0)
             } else {
                 let mut d = (degree + prog_shift) % scale.len().max(1);
                 // Квинтовый бас: оффбитные восьмые ходят на квинту —

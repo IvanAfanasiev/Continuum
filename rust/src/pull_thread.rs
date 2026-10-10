@@ -128,6 +128,12 @@ pub(crate) fn thread_start() {
     // След первого шага: виден ли вообще запуск (spawn мог молча
     // не состояться — тогда тишина без единой строчки).
     diag_push(format!("{} thread_start requested", diag_now()));
+    // Прошлый захват не должен душить новый: оборванный стопом файл
+    // закрываем и забываем (иначе кнопка мертва навсегда).
+    {
+        let mut guard = CAPTURE.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
     let gen = GEN.fetch_add(1, Ordering::Relaxed) + 1;
     if std::thread::Builder::new()
         .name("cont-audio".to_string())
@@ -414,6 +420,15 @@ fn audio_loop(gen: u64) {
         let _ = env.call_method(&track_global, jni::jni_str!("pause"), jni::jni_sig!("()V"), &[]);
         let _ = env.call_method(&track_global, jni::jni_str!("flush"), jni::jni_sig!("()V"), &[]);
         let _ = env.call_method(&track_global, jni::jni_str!("release"), jni::jni_sig!("()V"), &[]);
+        // Незаконченный захват закрываем: файл целый (сколько успели),
+        // слот свободен для следующего.
+        {
+            let mut guard = CAPTURE.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.is_some() {
+                *guard = None;
+                diag_push(format!("{} capture closed on stop", diag_now()));
+            }
+        }
         Ok(())
     });
     if let Err(e) = res {
