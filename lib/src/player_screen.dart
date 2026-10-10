@@ -535,7 +535,9 @@ class _DiagPanelState extends State<_DiagPanel> {
     if (!mounted) return;
     try {
       final alive = await widget.bridge.pullActive();
-      final lines = alive ? await widget.bridge.diagLog() : const <String>[];
+      // Строки забираем всегда: посмертный диагноз мертвого потока
+      // важнее, чем скрытие пустоты.
+      final lines = await widget.bridge.diagLog();
       if (!mounted) return;
       setState(() {
         _alive = alive;
