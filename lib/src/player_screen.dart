@@ -633,10 +633,12 @@ class _DiagPanelState extends State<_DiagPanel> {
   }
 }
 
-/// Круговой график мотива: 16 ступеней темы точками на круге
-/// (радиус — высота ступени), текущая подсвечена, стрелка — доля такта,
-/// свечение центра — энергия. Живые данные из движка, опрос 10 Гц
-/// только пока играет и виден график.
+/// Круговой график такта: 16 долей такта точками на круге
+/// (звучавшая доля светится, немая — едва видимая риска),
+/// стрелка делает оборот за такт (скорость — от BPM композитора),
+/// текущая доля под стрелкой подсвечена (рука «играет» ноты),
+/// свечение центра — энергия. Живые данные из движка, опрос 4 Гц
+/// + экстраполяция 20 Гц между опросами, только пока играет и виден график.
 class _MotifWheel extends StatefulWidget {
   const _MotifWheel({required this.controller});
 
@@ -709,11 +711,11 @@ class _MotifWheelState extends State<_MotifWheel> {
   @override
   Widget build(BuildContext context) {
     final v = _frame;
-    // Подсветка — текущая доля такта (куда указывает стрелка),
-    // а не индекс темы: тема движется вдвое медленнее руки.
+    // Подсветка — доля под стрелкой (рука «играет» ноты):
+    // индекс слота из фазы такта, точки — звучавшие доли.
     final pos = (v == null)
         ? 0
-        : ((_smoothPhase() * v.motif.length).floor() % v.motif.length);
+        : ((_smoothPhase() * 16).floor() % 16);
     return Container(
       color: Colors.black,
       child: Center(
@@ -725,7 +727,7 @@ class _MotifWheelState extends State<_MotifWheel> {
               height: 280,
               child: CustomPaint(
                 painter: _WheelPainter(
-                  motif: v?.motif ?? List.filled(16, 0),
+                  hits: v?.barHits ?? 0,
                   pos: pos,
                   phase: _smoothPhase(),
                   energy: v?.energy ?? 0.0,
@@ -748,13 +750,14 @@ class _MotifWheelState extends State<_MotifWheel> {
 
 class _WheelPainter extends CustomPainter {
   _WheelPainter({
-    required this.motif,
+    required this.hits,
     required this.pos,
     required this.phase,
     required this.energy,
   });
 
-  final List<int> motif;
+  /// Битовая маска звучавших долей такта (бит = 16-я доля).
+  final int hits;
   final int pos;
   final double phase;
   final double energy;
@@ -763,7 +766,7 @@ class _WheelPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final r = size.shortestSide / 2 * 0.92;
-    final n = motif.length;
+    const n = 16;
 
     // Обод круга.
     canvas.drawCircle(
@@ -783,7 +786,7 @@ class _WheelPainter extends CustomPainter {
       Paint()..color = const Color(0x22FFB300),
     );
 
-    // Стрелка такта.
+    // Стрелка такта: оборот за такт.
     final a = phase * 6.2831853 - 1.5707963;
     canvas.drawLine(
       center,
@@ -793,20 +796,29 @@ class _WheelPainter extends CustomPainter {
         ..color = const Color(0x66FFFFFF),
     );
 
-    // Узлы строго на круге (как в референсе): высота ступени —
-    // размером и яркостью точки, а не радиусом.
+    // Доли такта на круге: звучавшая светится, текущая под стрелкой —
+    // ярче всех (рука «играет» ноту, проходя мимо).
     for (var i = 0; i < n; i++) {
-      final deg = (i < motif.length ? motif[i] : 0).clamp(0, 6);
       final ang = i / n * 6.2831853 - 1.5707963;
       final p = center + Offset(r * math.cos(ang), r * math.sin(ang));
+      final sounded = (hits & (1 << i)) != 0;
       final cur = i == pos % n;
-      final bright = 0x66 + (deg * 0x22).clamp(0, 0x99);
+      if (!sounded && !cur) {
+        // Немая доля — едва видимая риска.
+        canvas.drawCircle(
+          p,
+          1.5,
+          Paint()..color = const Color(0x22FFFFFF),
+        );
+        continue;
+      }
       canvas.drawCircle(
         p,
-        (cur ? 5.0 : 2.5) + deg * 0.5,
-        Paint()..color = cur
-            ? const Color(0xFFFFB300)
-            : Color.fromARGB(0xFF, bright, bright, bright),
+        cur ? 6.0 : 3.5,
+        Paint()
+          ..color = cur
+              ? const Color(0xFFFFB300)
+              : const Color(0xCCFFFFFF),
       );
     }
   }

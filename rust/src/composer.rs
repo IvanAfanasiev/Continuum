@@ -74,6 +74,9 @@ pub struct VisualSnap {
     pub motif_pos: u8,
     /// Доля такта 0..1 (стрелка круга).
     pub step_phase: f32,
+    /// Маска звучавших долей такта (бит = 16-я доля): точки инструментов.
+    /// Сбрасывается на границе такта.
+    pub bar_hits: u16,
 }
 
 /// Номер секции для снимка (порядок объявления SongSection).
@@ -299,12 +302,20 @@ impl Composer {
         let effective = self.leader.filter(|l| melodic.contains(l));
         apply_leader_balance(&mut notes, effective);
 
-        // Живой снимок для визуалайзера: позиция темы на этом шаге
-        // повторяет окно фразы из render_style (шаг/2 + ротация).
+        // Живой снимок для визуалайзера: доля такта (стрелка делает
+        // оборот за такт, скорость — от BPM) + маска звучавших долей
+        // (точки инструментов, бит = 16-я доля, сброс на границе такта).
         if let Ok(mut snap) = self.visual.write() {
             let rot = self.song.phrase_index % self.song.motif.len().max(1);
             let pos =
                 (step_in_measure / 2 + rot) % self.song.motif.len().max(1);
+            let mut hits = snap.bar_hits;
+            if step_in_measure == 0 {
+                hits = 0;
+            }
+            if !notes.is_empty() {
+                hits |= 1u16 << step_in_measure.min(15);
+            }
             *snap = VisualSnap {
                 section: section_index(self.song.section),
                 energy: self.song.energy,
@@ -312,6 +323,7 @@ impl Composer {
                 motif_pos: pos as u8,
                 step_phase: step_in_measure as f32
                     / steps_per_measure.max(1) as f32,
+                bar_hits: hits,
             };
         }
 

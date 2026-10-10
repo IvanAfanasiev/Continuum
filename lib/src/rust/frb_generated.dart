@@ -1069,14 +1069,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LiveVisual dco_decode_live_visual(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return LiveVisual(
       barPhase: dco_decode_f_32(arr[0]),
       energy: dco_decode_f_32(arr[1]),
       section: dco_decode_u_8(arr[2]),
       motif: dco_decode_list_prim_u_8_strict(arr[3]),
       motifPos: dco_decode_u_8(arr[4]),
+      barHits: dco_decode_u_16(arr[5]),
     );
   }
 
@@ -1131,6 +1132,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       volume: dco_decode_f_32(arr[4]),
       baseVolume: dco_decode_f_32(arr[5]),
     );
+  }
+
+  @protected
+  int dco_decode_u_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -1273,12 +1280,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_section = sse_decode_u_8(deserializer);
     var var_motif = sse_decode_list_prim_u_8_strict(deserializer);
     var var_motifPos = sse_decode_u_8(deserializer);
+    var var_barHits = sse_decode_u_16(deserializer);
     return LiveVisual(
       barPhase: var_barPhase,
       energy: var_energy,
       section: var_section,
       motif: var_motif,
       motifPos: var_motifPos,
+      barHits: var_barHits,
     );
   }
 
@@ -1343,6 +1352,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       volume: var_volume,
       baseVolume: var_baseVolume,
     );
+  }
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint16();
   }
 
   @protected
@@ -1483,6 +1498,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_8(self.section, serializer);
     sse_encode_list_prim_u_8_strict(self.motif, serializer);
     sse_encode_u_8(self.motifPos, serializer);
+    sse_encode_u_16(self.barHits, serializer);
   }
 
   @protected
@@ -1528,6 +1544,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.group, serializer);
     sse_encode_f_32(self.volume, serializer);
     sse_encode_f_32(self.baseVolume, serializer);
+  }
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint16(self);
   }
 
   @protected

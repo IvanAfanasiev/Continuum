@@ -1091,12 +1091,14 @@ impl SseDecode for crate::playback::LiveVisual {
         let mut var_section = <u8>::sse_decode(deserializer);
         let mut var_motif = <Vec<u8>>::sse_decode(deserializer);
         let mut var_motifPos = <u8>::sse_decode(deserializer);
+        let mut var_barHits = <u16>::sse_decode(deserializer);
         return crate::playback::LiveVisual {
             bar_phase: var_barPhase,
             energy: var_energy,
             section: var_section,
             motif: var_motif,
             motif_pos: var_motifPos,
+            bar_hits: var_barHits,
         };
     }
 }
@@ -1167,6 +1169,13 @@ impl SseDecode for crate::playback::TrackInfo {
             volume: var_volume,
             base_volume: var_baseVolume,
         };
+    }
+}
+
+impl SseDecode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u16::<NativeEndian>().unwrap()
     }
 }
 
@@ -1362,6 +1371,7 @@ impl flutter_rust_bridge::IntoDart for crate::playback::LiveVisual {
             self.section.into_into_dart().into_dart(),
             self.motif.into_into_dart().into_dart(),
             self.motif_pos.into_into_dart().into_dart(),
+            self.bar_hits.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1548,6 +1558,7 @@ impl SseEncode for crate::playback::LiveVisual {
         <u8>::sse_encode(self.section, serializer);
         <Vec<u8>>::sse_encode(self.motif, serializer);
         <u8>::sse_encode(self.motif_pos, serializer);
+        <u16>::sse_encode(self.bar_hits, serializer);
     }
 }
 
@@ -1593,6 +1604,13 @@ impl SseEncode for crate::playback::TrackInfo {
         <String>::sse_encode(self.group, serializer);
         <f32>::sse_encode(self.volume, serializer);
         <f32>::sse_encode(self.base_volume, serializer);
+    }
+}
+
+impl SseEncode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u16::<NativeEndian>(self).unwrap();
     }
 }
 

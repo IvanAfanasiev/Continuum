@@ -83,12 +83,16 @@ class LiveVisual {
   final Uint8List motif;
   final int motifPos;
 
+  /// Маска звучавших долей такта (бит = 16-я доля).
+  final int barHits;
+
   const LiveVisual({
     required this.barPhase,
     required this.energy,
     required this.section,
     required this.motif,
     required this.motifPos,
+    required this.barHits,
   });
 
   @override
@@ -97,7 +101,8 @@ class LiveVisual {
       energy.hashCode ^
       section.hashCode ^
       motif.hashCode ^
-      motifPos.hashCode;
+      motifPos.hashCode ^
+      barHits.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -108,7 +113,8 @@ class LiveVisual {
           energy == other.energy &&
           section == other.section &&
           motif == other.motif &&
-          motifPos == other.motifPos;
+          motifPos == other.motifPos &&
+          barHits == other.barHits;
 }
 
 /// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.

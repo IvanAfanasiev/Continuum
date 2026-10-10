@@ -119,6 +119,8 @@ pub struct LiveVisual {
     pub section: u8,
     pub motif: Vec<u8>,
     pub motif_pos: u8,
+    /// Маска звучавших долей такта (бит = 16-я доля).
+    pub bar_hits: u16,
 }
 
 impl Default for LiveVisual {
@@ -129,6 +131,7 @@ impl Default for LiveVisual {
             section: 0,
             motif: vec![0u8; 16],
             motif_pos: 0,
+            bar_hits: 0,
         }
     }
 }
@@ -906,6 +909,7 @@ impl PlaybackController {
                 section: v.section,
                 motif: v.motif.to_vec(),
                 motif_pos: v.motif_pos,
+                bar_hits: v.bar_hits,
             },
             None => LiveVisual::default(),
         }
@@ -1549,8 +1553,8 @@ mod tests {
 
     #[test]
     fn live_visual_tracks_song() {
-        // Снимок для визуалайзера: живая сессия отдает мотив/энергию,
-        // после стопа — нули без паники.
+        // Снимок для визуалайзера: живая сессия отдает фазу такта,
+        // энергию и маску звучавших долей; после стопа — нули без паники.
         let c = PlaybackController::new();
         c.start("club", 11, false);
         std::thread::sleep(Duration::from_millis(400));
@@ -1559,6 +1563,7 @@ mod tests {
         assert!(v.energy > 0.0, "snapshot stuck at default");
         assert!((0.0..=1.0).contains(&v.bar_phase));
         assert!(v.motif_pos < 16);
+        assert_ne!(v.bar_hits, 0, "no sounded steps in snapshot");
         let _ = c.stop();
         let v = c.live_visual();
         assert_eq!(v.energy, 0.0);
