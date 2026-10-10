@@ -229,14 +229,16 @@ impl Style for ClubStyle {
             vel_base: 0.45,
             vel_energy: 0.3,
             vel_jitter: 0.07,
+            // Унисон темы: носители поют те же ступени (джиттер 0) —
+            // цельная мелодия, краски различают тембры, а не высоты.
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 2,
-                jitter: 1,
+                jitter: 0,
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 1, 1.6, 0.45)
+            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 1.6, 0.45)
         };
         let keys = RoleGuide {
             // Гость-текучка, а не рубильник: ровное присутствие
@@ -275,11 +277,11 @@ impl Style for ClubStyle {
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 2,
-                jitter: 1,
+                jitter: 0,
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 1, 1.0, 0.5)
+            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 1.0, 0.5)
         };
         // Хор deep house: редкие долгие «ah→oh» в эхе, сидят сзади.
         // Только для ручного включения и редкого гостя: в битмейкере
@@ -325,11 +327,11 @@ impl Style for ClubStyle {
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 2,
-                jitter: 1,
+                jitter: 0,
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 1, 0.8, 0.5)
+            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 0.8, 0.5)
         };
         // Чужие мелодические/текстуры: разреженные направляющие.
         let guitar = RoleGuide {
@@ -380,14 +382,16 @@ impl Style for ClubStyle {
             vel_base: 0.5,
             vel_energy: 0.3,
             vel_jitter: 0.07,
+            // Чистая терция без джиттера: консонанс всегда,
+            // секунды от независимых блужданий исключены.
             voice: Voicing::Scale {
                 degree: 2,
                 octave: 2,
-                jitter: 1,
+                jitter: 0,
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 2, 2, 1, 1.6, 0.5)
+            ..RoleGuide::pitched(LEAD_W, 2, 2, 0, 1.6, 0.5)
         };
         // Вейвтейбл вне автомикса: ручная краска для фронта.
         let wavetable = RoleGuide {

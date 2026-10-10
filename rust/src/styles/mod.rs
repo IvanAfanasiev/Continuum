@@ -958,9 +958,29 @@ fn play_guide(
     // Длительность — от сида: одни сиды протяжнее, другие отрывистее.
     let quarter = steps_per_measure / 4;
     let long = guide.long_offbeats && quarter > 0 && step_in_measure % quarter == quarter / 2;
+    // Фразировка темы: сильные доли поют (длинные ноты), слабые —
+    // коротко. Общая для всех носителей (чистая функция шага):
+    // унисон держит и ритм. Мелодия дышит длинно-коротко, а не стучит
+    // 8-ми одинаковой длины (замер: 1–2 длительности на стиль).
+    let theme_phrase = if guide.follow_motif || force_motif {
+        if step_in_measure == 0 {
+            3.0
+        } else if step_in_measure == steps_per_measure / 2 {
+            2.6
+        } else {
+            match step_in_measure % 4 {
+                0 => 2.0,
+                2 => 0.9,
+                _ => 1.3,
+            }
+        }
+    } else {
+        1.0
+    };
     let duration = base_step_secs
         * guide.duration_mult
         * duration_shape(song.seed_hash, slot_idx)
+        * theme_phrase
         * if long { guide.long_mult } else { 1.0 };
 
     // Ударные: одиночная нота фиксированного питча, коротким путем.
@@ -1075,13 +1095,28 @@ fn play_guide(
                     0x0C74 ^ ((song.phrase_index / 4) as u64),
                 ) < guide.octave_up;
             // Октава темы от сида: мотив и подхват едут вместе.
-            // Верх страхует колпак ниже.
+            // Окно развития (8 фраз): четные окна — низко, нечетные —
+            // октавой выше. Куплет/припев регистрами, а не только
+            // громкостью. Верх страхуют колпаки ниже.
             let seed_octave = if use_motif {
                 motif_octave(song.seed_hash)
             } else {
                 0
             };
-            (base, octave + if bump { 1 } else { 0 } + seed_octave)
+            let window_octave = if use_motif {
+                let w = ((song.phrase_index / 8) % 2) as i8;
+                // Направление — от регистра голоса: фолд 86 съедает сдвиг
+                // вверх у высоких голосов целиком (74+12→86→74: окна
+                // звучат одинаково), поэтому высокие уводим вниз.
+                // Правило статично (гайд+сид): унисон не расслаивается.
+                if octave + seed_octave >= 2 { -w } else { w }
+            } else {
+                0
+            };
+            (
+                base,
+                octave + if bump { 1 } else { 0 } + seed_octave + window_octave,
+            )
         }
     };
 
@@ -2416,6 +2451,65 @@ mod tests {
         );
         assert_eq!(theme_leader(&[], 42, 0), None);
         assert_eq!(theme_leader(&[6], 42, 9), Some(6));
+    }
+
+    #[test]
+    fn window_octave_shifts_theme_by_octave() {
+        // Окно развития (8 фраз): та же линия темы, сдвинутая ровно
+        // на октаву — куплет/припев регистрами. Плоский мотив: ротация
+        // нейтральна; сдвиг равномерный (форма цела), величина 12
+        // с допуском на дрейф тоники (±2 ступени за 2 шага блуждания).
+        // Направление — от регистра (вниз у высоких): фолд 86 иначе
+        // съедает сдвиг вверх целиком и окна звучат одинаково.
+        let guide = RoleGuide {
+            weights: &[1.0; 16],
+            follow_motif: true,
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+        };
+        let scale = [48, 50, 52, 53, 55, 57, 59];
+        let pitches = |phrase: usize| -> Vec<(usize, u8)> {
+            let mut song = test_song(0.5);
+            song.phrase_index = phrase;
+            song.motif = [1; 16];
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            (0..16)
+                .filter_map(|sim| {
+                    play_guide(
+                        &guide, &scale, &song, 1.0, sim, 16, 0.1, 6, 5,
+                        1.0, false, false, 0, false, true, &mut rng,
+                    )
+                    .into_iter()
+                    .next()
+                    .map(|n| (sim, n.midi_pitch))
+                })
+                .collect()
+        };
+        let a = pitches(0);
+        let b = pitches(8);
+        assert!(!a.is_empty() && !b.is_empty(), "theme gone");
+        // Сверка по общим звучавшим долям (якорь дышит — пропуски
+        // возможны, но их мало и они не рвут линию).
+        let shared: Vec<(u8, u8)> = a
+            .iter()
+            .filter_map(|(s, p)| {
+                b.iter().find(|(t, _)| t == s).map(|(_, q)| (*p, *q))
+            })
+            .collect();
+        assert!(
+            shared.len() >= 12,
+            "window lost notes: {} shared",
+            shared.len()
+        );
+        let shift = shared[0].1 as i16 - shared[0].0 as i16;
+        // Величина — октава ± дрейф тоники (2 шага блуждания — не больше
+        // ±2 ступеней ≈ ±4 полутона). Для сида 42 выходит −9.
+        assert!(
+            (8..=16).contains(&shift.abs()),
+            "window must move ~an octave, got {shift}: {a:?} -> {b:?}"
+        );
+        for (x, y) in &shared {
+            assert_eq!(*y as i16 - *x as i16, shift, "shape bent");
+        }
     }
 
     #[test]
