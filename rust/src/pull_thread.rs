@@ -267,14 +267,9 @@ fn audio_loop(gen: u64) {
                 &[JValue::Int(1)],
             )?
             .l()?;
-        let track_builder = env
-            .call_method(
-                &track_builder,
-                jni::jni_str!("setPerformanceMode"),
-                jni::jni_sig!("(I)Landroid/media/AudioTrack$Builder;"),
-                &[JValue::Int(10)],
-            )?
-            .l()?;
+        // setPerformanceMode НЕ ставим: на части устройств любое
+        // значение кроме дефолта кидает IllegalArgument ("Invalid
+        // performance mode") и убивает поток. Дефолт играет везде.
         let track = env
             .call_method(
                 &track_builder,
