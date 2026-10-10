@@ -299,6 +299,7 @@ fn audio_loop(gen: u64) {
             render_ms_total: 0,
             pending_max: 0,
         };
+        let mut last_summary = Instant::now();
         let controller = crate::api::playback::shared_controller();
         while alive() {
             let t0 = Instant::now();
@@ -318,13 +319,41 @@ fn audio_loop(gen: u64) {
             } else if counters.chunks % 100 == 0 {
                 let avg = counters.render_ms_total / counters.chunks.max(1);
                 let queued = controller.engine_stats().queued;
+                // Состояние трека и реальный темп: чанков в секунду
+                // в разы больше 10 — запись нигде не тормозит
+                // (трек не потребляет). 3 = PLAYING.
+                let elapsed = last_summary.elapsed().as_secs_f32().max(0.01);
+                last_summary = Instant::now();
+                let rate = 100.0 / elapsed;
+                let play_state: i32 = env
+                    .call_method(
+                        &track_global,
+                        jni::jni_str!("getPlayState"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )
+                    .map(|v| v.i().unwrap_or(-99))
+                    .unwrap_or(-99);
                 diag_push(format!(
-                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={})",
+                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0f}/s playstate={play_state})",
                     diag_now(),
                     counters.slow,
                     counters.pending_max
                 ));
                 counters.pending_max = 0;
+                if play_state != 3 {
+                    // Трек не играет: толкаем play снова.
+                    diag_push(format!(
+                        "{} track not playing ({play_state}), replay",
+                        diag_now()
+                    ));
+                    let _ = env.call_method(
+                        &track_global,
+                        jni::jni_str!("play"),
+                        jni::jni_sig!("()V"),
+                        &[],
+                    );
+                }
             }
             if pcm.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(200));
