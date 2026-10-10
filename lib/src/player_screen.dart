@@ -667,30 +667,50 @@ class _MotifWheelState extends State<_MotifWheel> {
   int _patTheme = 0;
   bool _havePattern = false;
   double _prevPollPhase = 0.0;
+  // Маски прошлого опроса: в момент оборота backend уже сбросил
+  // свои маски — партитурой становится ПРОШЛЫЙ (почти полный)
+  // такт, а не свежий сброшенный (иначе остаются точки только
+  // на 12 часах).
+  int _prevKick = 0;
+  int _prevSnare = 0;
+  int _prevBass = 0;
+  int _prevTheme = 0;
+
+  /// Сглаженная фаза руки 0..1: тянется к цели (якорь + время × BPM),
+  /// а не прыгает на нее — свингованные 16-е дышат внутри такта,
+  /// опрос это видит с опозданием; тянучка ~120мс съедает щелчки.
+  double _display = 0.0;
 
   double _bpm() =>
       (widget.controller.status?.tempoBpm ?? 126).toDouble();
 
   static const _sections = ['Main', 'Build', 'Drop', 'Post'];
 
-  /// Плавная фаза руки: якорь + прошедшее время × скорость BPM.
-  double _handPhase() {
-    final elapsed =
-        DateTime.now().difference(_anchorT).inMilliseconds / 1000.0;
-    return (_anchorP + elapsed * _bpm() / 240.0) % 1.0;
-  }
-
   @override
   void initState() {
     super.initState();
     _anchorT = DateTime.now();
-    // Тик 50мс: рука интерполируется каждый тик (20 Гц), опрос движка
-    // раз в 5 тиков ставит якорь и отдает маски голосов.
+    // Тик 50мс: рука тянется к цели каждый тик (20 Гц, плавно),
+    // опрос движка раз в 5 тиков ставит якорь и отдает маски.
     var n = 0;
     _ticker = Timer.periodic(const Duration(milliseconds: 50), (_) async {
       if (!mounted) return;
       final running =
           widget.controller.running && !widget.controller.paused;
+      if (running) {
+        // Цель: якорь + прошедшее время × скорость BPM (оборот за такт).
+        final elapsed =
+            DateTime.now().difference(_anchorT).inMilliseconds / 1000.0;
+        final target = (_anchorP + elapsed * _bpm() / 240.0) % 1.0;
+        var d = (target - _display) % 1.0;
+        if (d > 0.5) d -= 1.0;
+        if (d.abs() > 0.25) {
+          // Смена сида/стиля — прыгаем сразу, тянуть нечего.
+          _display = target;
+        } else {
+          _display = (_display + d * 0.4) % 1.0;
+        }
+      }
       n++;
       if (n % 5 != 0 || !running) {
         setState(() {});
@@ -704,15 +724,19 @@ class _MotifWheelState extends State<_MotifWheel> {
             // Якорь руки — каждый опрос: дрейфу негде копиться.
             _anchorP = v.barPhase;
             _anchorT = DateTime.now();
-            // Граница такта (фаза обернулась) — фиксируем узор:
-            // почти полный такт становится партитурой следующего.
+            // Граница такта (фаза обернулась): партитурой становится
+            // прошлый опрос (почти полный такт).
             if (v.barPhase < _prevPollPhase - 0.5) {
-              _patKick = v.kickHits;
-              _patSnare = v.snareHits;
-              _patBass = v.bassHits;
-              _patTheme = v.themeHits;
+              _patKick = _prevKick;
+              _patSnare = _prevSnare;
+              _patBass = _prevBass;
+              _patTheme = _prevTheme;
               _havePattern = true;
             }
+            _prevKick = v.kickHits;
+            _prevSnare = v.snareHits;
+            _prevBass = v.bassHits;
+            _prevTheme = v.themeHits;
             _prevPollPhase = v.barPhase;
           });
         }
@@ -731,10 +755,8 @@ class _MotifWheelState extends State<_MotifWheel> {
   @override
   Widget build(BuildContext context) {
     final v = _frame;
-    final running =
-        widget.controller.running && !widget.controller.paused;
-    // На паузе рука стоит на якоре, при игре — интерполируется.
-    final hand = running ? _handPhase() : _anchorP;
+    // Рука — сглаженная фаза из тикера (на паузе стоит сама).
+    final hand = _display;
     final bpm = _bpm();
     final barSecs = 240.0 / bpm;
     // Точки — узор прошлого такта (стоит весь такт); пока его нет —
