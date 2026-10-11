@@ -635,10 +635,10 @@ class _DiagPanelState extends State<_DiagPanel> {
 
 /// Круговой график-партитура: 4 орбиты главных голосов (кик снаружи,
 /// тема внутри), точки — доли голоса за такт на своих местах.
-/// Узор прошлого такта стоит весь такт (число точек — голос и энергия),
-/// рука интерполируется от якоря движка с точной скоростью BPM
-/// и «играет» точки: близкая к стрелке пульсирует.
-/// Ход 20 Гц, опрос 4 Гц. Только пока играет и виден график.
+/// Маски живые: точка загорается в момент звучания под рукой
+/// (опоздание опроса ~0.1с, не круг). Рука интерполируется от якоря
+/// движка с точной скоростью BPM и «играет» точки: близкая к стрелке
+/// пульсирует. Ход 20 Гц, опрос 10 Гц. Только пока играет и виден график.
 class _MotifWheel extends StatefulWidget {
   const _MotifWheel({required this.controller});
 
@@ -658,23 +658,13 @@ class _MotifWheelState extends State<_MotifWheel> {
   double _anchorP = 0.0;
   DateTime _anchorT = DateTime.now();
 
-  /// Узор такта: маски голосов последнего полного такта. Точки стоят
-  /// весь такт на своих местах (частота и число ударов голоса),
-  /// а не вспыхивают по ходу — колесо читается как партитура.
-  int _patKick = 0;
-  int _patSnare = 0;
-  int _patBass = 0;
-  int _patTheme = 0;
-  bool _havePattern = false;
-  double _prevPollPhase = 0.0;
-  // Маски прошлого опроса: в момент оборота backend уже сбросил
-  // свои маски — партитурой становится ПРОШЛЫЙ (почти полный)
-  // такт, а не свежий сброшенный (иначе остаются точки только
-  // на 12 часах).
-  int _prevKick = 0;
-  int _prevSnare = 0;
-  int _prevBass = 0;
-  int _prevTheme = 0;
+  /// Маски голосов из последнего опроса (живой накапливающийся такт):
+  /// точки загораются в момент звучания — опоздания на круг нет.
+  /// Рука и точки идут от одних часов движка, поэтому совпадают.
+  int _liveKick = 0;
+  int _liveSnare = 0;
+  int _liveBass = 0;
+  int _liveTheme = 0;
 
   /// Сглаженная фаза руки 0..1: тянется к цели (якорь + время × BPM),
   /// а не прыгает на нее — свингованные 16-е дышат внутри такта,
@@ -691,7 +681,8 @@ class _MotifWheelState extends State<_MotifWheel> {
     super.initState();
     _anchorT = DateTime.now();
     // Тик 50мс: рука тянется к цели каждый тик (20 Гц, плавно),
-    // опрос движка раз в 5 тиков ставит якорь и отдает маски.
+    // опрос движка каждый 2-й тик (10 Гц): якорь свежий, точки
+    // загораются почти в момент звучания (опоздание ~0.1с, не такт).
     var n = 0;
     _ticker = Timer.periodic(const Duration(milliseconds: 50), (_) async {
       if (!mounted) return;
@@ -712,7 +703,7 @@ class _MotifWheelState extends State<_MotifWheel> {
         }
       }
       n++;
-      if (n % 5 != 0 || !running) {
+      if (n % 2 != 0 || !running) {
         setState(() {});
         return;
       }
@@ -724,20 +715,11 @@ class _MotifWheelState extends State<_MotifWheel> {
             // Якорь руки — каждый опрос: дрейфу негде копиться.
             _anchorP = v.barPhase;
             _anchorT = DateTime.now();
-            // Граница такта (фаза обернулась): партитурой становится
-            // прошлый опрос (почти полный такт).
-            if (v.barPhase < _prevPollPhase - 0.5) {
-              _patKick = _prevKick;
-              _patSnare = _prevSnare;
-              _patBass = _prevBass;
-              _patTheme = _prevTheme;
-              _havePattern = true;
-            }
-            _prevKick = v.kickHits;
-            _prevSnare = v.snareHits;
-            _prevBass = v.bassHits;
-            _prevTheme = v.themeHits;
-            _prevPollPhase = v.barPhase;
+            // Живые маски такта — как есть: точки совпадают с рукой.
+            _liveKick = v.kickHits;
+            _liveSnare = v.snareHits;
+            _liveBass = v.bassHits;
+            _liveTheme = v.themeHits;
           });
         }
       } catch (_) {
@@ -759,12 +741,12 @@ class _MotifWheelState extends State<_MotifWheel> {
     final hand = _display;
     final bpm = _bpm();
     final barSecs = 240.0 / bpm;
-    // Точки — узор прошлого такта (стоит весь такт); пока его нет —
-    // живой накопленный кадр (первый такт).
-    final kick = _havePattern ? _patKick : (v?.kickHits ?? 0);
-    final snare = _havePattern ? _patSnare : (v?.snareHits ?? 0);
-    final bass = _havePattern ? _patBass : (v?.bassHits ?? 0);
-    final theme = _havePattern ? _patTheme : (v?.themeHits ?? 0);
+    // Точки — живой такт из последнего опроса: загораются в момент
+    // звучания под рукой (те же часы, рассинхрона нет).
+    final kick = _liveKick;
+    final snare = _liveSnare;
+    final bass = _liveBass;
+    final theme = _liveTheme;
     final energy = v?.energy ?? 0.0;
     return Container(
       color: Colors.black,
