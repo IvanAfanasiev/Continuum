@@ -356,6 +356,17 @@ pub trait Voice: Send {
     /// Стартовая частота для портаменто: вызывается оберткой до trigger.
     /// Дефолт — игнор (портаменто нужно единицам, как 808-слайды).
     fn set_glide_start(&mut self, _freq_hz: f32) {}
+    /// Легато-переход на новую ноту без перезапуска атаки/фазы:
+    /// длинная линия не перебивает сама себя. Дефолт — обычный
+    /// ретриггер (ударным нужна новая атака, а не глисс).
+    /// `has_legato` отличает свой глисс от дефолта: обертка идет
+    /// коротким путем (без хвоста) только со своим.
+    fn legato(&mut self, note: &NoteEvent) {
+        self.trigger(note);
+    }
+    fn has_legato(&self) -> bool {
+        false
+    }
 }
 
 use festival::FestivalVoice;
@@ -490,6 +501,10 @@ pub struct Mono<V: Voice + Default + Clone> {
     tail_gain: f32,
     tail_decay: f32,
     sample_rate: f32,
+    /// Высота звучащей ноты: повтор той же высоты — свежая атака
+    /// (артикуляция повтора), смена высоты на legato-голосе — глисс
+    /// без перезапуска (длинная линия не перебивает сама себя).
+    pitch: Option<u8>,
 }
 
 impl<V: Voice + Default + Clone> Mono<V> {
@@ -503,6 +518,7 @@ impl<V: Voice + Default + Clone> Mono<V> {
             tail_gain: 0.0,
             tail_decay: tail_decay_for(sample_rate),
             sample_rate,
+            pitch: None,
         }
     }
 
@@ -527,6 +543,7 @@ impl<V: Voice + Default + Clone> Mono<V> {
         self.tail = std::mem::replace(&mut self.main, fresh);
         self.tail_gain = 1.0;
         self.main.trigger(note);
+        self.pitch = Some(note.midi_pitch);
     }
 }
 
@@ -539,6 +556,18 @@ impl<V: Voice + Default + Clone> Instrument for Mono<V> {
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
+        // Легато: звонкий голос берет новую ВЫСОТУ без перезапуска —
+        // линия течет глиссом, а не рубится на каждой восьмой.
+        // Та же высота — свежая атака (повтор артикулируется).
+        // Голоса без своего legato идут прежним путем с хвостом.
+        if self.main.is_active()
+            && self.main.has_legato()
+            && self.pitch != Some(note.midi_pitch)
+        {
+            self.main.legato(note);
+            self.pitch = Some(note.midi_pitch);
+            return;
+        }
         // Старое состояние уходит в хвост с полным гейном, новый удар
         // начинается с чистой атаки — сумма непрерывна, ступеньки нет.
         let mut fresh = V::default();
@@ -546,6 +575,7 @@ impl<V: Voice + Default + Clone> Instrument for Mono<V> {
         self.tail = std::mem::replace(&mut self.main, fresh);
         self.tail_gain = 1.0;
         self.main.trigger(note);
+        self.pitch = Some(note.midi_pitch);
     }
 
     fn next_sample(&mut self) -> f32 {

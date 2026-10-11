@@ -131,10 +131,14 @@ pub struct LiveVisual {
     /// рука делает оборот за фразу.
     pub phrase_len: u8,
     pub phrase_pos: u8,
+    /// Точная фаза фразы 0..1 (якорь колеса).
+    pub phrase_phase: f32,
     pub pkick: u32,
     pub psnare: u32,
     pub pbass: u32,
     pub ptheme: u32,
+    /// Сыграно в текущей фразе (бит = доля фразы).
+    pub pplayed: u32,
 }
 
 impl Default for LiveVisual {
@@ -152,10 +156,12 @@ impl Default for LiveVisual {
             theme_hits: 0,
             phrase_len: 32,
             phrase_pos: 0,
+            phrase_phase: 0.0,
             pkick: 0,
             psnare: 0,
             pbass: 0,
             ptheme: 0,
+            pplayed: 0,
         }
     }
 }
@@ -940,10 +946,12 @@ impl PlaybackController {
                 theme_hits: v.theme_hits,
                 phrase_len: v.phrase_len,
                 phrase_pos: v.phrase_pos,
+                phrase_phase: v.phrase_phase,
                 pkick: v.pkick,
                 psnare: v.psnare,
                 pbass: v.pbass,
                 ptheme: v.ptheme,
+                pplayed: v.pplayed,
             },
             None => LiveVisual::default(),
         }

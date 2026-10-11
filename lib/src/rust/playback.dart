@@ -97,10 +97,16 @@ class LiveVisual {
   /// рука делает оборот за фразу.
   final int phraseLen;
   final int phrasePos;
+
+  /// Точная фаза фразы 0..1 (якорь колеса).
+  final double phrasePhase;
   final int pkick;
   final int psnare;
   final int pbass;
   final int ptheme;
+
+  /// Сыграно в текущей фразе (бит = доля фразы).
+  final int pplayed;
 
   const LiveVisual({
     required this.barPhase,
@@ -115,10 +121,12 @@ class LiveVisual {
     required this.themeHits,
     required this.phraseLen,
     required this.phrasePos,
+    required this.phrasePhase,
     required this.pkick,
     required this.psnare,
     required this.pbass,
     required this.ptheme,
+    required this.pplayed,
   });
 
   @override
@@ -135,10 +143,12 @@ class LiveVisual {
       themeHits.hashCode ^
       phraseLen.hashCode ^
       phrasePos.hashCode ^
+      phrasePhase.hashCode ^
       pkick.hashCode ^
       psnare.hashCode ^
       pbass.hashCode ^
-      ptheme.hashCode;
+      ptheme.hashCode ^
+      pplayed.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -157,10 +167,12 @@ class LiveVisual {
           themeHits == other.themeHits &&
           phraseLen == other.phraseLen &&
           phrasePos == other.phrasePos &&
+          phrasePhase == other.phrasePhase &&
           pkick == other.pkick &&
           psnare == other.psnare &&
           pbass == other.pbass &&
-          ptheme == other.ptheme;
+          ptheme == other.ptheme &&
+          pplayed == other.pplayed;
 }
 
 /// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.

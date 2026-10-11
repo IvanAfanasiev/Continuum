@@ -162,10 +162,12 @@ impl Style for ClubStyle {
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         // Бас ходит корнями за прогрессией (джиттер 1 — соседние
         // ступени, не прыжки): баслайн вместо дрона на одной ноте.
+        // Громкость держит иерархию: транзиент кика крыть обязан —
+        // сустейн баса ниже пика бочки, бит ведет кик, а не бас.
         let bass = RoleGuide {
             energy_response: 2.2,
             duration_mult: 1.8,
-            vel_base: 0.78,
+            vel_base: 0.7,
             vel_energy: 0.25,
             vel_jitter: 0.06,
             voice: Voicing::Scale {

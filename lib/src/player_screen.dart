@@ -665,6 +665,9 @@ class _MotifWheelState extends State<_MotifWheel> {
   int _liveSnare = 0;
   int _liveBass = 0;
   int _liveTheme = 0;
+  /// Сыграно фразы: эти точки светятся ярко, будущие — тускло.
+  /// Рука никогда не выглядит опоздавшей: впереди тусклые (предстоят).
+  int _played = 0;
 
   /// Сглаженная фаза руки 0..1: тянется к цели (якорь + время × BPM),
   /// а не прыгает на нее — свингованные 16-е дышат внутри такта,
@@ -713,14 +716,16 @@ class _MotifWheelState extends State<_MotifWheel> {
         if (mounted) {
           setState(() {
             _frame = v;
-            // Якорь руки — фаза фразы каждый опрос: дрейфу негде копиться.
-            _anchorP = v.phrasePos / v.phraseLen.clamp(1, 32);
+            // Якорь руки — точная фаза фразы каждый опрос: равномерный
+            // ход без лесенки шагов.
+            _anchorP = v.phrasePhase;
             _anchorT = DateTime.now();
             // План фразы — как есть: точки совпадают с рукой.
             _liveKick = v.pkick;
             _liveSnare = v.psnare;
             _liveBass = v.pbass;
             _liveTheme = v.ptheme;
+            _played = v.pplayed;
           });
         }
       } catch (_) {
@@ -764,6 +769,7 @@ class _MotifWheelState extends State<_MotifWheel> {
                   snare: snare,
                   bass: bass,
                   theme: theme,
+                  played: _played,
                   phase: hand,
                   energy: energy,
                 ),
@@ -806,15 +812,18 @@ class _WheelPainter extends CustomPainter {
     required this.snare,
     required this.bass,
     required this.theme,
+    required this.played,
     required this.phase,
     required this.energy,
   });
 
-  /// Маски голосов по долям такта (бит = 16-я доля).
+  /// Маски голосов по долям фразы (бит = 32-я доля фразы).
   final int kick;
   final int snare;
   final int bass;
   final int theme;
+  /// Сыграно: ярко; план без бита — тускло (предстоит).
+  final int played;
   final double phase;
   final double energy;
 
@@ -837,6 +846,8 @@ class _WheelPainter extends CustomPainter {
 
     // Орбита голоса: свой радиус — точки голосов не лежат друг на друге,
     // каждый голос читается отдельно. Доли и даунбит фразы крупнее.
+    // Двухтон: сыграно — ярко, предстоит — тускло (рука не выглядит
+    // опоздавшей: впереди всегда тусклые, а не «пропущенные»).
     void voice(int mask, double orbit, Color color, double size) {
       // Едва видимая орбита.
       canvas.drawCircle(
@@ -857,13 +868,16 @@ class _WheelPainter extends CustomPainter {
         // Доля такта (каждая 4-я) и даунбит фразы крупнее: метр виден.
         final beat = i % 4 == 0 ? 1.0 : 0.0;
         final down = i == 0 ? 1.5 : 0.0;
+        final done = (played & (1 << i)) != 0;
         canvas.drawCircle(
           p,
           size + beat + down + 3.0 * px * px,
           Paint()
             ..color = px > 0.55
                 ? const Color(0xFFFFB300)
-                : color,
+                : done
+                    ? color
+                    : color.withValues(alpha: 0.30),
         );
       }
     }

@@ -91,10 +91,17 @@ pub struct VisualSnap {
     /// рука делает оборот за фразу и играет их в тайминг.
     pub phrase_len: u8,
     pub phrase_pos: u8,
+    /// Точная фаза фразы 0..1 (целые шаги + доля текущего по часам):
+    /// якорь колеса без лесенки опросов.
+    pub phrase_phase: f32,
     pub pkick: u32,
     pub psnare: u32,
     pub pbass: u32,
     pub ptheme: u32,
+    /// Сыграно в текущей фразе (бит = доля фразы): точки плана,
+    /// мимо которых рука уже прошла, светятся ярко, будущие — тускло.
+    /// Сброс на старте фразы.
+    pub pplayed: u32,
 }
 
 /// Номер секции для снимка (порядок объявления SongSection).
@@ -139,6 +146,9 @@ pub struct Composer {
     last_planned: usize,
     phrase_start: usize,
     plan: [u32; 4],
+    /// Момент старта текущего шага: точная фаза внутри шага
+    /// для якоря колеса (лесенки опросов больше нет).
+    step_t0: Instant,
 }
 
 impl Composer {
@@ -213,6 +223,7 @@ impl Composer {
             last_planned: usize::MAX,
             phrase_start: 0,
             plan: [0u32; 4],
+            step_t0: Instant::now(),
         }
     }
 
@@ -235,6 +246,9 @@ impl Composer {
     /// Один шаг генерации: ноты + длительность до следующего шага.
     /// Чистая механика без сна — используется и петлей, и офлайн-рендером.
     pub fn next_step(&mut self) -> (Vec<NoteEvent>, f32) {
+        // Часы шага: снимок пишется в его начале — точная фаза
+        // (доля внутри шага) едет колесу вместе с позицией.
+        self.step_t0 = Instant::now();
         let mut active_tracks = [0usize; MAX_ACTIVE_TRACKS];
         let active_count = match self.mixer.read() {
             Ok(state) => state.active_ids(&mut active_tracks),
@@ -377,6 +391,21 @@ impl Composer {
         let effective = self.leader.filter(|l| melodic.contains(l));
         apply_leader_balance(&mut notes, effective);
 
+        // Свинг сида поверх стиля: у каждого сида свой кач.
+        // Считаем ДО снимка: длительность нужна и штампам, и точной
+        // фазе фразы для колеса.
+        let swing = style.swing_ratio() * crate::styles::swing_var(self.song.seed_hash);
+        let duration = swing_step_secs(base_step_secs, swing, step_in_measure);
+        // Точная фаза фразы: целые шаги + доля текущего по часам.
+        let phrase_len = (2 * steps_per_measure).min(32);
+        let phrase_pos = self.step_count.saturating_sub(self.phrase_start).min(31);
+        let step_frac = (Instant::now()
+            .saturating_duration_since(self.step_t0)
+            .as_secs_f32()
+            / duration.max(0.001))
+        .clamp(0.0, 1.0);
+        let phrase_phase =
+            (phrase_pos as f32 + step_frac) / phrase_len.max(1) as f32;
         // Живой снимок для визуалайзера: доля такта + маски звучавших
         // долей по главным голосам (бит = 16-я доля, сброс на границе
         // такта) + план фразы (оборот руки — фраза, точки стоят сразу).
@@ -416,6 +445,15 @@ impl Composer {
                     }
                 }
             }
+            // Сыграно фразы: бит ставится, когда шаг отзвучал.
+            // Сброс на старте фразы.
+            let mut played = snap.pplayed;
+            if phrase_pos == 0 {
+                played = 0;
+            }
+            if !notes.is_empty() {
+                played |= 1u32 << phrase_pos.min(31);
+            }
             *snap = VisualSnap {
                 section: section_index(self.song.section),
                 energy: self.song.energy,
@@ -428,22 +466,18 @@ impl Composer {
                 snare_hits: snare,
                 bass_hits: bass,
                 theme_hits: theme,
-                phrase_len: (2 * steps_per_measure).min(32) as u8,
-                phrase_pos: self
-                    .step_count
-                    .saturating_sub(self.phrase_start)
-                    .min(31) as u8,
+                phrase_len: phrase_len as u8,
+                phrase_pos: phrase_pos as u8,
+                phrase_phase,
                 pkick: self.plan[0],
                 psnare: self.plan[1],
                 pbass: self.plan[2],
                 ptheme: self.plan[3],
+                pplayed: played,
             };
         }
 
         self.step_count += 1;
-        // Свинг сида поверх стиля: у каждого сида свой кач.
-        let swing = style.swing_ratio() * crate::styles::swing_var(self.song.seed_hash);
-        let duration = swing_step_secs(base_step_secs, swing, step_in_measure);
         // Due-штамп: нота знает свой шаг и его длительность —
         // насос выстрелит точно в медиакадр, когда бы ни разобрал
         // очередь (фронт больше не владеет таймингом).

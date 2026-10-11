@@ -22,11 +22,12 @@ const CLICK_GAIN: f32 = 0.6;
 const KNOCK_HZ: f32 = 280.0;
 const KNOCK_DECAY: f32 = 55.0;
 const KNOCK_GAIN: f32 = 0.3;
-const DRIVE: f32 = 1.15;
+const DRIVE: f32 = 1.25;
 /// Гритовый оффсет из formula-прототипа: грязный хвост удара
 /// вместо стерильного затухания. Было 0.25 + драйв 1.7 — постоянка
 /// косила волну в tanh-флэттоп каждый удар (хрип соло-бочки).
-/// Панч держит свип тела, а не перегруз.
+/// Панч держит свип тела, а не перегруз. Драйв поднят с 1.15:
+/// транзиент обязан крыть сустейн баса, иначе бит ведет бас.
 const GRIT: f32 = 0.1;
 const ATTACK_SECS: f32 = 0.001;
 const FADE_SECS: f32 = 0.012;
@@ -89,7 +90,7 @@ impl Voice for KickVoice {
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        ((body + knock + click - GRIT) * DRIVE).tanh() * 0.9 * self.gain * body_env * attack * fade
+        ((body + knock + click - GRIT) * DRIVE).tanh() * self.gain * body_env * attack * fade
     }
 
     fn reset(&mut self) {

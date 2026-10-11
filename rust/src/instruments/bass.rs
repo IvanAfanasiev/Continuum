@@ -47,6 +47,10 @@ struct BassVoice {
     release_mul: f32,
     sub_bias: f32,
     noise: Noise,
+    /// Живая высота и громкость: легато скользит к цели (~30/5 мс),
+    /// а не прыгает — шагающая бас-линия течет, а не рубится.
+    freq_now: f32,
+    gain_target: f32,
 }
 
 impl Voice for BassVoice {
@@ -56,8 +60,10 @@ impl Voice for BassVoice {
 
     fn trigger(&mut self, note: &NoteEvent) {
         self.frequency = midi_to_freq(note.midi_pitch);
+        self.freq_now = self.frequency;
         self.samples_left = (note.duration_secs * self.sample_rate).max(1.0) as usize;
         self.gain = note.velocity;
+        self.gain_target = note.velocity;
         self.velocity = note.velocity;
         self.phase = 0.0;
         self.elapsed = 0;
@@ -67,6 +73,24 @@ impl Voice for BassVoice {
         self.noise = Noise::new(super::dsp::note_seed(note, 0x8A55));
         self.presence_lp.reset();
         self.presence_lp2.reset();
+    }
+
+    fn has_legato(&self) -> bool {
+        true
+    }
+
+    fn legato(&mut self, note: &NoteEvent) {
+        // Новая высота без перезапуска: фаза и огибающая текут,
+        // щипок не пересеивается (уже отзвучал), фильтры не рвутся.
+        // Только цель скольжения, продление и свежая артикуляция сида.
+        self.frequency = midi_to_freq(note.midi_pitch);
+        let want = (note.duration_secs * self.sample_rate).max(1.0) as usize;
+        self.samples_left = self.samples_left.max(want);
+        self.gain_target = note.velocity;
+        self.velocity = note.velocity;
+        self.attack_mul = note.attack_mul;
+        self.release_mul = note.release_mul;
+        self.sub_bias = note.sub_bias.clamp(0.0, 1.0);
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -79,6 +103,13 @@ impl Voice for BassVoice {
         let t = self.elapsed as f32 / sample_rate;
         self.elapsed += 1;
 
+        // Легато-скольжение: высота едет к цели ~30 мс, громкость ~5 мс.
+        // Фаза не рвется (интегратор тот же), атака не перезапускается.
+        let glide_k = 1.0 - (-1.0 / (sample_rate * 0.03)).exp();
+        self.freq_now += (self.frequency - self.freq_now) * glide_k;
+        let gain_k = 1.0 - (-1.0 / (sample_rate * 0.005)).exp();
+        self.gain += (self.gain_target - self.gain) * gain_k;
+
         // Мягкая S-атака вместо линейной: ни щелчка, ни ватности.
         // Длина атаки — от сида: одни сиды punchier, другие ватнее.
         let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
@@ -88,7 +119,7 @@ impl Voice for BassVoice {
         let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
         let fade = release_fade(self.samples_left, fade_len);
 
-        let freq = self.frequency
+        let freq = self.freq_now
             * (1.0 - PITCH_DROP * (1.0 - 0.7 * self.sub_bias) * (-PITCH_DROP_RATE * t).exp());
         self.phase = (self.phase + freq / sample_rate) % 1.0;
         let wave = (self.phase * std::f32::consts::TAU).sin();
@@ -379,6 +410,80 @@ mod tests {
         let sharp = early_energy(0.8, 0.8);
         let soft = early_energy(1.8, 1.6);
         assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
+    }
+
+    #[test]
+    fn legato_glides_without_restart() {
+        // Длинная линия не перебивает сама себя: вторая высота берется
+        // без перезапуска атаки — энергия не падает в ноль, высота
+        // доезжает до новой ноты.
+        let sr = 44_100.0;
+        let rms30 = |buf: &[f32]| {
+            (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt()
+        };
+        // Свежая атака: первые 30 мс тише сустейна (рампа с нуля).
+        let mut fresh = BassGuitar::new(1);
+        fresh.set_sample_rate(sr);
+        fresh.trigger(&NoteEvent::new(1, 33, 0.8, 1.0));
+        let mut fresh_buf = Vec::new();
+        for _ in 0..(0.03 * sr) as usize {
+            fresh_buf.push(fresh.next_sample());
+        }
+        // Сустейн перед переходом.
+        let mut sus_buf = Vec::new();
+        for _ in 0..(0.17 * sr) as usize {
+            sus_buf.push(fresh.next_sample());
+        }
+        let sus = rms30(&sus_buf);
+        let fresh_start = rms30(&fresh_buf);
+        assert!(fresh_start < sus * 0.9, "attack does not ramp?");
+        // Легато на другую высоту: провала нет, ступеньки нет.
+        let mut leg = BassGuitar::new(1);
+        leg.set_sample_rate(sr);
+        leg.trigger(&NoteEvent::new(1, 33, 0.8, 1.0));
+        for _ in 0..(0.2 * sr) as usize {
+            leg.next_sample();
+        }
+        leg.trigger(&NoteEvent::new(1, 36, 0.8, 1.0));
+        let mut leg_buf = Vec::new();
+        let mut prev = 0.0f32;
+        let mut max_step = 0.0f32;
+        for _ in 0..(0.03 * sr) as usize {
+            let s = leg.next_sample();
+            assert!(s.is_finite());
+            max_step = max_step.max((s - prev).abs());
+            prev = s;
+            leg_buf.push(s);
+        }
+        let leg_start = rms30(&leg_buf);
+        assert!(
+            leg_start > sus * 0.5,
+            "legato dips: {leg_start} vs sustain {sus}"
+        );
+        assert!(max_step < 0.5, "legato step: {max_step}");
+        // Высота доехала: late — уже новая нота (C2 ~65 Гц ± допуск).
+        let mut late = Vec::new();
+        for _ in 0..(0.3 * sr) as usize {
+            late.push(leg.next_sample());
+        }
+        let tail = &late[late.len() - 4096..];
+        let peak_near = |f0: f32| {
+            let n = tail.len() as f32;
+            let k = (f0 / sr * n).round();
+            let om = 2.0 * std::f32::consts::PI * k / n;
+            let c = 2.0 * om.cos();
+            let (mut s1, mut s2) = (0.0f32, 0.0f32);
+            for &v in tail {
+                let s0 = v + c * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            (s1 * s1 + s2 * s2 - c * s1 * s2).sqrt()
+        };
+        assert!(
+            peak_near(65.4) > peak_near(55.0),
+            "legato never arrives at the new pitch"
+        );
     }
 
     #[test]
