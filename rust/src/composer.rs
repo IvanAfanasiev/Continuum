@@ -86,6 +86,15 @@ pub struct VisualSnap {
     pub snare_hits: u16,
     pub bass_hits: u16,
     pub theme_hits: u16,
+    /// План текущей фразы (бит = доля фразы, фраза = 2 такта):
+    /// пре-рендер при старте фразы — колесо ставит все точки сразу,
+    /// рука делает оборот за фразу и играет их в тайминг.
+    pub phrase_len: u8,
+    pub phrase_pos: u8,
+    pub pkick: u32,
+    pub psnare: u32,
+    pub pbass: u32,
+    pub ptheme: u32,
 }
 
 /// Номер секции для снимка (порядок объявления SongSection).
@@ -124,6 +133,12 @@ pub struct Composer {
     last_style_name: String,
     last_stage: usize,
     leader: Option<usize>,
+    /// Фраза, для которой посчитан план колеса (монотонный индекс),
+    /// и глобальный шаг ее старта. План — пре-рендер 2 тактов
+    /// при старте фразы: точки стоят до того, как прозвучали.
+    last_planned: usize,
+    phrase_start: usize,
+    plan: [u32; 4],
 }
 
 impl Composer {
@@ -195,6 +210,9 @@ impl Composer {
             last_style_name: String::new(),
             last_stage,
             leader: None,
+            last_planned: usize::MAX,
+            phrase_start: 0,
+            plan: [0u32; 4],
         }
     }
 
@@ -211,6 +229,7 @@ impl Composer {
         self.step_count = 0;
         self.last_stage = self.song.stage;
         self.leader = None;
+        self.last_planned = usize::MAX;
     }
 
     /// Один шаг генерации: ноты + длительность до следующего шага.
@@ -292,6 +311,57 @@ impl Composer {
             self.leader = pick_leader(&melodic, self.song.stage);
         }
 
+        // План фразы для колеса: при старте новой фразы пре-рендерим
+        // оба такта тем же render_style (детерминирован контекстом —
+        // результат совпадает с живым рендером; второй такт идет
+        // по контексту первого: энергия/гейны за такт почти не едут).
+        // RNG отдельный (присутствие от него не зависит — только
+        // велосити-джиттер на граничных уровнях, для точек неважно).
+        // Взрыв раз в 32 шага на потоке композера (не аудио):
+        // due-штампы абсолютны, тайминг не трогаем.
+        if self.song.phrase_index != self.last_planned {
+            self.last_planned = self.song.phrase_index;
+            self.phrase_start = self.step_count;
+            let mut plan = [0u32; 4];
+            let mut prng: StdRng = rand::SeedableRng::seed_from_u64(
+                self.song.seed_hash
+                    ^ (self.song.phrase_index as u64).wrapping_mul(0x9E3779B97F4A7C15)
+                    ^ 0x51A5,
+            );
+            let plan_intensity = snapshot(&self.intensity).clamp(0.0, 2.0);
+            for m in 0..2usize {
+                for sim in 0..steps_per_measure {
+                    let mut pctx = StepContext {
+                        step: self.step_count + m * steps_per_measure + sim,
+                        step_in_measure: sim,
+                        base_step_secs,
+                        active_tracks: active,
+                        song: &self.song,
+                        rng: &mut prng,
+                        intensity: plan_intensity,
+                    };
+                    for n in render_style(style, &mut pctx) {
+                        let bit =
+                            1u32 << (m * steps_per_measure + sim).min(31);
+                        match Slot::from_id(n.instrument_id).map(Slot::role) {
+                            Some(InstrumentRole::Kick) => plan[0] |= bit,
+                            Some(InstrumentRole::Snare | InstrumentRole::Hat) => {
+                                plan[1] |= bit
+                            }
+                            Some(InstrumentRole::Bass) => plan[2] |= bit,
+                            Some(
+                                InstrumentRole::Lead
+                                | InstrumentRole::Vocal
+                                | InstrumentRole::Chords,
+                            ) => plan[3] |= bit,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            self.plan = plan;
+        }
+
         let mut sctx = StepContext {
             step: self.step_count,
             step_in_measure,
@@ -307,11 +377,10 @@ impl Composer {
         let effective = self.leader.filter(|l| melodic.contains(l));
         apply_leader_balance(&mut notes, effective);
 
-        // Живой снимок для визуалайзера: доля такта (стрелка делает
-        // оборот за такт, скорость — от BPM) + маски звучавших долей
-        // по главным голосам (точки колеса, бит = 16-я доля,
-        // сброс на границе такта). Окно темы — в ногу с движком
-        // (визит секции).
+        // Живой снимок для визуалайзера: доля такта + маски звучавших
+        // долей по главным голосам (бит = 16-я доля, сброс на границе
+        // такта) + план фразы (оборот руки — фраза, точки стоят сразу).
+        // Окно темы — в ногу с движком (визит секции).
         if let Ok(mut snap) = self.visual.write() {
             let rot = self.song.stage % self.song.motif.len().max(1);
             let pos =
@@ -359,6 +428,15 @@ impl Composer {
                 snare_hits: snare,
                 bass_hits: bass,
                 theme_hits: theme,
+                phrase_len: (2 * steps_per_measure).min(32) as u8,
+                phrase_pos: self
+                    .step_count
+                    .saturating_sub(self.phrase_start)
+                    .min(31) as u8,
+                pkick: self.plan[0],
+                psnare: self.plan[1],
+                pbass: self.plan[2],
+                ptheme: self.plan[3],
             };
         }
 

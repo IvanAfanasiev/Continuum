@@ -127,6 +127,14 @@ pub struct LiveVisual {
     pub snare_hits: u16,
     pub bass_hits: u16,
     pub theme_hits: u16,
+    /// План фразы (бит = доля фразы): точки стоят до звучания,
+    /// рука делает оборот за фразу.
+    pub phrase_len: u8,
+    pub phrase_pos: u8,
+    pub pkick: u32,
+    pub psnare: u32,
+    pub pbass: u32,
+    pub ptheme: u32,
 }
 
 impl Default for LiveVisual {
@@ -142,6 +150,12 @@ impl Default for LiveVisual {
             snare_hits: 0,
             bass_hits: 0,
             theme_hits: 0,
+            phrase_len: 32,
+            phrase_pos: 0,
+            pkick: 0,
+            psnare: 0,
+            pbass: 0,
+            ptheme: 0,
         }
     }
 }
@@ -924,6 +938,12 @@ impl PlaybackController {
                 snare_hits: v.snare_hits,
                 bass_hits: v.bass_hits,
                 theme_hits: v.theme_hits,
+                phrase_len: v.phrase_len,
+                phrase_pos: v.phrase_pos,
+                pkick: v.pkick,
+                psnare: v.psnare,
+                pbass: v.pbass,
+                ptheme: v.ptheme,
             },
             None => LiveVisual::default(),
         }
@@ -1580,6 +1600,11 @@ mod tests {
         assert!(v.motif_pos < 16);
         assert_ne!(v.bar_hits, 0, "no sounded steps in snapshot");
         assert_ne!(v.kick_hits, 0, "kick mask empty: four-floor lost");
+        // План фразы готов с первого шага: длина 32, позиция в ней,
+        // кик-четверти запланированы (все полюса держат доли).
+        assert_eq!(v.phrase_len, 32, "phrase plan broken");
+        assert!(v.phrase_pos < 32, "phrase pos out of plan");
+        assert_ne!(v.pkick & 0b00010001000100010001000100010001, 0, "no planned downbeats");
         let _ = c.stop();
         let v = c.live_visual();
         assert_eq!(v.energy, 0.0);

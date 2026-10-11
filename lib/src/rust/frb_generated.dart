@@ -1069,8 +1069,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LiveVisual dco_decode_live_visual(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 16)
+      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
     return LiveVisual(
       barPhase: dco_decode_f_32(arr[0]),
       energy: dco_decode_f_32(arr[1]),
@@ -1082,6 +1082,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       snareHits: dco_decode_u_16(arr[7]),
       bassHits: dco_decode_u_16(arr[8]),
       themeHits: dco_decode_u_16(arr[9]),
+      phraseLen: dco_decode_u_8(arr[10]),
+      phrasePos: dco_decode_u_8(arr[11]),
+      pkick: dco_decode_u_32(arr[12]),
+      psnare: dco_decode_u_32(arr[13]),
+      pbass: dco_decode_u_32(arr[14]),
+      ptheme: dco_decode_u_32(arr[15]),
     );
   }
 
@@ -1289,6 +1295,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_snareHits = sse_decode_u_16(deserializer);
     var var_bassHits = sse_decode_u_16(deserializer);
     var var_themeHits = sse_decode_u_16(deserializer);
+    var var_phraseLen = sse_decode_u_8(deserializer);
+    var var_phrasePos = sse_decode_u_8(deserializer);
+    var var_pkick = sse_decode_u_32(deserializer);
+    var var_psnare = sse_decode_u_32(deserializer);
+    var var_pbass = sse_decode_u_32(deserializer);
+    var var_ptheme = sse_decode_u_32(deserializer);
     return LiveVisual(
       barPhase: var_barPhase,
       energy: var_energy,
@@ -1300,6 +1312,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       snareHits: var_snareHits,
       bassHits: var_bassHits,
       themeHits: var_themeHits,
+      phraseLen: var_phraseLen,
+      phrasePos: var_phrasePos,
+      pkick: var_pkick,
+      psnare: var_psnare,
+      pbass: var_pbass,
+      ptheme: var_ptheme,
     );
   }
 
@@ -1515,6 +1533,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_16(self.snareHits, serializer);
     sse_encode_u_16(self.bassHits, serializer);
     sse_encode_u_16(self.themeHits, serializer);
+    sse_encode_u_8(self.phraseLen, serializer);
+    sse_encode_u_8(self.phrasePos, serializer);
+    sse_encode_u_32(self.pkick, serializer);
+    sse_encode_u_32(self.psnare, serializer);
+    sse_encode_u_32(self.pbass, serializer);
+    sse_encode_u_32(self.ptheme, serializer);
   }
 
   @protected

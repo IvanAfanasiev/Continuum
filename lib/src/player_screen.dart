@@ -634,11 +634,11 @@ class _DiagPanelState extends State<_DiagPanel> {
 }
 
 /// Круговой график-партитура: 4 орбиты главных голосов (кик снаружи,
-/// тема внутри), точки — доли голоса за такт на своих местах.
-/// Маски живые: точка загорается в момент звучания под рукой
-/// (опоздание опроса ~0.1с, не круг). Рука интерполируется от якоря
-/// движка с точной скоростью BPM и «играет» точки: близкая к стрелке
-/// пульсирует. Ход 20 Гц, опрос 10 Гц. Только пока играет и виден график.
+/// тема внутри), точки — доли голоса за фразу на своих местах.
+/// План фразы приходит целиком при ее старте; рука делает оборот
+/// за фразу независимо, но в тех же часах — и «играет» точки:
+/// близкая к стрелке пульсирует в тайминг.
+/// Ход 20 Гц, опрос 10 Гц. Только пока играет и виден график.
 class _MotifWheel extends StatefulWidget {
   const _MotifWheel({required this.controller});
 
@@ -658,8 +658,8 @@ class _MotifWheelState extends State<_MotifWheel> {
   double _anchorP = 0.0;
   DateTime _anchorT = DateTime.now();
 
-  /// Маски голосов из последнего опроса (живой накапливающийся такт):
-  /// точки загораются в момент звучания — опоздания на круг нет.
+  /// Маски голосов из последнего опроса (план текущей фразы):
+  /// точки стоят с начала фразы на своих местах — опоздания нет.
   /// Рука и точки идут от одних часов движка, поэтому совпадают.
   int _liveKick = 0;
   int _liveSnare = 0;
@@ -689,10 +689,11 @@ class _MotifWheelState extends State<_MotifWheel> {
       final running =
           widget.controller.running && !widget.controller.paused;
       if (running) {
-        // Цель: якорь + прошедшее время × скорость BPM (оборот за такт).
+        // Цель: якорь фразы + прошедшее время × скорость BPM.
+        // Оборот руки — фраза (2 такта): при 120 BPM фраза ~4 с.
         final elapsed =
             DateTime.now().difference(_anchorT).inMilliseconds / 1000.0;
-        final target = (_anchorP + elapsed * _bpm() / 240.0) % 1.0;
+        final target = (_anchorP + elapsed * _bpm() / 480.0) % 1.0;
         var d = (target - _display) % 1.0;
         if (d > 0.5) d -= 1.0;
         if (d.abs() > 0.25) {
@@ -712,14 +713,14 @@ class _MotifWheelState extends State<_MotifWheel> {
         if (mounted) {
           setState(() {
             _frame = v;
-            // Якорь руки — каждый опрос: дрейфу негде копиться.
-            _anchorP = v.barPhase;
+            // Якорь руки — фаза фразы каждый опрос: дрейфу негде копиться.
+            _anchorP = v.phrasePos / v.phraseLen.clamp(1, 32);
             _anchorT = DateTime.now();
-            // Живые маски такта — как есть: точки совпадают с рукой.
-            _liveKick = v.kickHits;
-            _liveSnare = v.snareHits;
-            _liveBass = v.bassHits;
-            _liveTheme = v.themeHits;
+            // План фразы — как есть: точки совпадают с рукой.
+            _liveKick = v.pkick;
+            _liveSnare = v.psnare;
+            _liveBass = v.pbass;
+            _liveTheme = v.ptheme;
           });
         }
       } catch (_) {
@@ -740,7 +741,7 @@ class _MotifWheelState extends State<_MotifWheel> {
     // Рука — сглаженная фаза из тикера (на паузе стоит сама).
     final hand = _display;
     final bpm = _bpm();
-    final barSecs = 240.0 / bpm;
+    final phraseSecs = 480.0 / bpm;
     // Точки — живой такт из последнего опроса: загораются в момент
     // звучания под рукой (те же часы, рассинхрона нет).
     final kick = _liveKick;
@@ -789,7 +790,7 @@ class _MotifWheelState extends State<_MotifWheel> {
             Text(
               v == null
                   ? 'точки появятся с музыкой'
-                  : 'такт ${barSecs.toStringAsFixed(1)}с · ${bpm.toStringAsFixed(0)} BPM · E${(energy * 100).round()}% · ${_sections[v.section.clamp(0, 3)]}',
+                  : 'фраза ${phraseSecs.toStringAsFixed(1)}с · ${bpm.toStringAsFixed(0)} BPM · E${(energy * 100).round()}% · ${_sections[v.section.clamp(0, 3)]}',
               style: const TextStyle(fontSize: 12, color: Colors.white54),
             ),
           ],
@@ -821,20 +822,21 @@ class _WheelPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final r = size.shortestSide / 2 * 0.92;
-    const n = 16;
+    // Фраза = 32 доли (2 такта по 16): позиции точек и руки.
+    const n = 32;
     // Угол руки (0 — верх, по часовой).
     final handA = phase * 6.2831853;
 
     // Близость доли к руке 0..1 (1 — рука точно на точке):
-    // точки пульсируют, когда стрелка проходит мимо.
+    // точки пульсируют, когда стрелка проходит мимо в тайминг.
     double near(int i) {
       var d = (i / n * 6.2831853 - handA).abs() % 6.2831853;
       if (d > 3.14159265) d = 6.2831853 - d;
-      return (1.0 - d / 0.45).clamp(0.0, 1.0);
+      return (1.0 - d / 0.35).clamp(0.0, 1.0);
     }
 
     // Орбита голоса: свой радиус — точки голосов не лежат друг на друге,
-    // каждый голос читается отдельно. Даунбит (каждая 4-я доля) крупнее.
+    // каждый голос читается отдельно. Доли и даунбит фразы крупнее.
     void voice(int mask, double orbit, Color color, double size) {
       // Едва видимая орбита.
       canvas.drawCircle(
@@ -852,10 +854,12 @@ class _WheelPainter extends CustomPainter {
             Offset(
                 r * orbit * math.cos(ang), r * orbit * math.sin(ang));
         final px = near(i);
+        // Доля такта (каждая 4-я) и даунбит фразы крупнее: метр виден.
         final beat = i % 4 == 0 ? 1.0 : 0.0;
+        final down = i == 0 ? 1.5 : 0.0;
         canvas.drawCircle(
           p,
-          size + beat + 3.0 * px * px,
+          size + beat + down + 3.0 * px * px,
           Paint()
             ..color = px > 0.55
                 ? const Color(0xFFFFB300)
@@ -878,7 +882,7 @@ class _WheelPainter extends CustomPainter {
     voice(snare, 0.78, const Color(0xFF4FC3F7), 3.5);
     voice(kick, 0.95, const Color(0xFFFF5252), 4.0);
 
-    // Рука такта через все орбиты: оборот за такт, идет от BPM.
+    // Рука фразы через все орбиты: оборот за фразу, идет от BPM.
     final a = phase * 6.2831853 - 1.5707963;
     canvas.drawLine(
       center,

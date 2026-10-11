@@ -93,6 +93,15 @@ class LiveVisual {
   final int bassHits;
   final int themeHits;
 
+  /// План фразы (бит = доля фразы): точки стоят до звучания,
+  /// рука делает оборот за фразу.
+  final int phraseLen;
+  final int phrasePos;
+  final int pkick;
+  final int psnare;
+  final int pbass;
+  final int ptheme;
+
   const LiveVisual({
     required this.barPhase,
     required this.energy,
@@ -104,6 +113,12 @@ class LiveVisual {
     required this.snareHits,
     required this.bassHits,
     required this.themeHits,
+    required this.phraseLen,
+    required this.phrasePos,
+    required this.pkick,
+    required this.psnare,
+    required this.pbass,
+    required this.ptheme,
   });
 
   @override
@@ -117,7 +132,13 @@ class LiveVisual {
       kickHits.hashCode ^
       snareHits.hashCode ^
       bassHits.hashCode ^
-      themeHits.hashCode;
+      themeHits.hashCode ^
+      phraseLen.hashCode ^
+      phrasePos.hashCode ^
+      pkick.hashCode ^
+      psnare.hashCode ^
+      pbass.hashCode ^
+      ptheme.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -133,7 +154,13 @@ class LiveVisual {
           kickHits == other.kickHits &&
           snareHits == other.snareHits &&
           bassHits == other.bassHits &&
-          themeHits == other.themeHits;
+          themeHits == other.themeHits &&
+          phraseLen == other.phraseLen &&
+          phrasePos == other.phrasePos &&
+          pkick == other.pkick &&
+          psnare == other.psnare &&
+          pbass == other.pbass &&
+          ptheme == other.ptheme;
 }
 
 /// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.

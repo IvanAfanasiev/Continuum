@@ -26,7 +26,7 @@ pub mod rock;
 use rand::rngs::StdRng;
 use rand::Rng;
 
-use crate::arranger::SongContext;
+use crate::arranger::{SongContext, SongSection};
 use crate::core::{base_step_secs, swing_step_secs};
 use crate::instruments::{InstrumentRole, NoteEvent, Slot};
 
@@ -824,7 +824,15 @@ fn play_guide(
         return Vec::new();
     }
     let climax = song.is_last_measure;
-    if guide.drop_before_climax && climax && step_in_measure * 2 > steps_per_measure {
+    // Пауза перед кульминацией — только перед дропом и только последнюю
+    // четверть такта: брейк-дыра на полтакта в конце КАЖДОГО раздела
+    // читалась как сбивка. Время держим, брейк — короткий вдох.
+    let drop_break = matches!(song.section, SongSection::Drop);
+    if guide.drop_before_climax
+        && climax
+        && drop_break
+        && step_in_measure * 4 > steps_per_measure * 3
+    {
         return Vec::new();
     }
     // Точечные акценты (крэш): только последний такт секции.
@@ -1180,11 +1188,13 @@ fn play_guide(
         if let Some(r) = role {
             v *= song.stage_gain(r);
         }
-        // Оркестровка: бас знает роль кика — под заливки пригибается
-        // вдвое, даунбит держит вместе. Инструменты не наслаиваются.
-        if matches!(role, Some(InstrumentRole::Bass)) && kick_fill {
-            v *= 0.5;
-        }
+        // Оркестровка: бас знает роль кика — даунбит играют вместе.
+        // Пригибание под заливки — только движковым даком (плавная
+        // огибающая от кика): второе пригибание здесь давало двойную
+        // яму на каждом шепоте синкопы — бас качался дырками.
+        // Флаг заливки принимает движок через порядок фаз (см. render_style),
+        // здесь он не гасит: тишина — тоже инструмент оркестровки.
+        let _ = kick_fill;
         if v >= 0.05 {
             let mut note = NoteEvent::new(instrument_id, tone, v, duration)
                 .shaped(attack_mul, release_mul);
@@ -2382,9 +2392,11 @@ mod tests {
     }
 
     #[test]
-    fn bass_ducks_kick_fills_not_downbeats() {
-        // Бас знает роль кика: даунбит вместе в полную, под заливку —
-        // вдвое тише (та же нота, тот же velocity-джиттер).
+    fn bass_ignores_kick_fill_duck_is_engine_side() {
+        // Пригибание баса под заливки — дело движкового дака (плавная
+        // огибающая), композиция громкость не трогает: двойная яма
+        // качала бас дырками на каждом шепоте синкопы. Даунбит и заливка
+        // выходят из play_guide с той же громкостью.
         let guide = RoleGuide {
             weights: &[1.0; 8],
             ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, 1.0, 0.8)
@@ -2403,7 +2415,7 @@ mod tests {
             .unwrap()
         };
         let full = call(false);
-        assert_eq!(call(true), full * 0.5, "bass ignores kick fill");
+        assert_eq!(call(true), full, "composition must not duck: engine owns it");
     }
 
     #[test]

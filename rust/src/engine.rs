@@ -320,6 +320,12 @@ pub(crate) struct Pump {
     anchor_step: u64,
     anchor_frame: u64,
     anchored: bool,
+    /// Карта длин шагов (шаг → кадры): свинг делает шаги неравными,
+    /// линейная формула от якоря врала тем сильнее, чем дальше нота.
+    /// Суммируем истинные длины от якоря — сетка точна всегда,
+    /// ре-якорь нужен только на реальных срывах, а не каждый свинг.
+    /// Кольцо последних 256 шагов; вытесненное сворачиваем в якорь.
+    step_grid: std::collections::VecDeque<(u64, u64)>,
 }
 
 impl Pump {
@@ -360,6 +366,7 @@ impl Pump {
             anchor_step: 0,
             anchor_frame: 0,
             anchored: false,
+            step_grid: std::collections::VecDeque::new(),
         }
     }
 
@@ -409,15 +416,46 @@ impl Pump {
             } else {
                 let step_frames =
                     note.step_us as u64 * self.state.sample_rate() as u64 / 1_000_000;
+                // Карта длин: шаг уже видели — длина та же, дубликат
+                // пропускаем; новый — кладем в хвост (шаги идут по порядку).
+                if self.step_grid.back().map(|(s, _)| *s) != Some(note.due_step) {
+                    self.step_grid.push_back((note.due_step, step_frames.max(1)));
+                    // Вытеснение с fold: старое сворачиваем в якорь,
+                    // сетка от него остается точной.
+                    while self.step_grid.len() > 256 {
+                        if let Some((s, f)) = self.step_grid.pop_front() {
+                            if s >= self.anchor_step {
+                                self.anchor_frame =
+                                    self.anchor_frame.saturating_add(f);
+                                self.anchor_step = s + 1;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                // Точная сетка: суммируем истинные длины шагов от якоря
+                // до шага ноты. Неизвестный хвост (разрыв) — линейно
+                // текущей длиной; старая нота (сброс, due позади якоря) —
+                // сразу в якорь.
+                let mut due = self.anchor_frame;
+                if note.due_step >= self.anchor_step {
+                    let mut cursor = self.anchor_step;
+                    for &(gs, gf) in self.step_grid.iter() {
+                        if gs < cursor || gs >= note.due_step {
+                            continue;
+                        }
+                        due = due.saturating_add(gf);
+                        cursor = gs + 1;
+                    }
+                    due = due.saturating_add(
+                        note.due_step.saturating_sub(cursor) * step_frames.max(1),
+                    );
+                }
                 // Привязка свежая, пока поток сух или часы уплыли:
                 // сухой поток стартует «сейчас», опоздание больше шага
                 // (смена темпа, догон после stall'а) — тоже «сейчас»,
-                // а не накопленная ошибка. Иначе сетка держится
-                // от якоря с точностью до свинга (пары сходятся).
-                let mut due = self.anchor_frame.saturating_add(
-                    note.due_step.saturating_sub(self.anchor_step)
-                        * step_frames.max(1),
-                );
+                // а не накопленная ошибка.
                 if !self.anchored
                     || self.pending.is_empty() && fresh.is_empty()
                     || due.saturating_add(step_frames.max(1)) < self.media_cursor
@@ -425,6 +463,15 @@ impl Pump {
                     self.anchor_step = note.due_step;
                     self.anchor_frame = self.media_cursor;
                     self.anchored = true;
+                    // Карта старше якоря — мусор: чистим, память не растет.
+                    while self
+                        .step_grid
+                        .front()
+                        .map(|(s, _)| *s < self.anchor_step)
+                        .unwrap_or(false)
+                    {
+                        self.step_grid.pop_front();
+                    }
                     due = self.media_cursor;
                 }
                 fresh.push((due, note));
@@ -985,6 +1032,40 @@ mod tests {
         assert_eq!(f32_to_u16(1.0), 65535);
         assert_eq!(f32_to_u16(-1.0), 1);
         assert_eq!(f32_to_u16(-10.0), 1);
+    }
+
+    #[test]
+    fn swing_grid_lands_on_accumulated_steps() {
+        // Сетка точнее линейки: чередующиеся длинные/короткие шаги
+        // (свинг) суммируются, а не умножаются текущей длиной.
+        // Шаги 0..4 длинами 100/50/100/50мс: ноты должны встать
+        // на 0/4410/6615/11025 кадров (@44100), а не на линейке.
+        use crossbeam::queue::ArrayQueue;
+        let queue = Arc::new(ArrayQueue::new(128));
+        let lens = [100_000u32, 50_000, 100_000, 50_000];
+        for (i, len) in lens.iter().enumerate() {
+            let mut n = NoteEvent::new(6, 60, 0.8, 0.2);
+            n.due_step = i as u64;
+            n.step_us = *len;
+            queue.push(n).unwrap();
+        }
+        let mut pump = Pump::new(
+            queue,
+            Vec::new(),
+            Arc::new(RwLock::new(crate::mixer::MixerState::new())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RwLock::new(MasterFx::default())),
+            Arc::new(RwLock::new(126.0)),
+            44_100.0,
+            EngineCounters::default(),
+            Arc::new(RwLock::new(0.4)),
+        );
+        let mut block = vec![0.0f32; 600 * 2];
+        pump.fill(&mut block, 2, f32_identity);
+        let mut dues: Vec<u64> = pump.pending.iter().map(|(d, _)| *d).collect();
+        dues.sort();
+        // Шаг 0 выстрелил в блоке, остальные висят на точных кадрах.
+        assert_eq!(dues, vec![4410, 6615, 11025], "swing grid off: {dues:?}");
     }
 
     #[test]
