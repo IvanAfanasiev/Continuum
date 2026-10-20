@@ -1,5 +1,5 @@
 use super::{
-    dsp::{release_fade, Noise, Svf},
+    dsp::{fast_tanh, release_fade, sin01, ExpDecay, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -51,11 +51,28 @@ struct BassVoice {
     /// а не прыгает — шагающая бас-линия течет, а не рубится.
     freq_now: f32,
     gain_target: f32,
+    /// Рекуррентные огибающие и коэффициенты скольжения: посчитаны
+    /// в `trigger`/`set_sample_rate`, дальше без единого `exp`/`sin`.
+    amp_env: ExpDecay,
+    drop_env: ExpDecay,
+    cutoff_env: ExpDecay,
+    pick_env: ExpDecay,
+    glide_k: f32,
+    gain_k: f32,
+}
+
+impl BassVoice {
+    fn update_rate_ks(&mut self) {
+        let sr = self.sample_rate.max(1.0);
+        self.glide_k = 1.0 - (-1.0 / (sr * 0.03)).exp();
+        self.gain_k = 1.0 - (-1.0 / (sr * 0.005)).exp();
+    }
 }
 
 impl Voice for BassVoice {
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sane_sample_rate(sample_rate);
+        self.update_rate_ks();
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
@@ -71,6 +88,11 @@ impl Voice for BassVoice {
         self.release_mul = note.release_mul;
         self.sub_bias = note.sub_bias.clamp(0.0, 1.0);
         self.noise = Noise::new(super::dsp::note_seed(note, 0x8A55));
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.drop_env = ExpDecay::start(PITCH_DROP_RATE, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(1.0 / 0.3, self.sample_rate);
+        self.pick_env = ExpDecay::start(PICK_DECAY, self.sample_rate);
+        self.update_rate_ks();
         self.presence_lp.reset();
         self.presence_lp2.reset();
     }
@@ -105,27 +127,26 @@ impl Voice for BassVoice {
 
         // Легато-скольжение: высота едет к цели ~30 мс, громкость ~5 мс.
         // Фаза не рвется (интегратор тот же), атака не перезапускается.
-        let glide_k = 1.0 - (-1.0 / (sample_rate * 0.03)).exp();
-        self.freq_now += (self.frequency - self.freq_now) * glide_k;
-        let gain_k = 1.0 - (-1.0 / (sample_rate * 0.005)).exp();
-        self.gain += (self.gain_target - self.gain) * gain_k;
+        // Коэффициенты посчитаны заранее (см. trigger).
+        self.freq_now += (self.frequency - self.freq_now) * self.glide_k;
+        self.gain += (self.gain_target - self.gain) * self.gain_k;
 
         // Мягкая S-атака вместо линейной: ни щелчка, ни ватности.
         // Длина атаки — от сида: одни сиды punchier, другие ватнее.
         let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
         let a = (t / attack_secs).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-AMP_DECAY_RATE * t).exp();
+        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * self.amp_env.next();
         let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
         let fade = release_fade(self.samples_left, fade_len);
 
-        let freq = self.freq_now
-            * (1.0 - PITCH_DROP * (1.0 - 0.7 * self.sub_bias) * (-PITCH_DROP_RATE * t).exp());
+        let freq =
+            self.freq_now * (1.0 - PITCH_DROP * (1.0 - 0.7 * self.sub_bias) * self.drop_env.next());
         self.phase = (self.phase + freq / sample_rate) % 1.0;
-        let wave = (self.phase * std::f32::consts::TAU).sin();
+        let wave = sin01(self.phase);
         // Четная октава строго в фазе с фундаментом (та же фаза ×2):
         // тепло без биений — гармоники совпадают, а не спорят.
-        let octave = (self.phase * 2.0 % 1.0 * std::f32::consts::TAU).sin() * OCTAVE_GAIN;
+        let octave = sin01(self.phase * 2.0) * OCTAVE_GAIN;
 
         let sub = wave * SUB_GAIN;
         // Та же волна через драйв: гармоники идеально когерентны
@@ -136,15 +157,15 @@ impl Voice for BassVoice {
         // за ~300 мс (щипок в атаке), а четная октава идет МИМО фильтра —
         // ламповое тепло стабильно весь сустейн, а не гаснет с нырком.
         let drive = DRIVE_BASE + DRIVE_VEL * self.velocity;
-        let cutoff = 300.0 + 380.0 * (-t / 0.3).exp();
+        let cutoff = 300.0 + 380.0 * self.cutoff_env.next();
         let (presence, _, _) =
             self.presence_lp
-                .process((wave * drive).tanh(), cutoff, PRESENCE_Q, sample_rate);
+                .process(fast_tanh(wave * drive), cutoff, PRESENCE_Q, sample_rate);
         // Второй каскад (24 дБ/окт суммарно): одиночный пропускал
         // tanh-гармоники далеко вверх — нырка не было слышно.
-        let (presence, _, _) =
-            self.presence_lp2
-                .process(presence, cutoff, PRESENCE_Q, sample_rate);
+        let (presence, _, _) = self
+            .presence_lp2
+            .process(presence, cutoff, PRESENCE_Q, sample_rate);
 
         let keep = 1.0 - 0.85 * self.sub_bias;
         // Щипок: широкополосный транзиент только в атаке (8 мс).
@@ -153,7 +174,7 @@ impl Voice for BassVoice {
         // иначе 10 мс атака его душит.
         let pa = (t / 0.002).min(1.0);
         let pick = self.noise.sample()
-            * (-PICK_DECAY * t).exp()
+            * self.pick_env.next()
             * PICK_GAIN
             * (1.0 - 0.5 * self.sub_bias)
             * pa;
@@ -344,7 +365,10 @@ mod tests {
             second1 < fund1 * 0.12,
             "sub not pure: 2nd={second1} fund={fund1}"
         );
-        assert!(fund1 > fund0 * 0.5, "fundamental collapsed: {fund1} vs {fund0}");
+        assert!(
+            fund1 > fund0 * 0.5,
+            "fundamental collapsed: {fund1} vs {fund0}"
+        );
     }
 
     #[test]
@@ -360,10 +384,7 @@ mod tests {
             second > fund * 0.15,
             "no even warmth: 2nd={second} fund={fund}"
         );
-        assert!(
-            second < fund * 0.45,
-            "too honky: 2nd={second} fund={fund}"
-        );
+        assert!(second < fund * 0.45, "too honky: 2nd={second} fund={fund}");
     }
 
     #[test]
@@ -409,7 +430,10 @@ mod tests {
         }
         let sharp = early_energy(0.8, 0.8);
         let soft = early_energy(1.8, 1.6);
-        assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
+        assert!(
+            soft < sharp,
+            "articulation ignored: soft={soft} sharp={sharp}"
+        );
     }
 
     #[test]
@@ -418,9 +442,8 @@ mod tests {
         // без перезапуска атаки — энергия не падает в ноль, высота
         // доезжает до новой ноты.
         let sr = 44_100.0;
-        let rms30 = |buf: &[f32]| {
-            (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt()
-        };
+        let rms30 =
+            |buf: &[f32]| (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
         // Свежая атака: первые 30 мс тише сустейна (рампа с нуля).
         let mut fresh = BassGuitar::new(1);
         fresh.set_sample_rate(sr);

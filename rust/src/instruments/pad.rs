@@ -1,7 +1,7 @@
 use std::f32::consts::TAU;
 
 use super::{
-    dsp::{release_fade, saw_blep, Svf},
+    dsp::{fast_sin, release_fade, saw_blep, sin01, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -62,10 +62,9 @@ impl Voice for PadVoice {
                 (1.8 * self.sample_rate) as usize,
             )
             .max(1);
-        self.fade_samples =
-            ((total as f32 * 0.3 * note.release_mul.max(0.25)) as usize)
-                .min((0.6 * self.sample_rate) as usize)
-                .max(1);
+        self.fade_samples = ((total as f32 * 0.3 * note.release_mul.max(0.25)) as usize)
+            .min((0.6 * self.sample_rate) as usize)
+            .max(1);
         self.phases = [0.0; 5];
         self.drift_phase = (note.midi_pitch as f32 * 0.7) % TAU;
         // LFO и фильтры сохраняются — стена звука дышит непрерывно.
@@ -89,7 +88,7 @@ impl Voice for PadVoice {
 
         let mut raw = 0.0;
         self.drift_phase = (self.drift_phase + TAU * DRIFT_HZ / sample_rate) % TAU;
-        let drift = 1.0 + DRIFT_DEPTH * self.drift_phase.sin();
+        let drift = 1.0 + DRIFT_DEPTH * fast_sin(self.drift_phase);
         for (phase, detune) in self.phases.iter_mut().zip(DETUNE) {
             let freq = self.frequency * detune * drift;
             *phase = (*phase + freq / sample_rate) % 1.0;
@@ -98,7 +97,7 @@ impl Voice for PadVoice {
         raw /= 5.0;
 
         self.lfo_phase = (self.lfo_phase + LFO_HZ / sample_rate) % 1.0;
-        let lfo = (self.lfo_phase * TAU).sin() * 0.5 + 0.5;
+        let lfo = sin01(self.lfo_phase) * 0.5 + 0.5;
         let cutoff = CUTOFF_MIN_HZ + lfo * CUTOFF_SWEEP_HZ + self.gain * CUTOFF_VEL_HZ;
         let (_, _, hipassed) = self.hp.process(raw, PAD_HP_HZ, FILTER_Q, sample_rate);
         let (l1, _, _) = self.lp1.process(hipassed, cutoff, FILTER_Q, sample_rate);
@@ -145,7 +144,10 @@ mod tests {
         }
         let sharp = early_energy(0.8);
         let soft = early_energy(1.8);
-        assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
+        assert!(
+            soft < sharp,
+            "articulation ignored: soft={soft} sharp={sharp}"
+        );
     }
 
     #[test]

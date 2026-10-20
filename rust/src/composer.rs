@@ -4,10 +4,10 @@
 //! микшер — активные треки, темп — живую ручку BPM. Все три меняются
 //! на ходу без перезапуска потока.
 //!
-//! Лидер инструментов: на каждый визит секции один из мелодических
-//! слотов становится громче (лидер), остальные уходят в поддержку.
-//! Барабаны и бас не трогаем — грув стабилен, дышит только верх.
-//! Визит, а не фраза: баланс стоит весь раздел формы.
+//! Иерархия голосов одна и живет в [`crate::styles::render_style`]:
+//! ведущий темы звучит в полную, остальные мелодические — поддержкой.
+//! Композер не выбирает второго лидера: иначе тема и баланс партий
+//! расходились бы.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -21,47 +21,13 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::arranger::{Arranger, SongContext};
-use crate::core::{base_step_secs, snapshot, swing_step_secs, MAX_ACTIVE_TRACKS};
+use crate::core::{base_step_secs, normalize_tempo, snapshot, swing_step_secs, MAX_ACTIVE_TRACKS};
 use crate::instruments::{InstrumentRole, NoteEvent, Slot};
 use crate::mixer::MixerState;
 use crate::styles::{render_style, StepContext, Style};
 
 /// Живой темп: `None` = дефолт стиля, `Some(bpm)` = ручка фронта.
 pub type LiveTempo = Arc<RwLock<Option<f32>>>;
-
-/// Баланс партий лидера — намеренно сдержанный: генерация не спорит
-/// с ручками пользователя, лишь слегка подсвечивает ведущий голос.
-const LEADER_BOOST: f32 = 1.08;
-const SUPPORT_DIP: f32 = 0.95;
-
-/// Мелодические роли, участвующие в ротации лидера.
-fn is_melodic(id: usize) -> bool {
-    matches!(
-        Slot::from_id(id).map(Slot::role),
-        Some(InstrumentRole::Lead | InstrumentRole::Chords | InstrumentRole::Vocal)
-    )
-}
-
-/// Выбор лидера среди отсортированных кандидатов: детерминирован
-/// визитом секции. Меньше двух кандидатов — без лидера.
-pub(crate) fn pick_leader(candidates: &[usize], stage: usize) -> Option<usize> {
-    if candidates.len() < 2 {
-        return None;
-    }
-    Some(candidates[stage % candidates.len()])
-}
-
-/// Баланс партий: лидер громче, поддержка тише. Барабаны/бас не трогаем.
-pub(crate) fn apply_leader_balance(notes: &mut [NoteEvent], leader: Option<usize>) {
-    let Some(lead_id) = leader else { return };
-    for note in notes.iter_mut() {
-        if note.instrument_id == lead_id {
-            note.velocity = (note.velocity * LEADER_BOOST).min(1.0);
-        } else if is_melodic(note.instrument_id) {
-            note.velocity *= SUPPORT_DIP;
-        }
-    }
-}
 
 /// Живой снимок для кругового визуалайзера: секция, энергия,
 /// мотив сида и позиция в нем. Обновляется композером каждый шаг
@@ -86,20 +52,23 @@ pub struct VisualSnap {
     pub snare_hits: u16,
     pub bass_hits: u16,
     pub theme_hits: u16,
-    /// План текущей фразы (бит = доля фразы, фраза = 2 такта):
-    /// пре-рендер при старте фразы — колесо ставит все точки сразу,
-    /// рука делает оборот за фразу и играет их в тайминг.
+    /// Текущая фраза (бит = доля фразы, фраза = 2 такта):
+    /// рука делает оборот за фразу.
+    /// 32 бита = 2×16 шагов; встроенные стили 16-шаговые.
     pub phrase_len: u8,
     pub phrase_pos: u8,
     /// Точная фаза фразы 0..1 (целые шаги + доля текущего по часам):
     /// якорь колеса без лесенки опросов.
     pub phrase_phase: f32,
+    /// Ноты фразы по голосам (бит = доля фразы): кик, снейр+хэт,
+    /// бас, тема (лид/вокал/аккорды). Это настоящие ноты, а не план:
+    /// колесо показывает ровно то, что звучало, поэтому показа и звука
+    /// разойтись не могут.
     pub pkick: u32,
     pub psnare: u32,
     pub pbass: u32,
     pub ptheme: u32,
-    /// Сыграно в текущей фразе (бит = доля фразы): точки плана,
-    /// мимо которых рука уже прошла, светятся ярко, будущие — тускло.
+    /// Доли фразы, где что-то звучало (бит = доля фразы).
     /// Сброс на старте фразы.
     pub pplayed: u32,
 }
@@ -109,8 +78,34 @@ pub(crate) fn section_index(section: crate::arranger::SongSection) -> u8 {
     section as u8
 }
 
+/// Метка шага: номер шага и его длительность в микросекундах.
+///
+/// Движок строит по меткам сетку времени. Ноты бывают не на каждом
+/// шаге (паузы формы, разреженные слои), а сетка нужна на каждом:
+/// пропуски, оценённые линейно по длине текущего шага, копят ошибку
+/// (при свинге длинный и короткий шаг отличаются на 20-50 мс, и через
+/// пару секунд ноты «опоздали» на полсекунды — ритм сбивался, а сетка
+/// пере-якоривалась). Метка — честная длина шага.
+#[derive(Clone, Copy, Debug)]
+pub struct StepMark {
+    pub step: u64,
+    pub us: u32,
+}
+
+/// Тень перехода: следующий кусок, который поет поверх грува текущего
+/// в шве. Голос входит мягко (громкость растет к концу шва), грув
+/// остается один — иначе стык превратится в двух голосов.
+struct Shadow {
+    arranger: Arranger,
+    song: SongContext,
+}
+
 pub struct Composer {
     queue: Arc<ArrayQueue<NoteEvent>>,
+    /// Метки шагов (длина каждого шага): движок строит по ним сетку
+    /// времени. Без них сетка строится по нотам, и пропуски оцениваются
+    /// линейно — тайминг уплывает (ритм сбивается).
+    marks: Arc<ArrayQueue<StepMark>>,
     style: Arc<RwLock<Box<dyn Style>>>,
     mixer: Arc<RwLock<MixerState>>,
     stop: Arc<AtomicBool>,
@@ -129,6 +124,9 @@ pub struct Composer {
     filter_open: Arc<RwLock<f32>>,
     /// Счетчик отданных в очередь нот (диагностика для UI).
     pushed: Arc<AtomicU64>,
+    /// Ноты, не влезшие в очередь (генератор обгоняет движок).
+    /// Ненулевой счетчик = ритм дырявит: пропадают доли.
+    dropped: Arc<AtomicU64>,
     /// Живой снимок для визуалайзера (делится с сессией).
     visual: Arc<RwLock<VisualSnap>>,
     // Состояние генерации (бывшие локальные переменные run):
@@ -138,14 +136,22 @@ pub struct Composer {
     current_seed: u64,
     step_count: usize,
     last_style_name: String,
-    last_stage: usize,
-    leader: Option<usize>,
-    /// Фраза, для которой посчитан план колеса (монотонный индекс),
-    /// и глобальный шаг ее старта. План — пре-рендер 2 тактов
-    /// при старте фразы: точки стоят до того, как прозвучали.
+    /// Фраза, для которой собраны маски нот (монотонный индекс) и
+    /// глобальный шаг ее старта. Маски — по настоящим нотам фразы:
+    /// колесо показывает ровно то, что звучит.
     last_planned: usize,
     phrase_start: usize,
+    /// Маски нот фразы по голосам: кик, перкуссия, бас, мелодия.
     plan: [u32; 4],
+    /// Партитура стиля (нужна тени перехода).
+    score: crate::arranger::Score,
+    /// Как стиль склеивает куски.
+    transition: crate::piece::Transition,
+    /// Тень: голос следующего куска, который поет поверх грува текущего
+    /// в шве. `None` — вне шва.
+    shadow: Option<Shadow>,
+    /// Отдельный RNG тени: общий поток сместил бы ноты основного.
+    shadow_rng: StdRng,
     /// Момент старта текущего шага: точная фаза внутри шага
     /// для якоря колеса (лесенки опросов больше нет).
     step_t0: Instant,
@@ -162,6 +168,7 @@ impl Composer {
     ) -> Self {
         Self::new_shared(
             queue,
+            Arc::new(ArrayQueue::new(1024)),
             style,
             mixer,
             stop,
@@ -172,6 +179,7 @@ impl Composer {
             Arc::new(RwLock::new(120.0)),
             Arc::new(RwLock::new(0.4)),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
             Arc::new(RwLock::new(VisualSnap::default())),
         )
     }
@@ -179,6 +187,7 @@ impl Composer {
     #[allow(clippy::too_many_arguments)]
     pub fn new_shared(
         queue: Arc<ArrayQueue<NoteEvent>>,
+        marks: Arc<ArrayQueue<StepMark>>,
         style: Arc<RwLock<Box<dyn Style>>>,
         mixer: Arc<RwLock<MixerState>>,
         stop: Arc<AtomicBool>,
@@ -189,18 +198,35 @@ impl Composer {
         bpm_out: Arc<RwLock<f32>>,
         filter_open: Arc<RwLock<f32>>,
         pushed: Arc<AtomicU64>,
+        dropped: Arc<AtomicU64>,
         visual: Arc<RwLock<VisualSnap>>,
     ) -> Self {
         let current_seed = snapshot(&seed);
-        let score = match style.read() {
-            Ok(g) => g.arrangement(),
-            Err(poisoned) => poisoned.into_inner().arrangement(),
+        let (score, style_name, bpm, transition) = match style.read() {
+            Ok(g) => (
+                g.arrangement(),
+                g.name().to_string(),
+                g.bpm(),
+                g.transition(),
+            ),
+            Err(poisoned) => {
+                let g = poisoned.into_inner();
+                (
+                    g.arrangement(),
+                    g.name().to_string(),
+                    g.bpm(),
+                    g.transition(),
+                )
+            }
         };
-        let mut arranger = Arranger::with_score(current_seed, score);
+        // Первый кусок: форма конечна (30-60 с), дальше куски идут
+        // подряд, и каждый следующий пишется заранее (стык написан).
+        let plan = crate::piece::plan_piece(current_seed, bpm, score.cycle, 0, 0, transition);
+        let mut arranger = Arranger::with_plan(current_seed, bpm, score, plan, transition);
         let song = arranger.advance_measure();
-        let last_stage = song.stage;
         Self {
             queue,
+            marks,
             style,
             mixer,
             stop,
@@ -211,35 +237,50 @@ impl Composer {
             bpm_out,
             filter_open,
             pushed,
+            dropped,
             visual,
             rng: StdRng::seed_from_u64(current_seed),
             arranger,
             song,
             current_seed,
             step_count: 0,
-            last_style_name: String::new(),
-            last_stage,
-            leader: None,
+            // Имя уже текущего стиля: первый шаг не должен приниматься
+            // за «смену стиля» и сбрасывать только что созданную форму.
+            last_style_name: style_name,
             last_planned: usize::MAX,
             phrase_start: 0,
             plan: [0u32; 4],
+            score,
+            transition,
+            shadow: None,
+            shadow_rng: StdRng::seed_from_u64(current_seed ^ 0x5A4D),
             step_t0: Instant::now(),
         }
     }
 
     fn reset_form(&mut self, seed: u64) {
         // Партитура — от текущего стиля: спокойные идут коротким кругом.
-        let score = match self.style.read() {
-            Ok(g) => g.arrangement(),
-            Err(poisoned) => poisoned.into_inner().arrangement(),
+        let (score, bpm, transition) = match self.style.read() {
+            Ok(g) => (g.arrangement(), g.bpm(), g.transition()),
+            Err(poisoned) => {
+                let g = poisoned.into_inner();
+                (g.arrangement(), g.bpm(), g.transition())
+            }
         };
+        // Живая смена вступает с следующего такта: остаток текущего куска
+        // перепланируется под новый сид/стиль, отыгранное — не трогаем.
+        let bar = self.arranger.piece_bar();
+        let piece = self.arranger.piece();
         self.current_seed = seed;
         self.rng = StdRng::seed_from_u64(seed);
-        self.arranger = Arranger::with_score(seed, score);
+        self.score = score;
+        self.transition = transition;
+        // Тень прошлого шва не переносится в новую форму.
+        self.shadow = None;
+        let plan = crate::piece::plan_piece(seed, bpm, score.cycle, piece, bar, transition);
+        self.arranger = Arranger::with_plan(seed, bpm, score, plan, transition);
         self.song = self.arranger.advance_measure();
         self.step_count = 0;
-        self.last_stage = self.song.stage;
-        self.leader = None;
         self.last_planned = usize::MAX;
     }
 
@@ -249,15 +290,6 @@ impl Composer {
         // Часы шага: снимок пишется в его начале — точная фаза
         // (доля внутри шага) едет колесу вместе с позицией.
         self.step_t0 = Instant::now();
-        let mut active_tracks = [0usize; MAX_ACTIVE_TRACKS];
-        let active_count = match self.mixer.read() {
-            Ok(state) => state.active_ids(&mut active_tracks),
-            Err(poisoned) => poisoned.into_inner().active_ids(&mut active_tracks),
-        };
-        // active_ids уже сортирует — порядок детерминирован.
-        // Треки с громкостью 0 сюда не попадают: выключенные слоты
-        // не грузят ни генерацию, ни DSP. Срез по ядру дропа —
-        // ниже, после чтения стиля.
 
         // Живая смена сида: пересоздаем RNG и форму,
         // поток и очередь при этом не трогаем.
@@ -273,12 +305,23 @@ impl Composer {
             Err(poisoned) => poisoned.into_inner().name().to_string(),
         };
         if self.last_style_name != style_name {
-            if !self.last_style_name.is_empty() {
-                // Смена стиля начинает новую форму с чистого листа.
-                self.reset_form(self.current_seed);
-            }
+            // Смена стиля начинает новую форму с чистого листа.
+            self.reset_form(self.current_seed);
             self.last_style_name = style_name;
         }
+
+        // Микс читаем после сбросов: живой seed/style мог сменить
+        // состав (гости/вайтлист), и старый срез активных треков не
+        // должен попасть в первый шаг новой формы.
+        let mut active_tracks = [0usize; MAX_ACTIVE_TRACKS];
+        let active_count = match self.mixer.read() {
+            Ok(state) => state.active_ids(&mut active_tracks),
+            Err(poisoned) => poisoned.into_inner().active_ids(&mut active_tracks),
+        };
+        // active_ids уже сортирует — порядок детерминирован.
+        // Треки с громкостью 0 сюда не попадают: выключенные слоты
+        // не грузят ни генерацию, ни DSP.
+        let active = &active_tracks[..active_count];
 
         let guard = match self.style.read() {
             Ok(g) => g,
@@ -286,23 +329,28 @@ impl Composer {
         };
         let style = &**guard;
 
-        let active = &active_tracks[..active_count];
-
         let steps_per_measure = style.steps_per_measure();
         // Эффективный темп: ручка фронта перекрывает дефолт стиля.
-        // Морфинг плавный — шаг пересчитывается каждый такт цикла.
-        // Значение публикуем движку для темпового эха.
+        // Валидация и clamp — тот же путь, что у UI и статуса
+        // (core::normalize_tempo): наружу не уезжает незвучащий BPM.
         let bpm = snapshot(&self.tempo)
-            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+            .and_then(normalize_tempo)
+            .or_else(|| normalize_tempo(style.bpm()))
             .unwrap_or_else(|| style.bpm());
         if let Ok(mut share) = self.bpm_out.write() {
             *share = bpm;
         }
         let base_step_secs = base_step_secs(bpm, steps_per_measure);
         let step_in_measure = self.step_count % steps_per_measure;
+        // Один снимок на шаг: план и живой рендер видят одну интенсивность.
+        let intensity = snapshot(&self.intensity).clamp(0.0, 2.0);
 
         if step_in_measure == 0 && self.step_count > 0 {
             self.song = self.arranger.advance_measure();
+            // Тень (следующий кусок) идет в ногу с основным: те же такты.
+            if let Some(shadow) = self.shadow.as_mut() {
+                shadow.song = shadow.arranger.advance_measure();
+            }
         }
         // Открытость фильтра — от свежей секции: движок свистит
         // срезом верхов к дропу каждый шаг.
@@ -310,70 +358,37 @@ impl Composer {
             *share = crate::arranger::section_openness(self.song.section, self.song.progress);
         }
 
-        // Мелодические слоты в миксе — кандидаты в лидеры и проверка,
-        // что лидер все еще играет. Считаем один раз на шаг.
-        let melodic: Vec<usize> = active
-            .iter()
-            .copied()
-            .filter(|id| is_melodic(*id))
-            .collect();
-        // Ротация лидера: новый визит секции — новый лидер верха.
-        // Пересчет идемпотентен внутри раздела (лидер от визита),
-        // поэтому состав стоит, а не тасуется.
-        if self.song.stage != self.last_stage {
-            self.last_stage = self.song.stage;
-            self.leader = pick_leader(&melodic, self.song.stage);
+        // Тень перехода: в шве (финале куска) голос следующего куска
+        // входит поверх грува текущего — стык не режет фразу. Тень
+        // строится, когда шов начался (план следующего куска к этому
+        // моменту уже написан), и поет только мелодические группы:
+        // грув остается один.
+        if self.shadow.is_none() && self.arranger.in_joint() {
+            if let (Some(plan), crate::piece::Transition::Rolling { .. }) =
+                (self.arranger.next_plan().cloned(), self.transition)
+            {
+                let mut shadow = self.arranger.shadow_of(plan);
+                let song = shadow.build_context();
+                self.shadow = Some(Shadow {
+                    arranger: shadow,
+                    song,
+                });
+                self.shadow_rng = StdRng::seed_from_u64(self.current_seed ^ 0x5A4D);
+            }
+        } else if !self.arranger.in_joint() {
+            // Шов кончился: голос следующего куска теперь поет сам
+            // арранжер — тень уходит, чтобы не было двух голосов.
+            self.shadow = None;
         }
 
-        // План фразы для колеса: при старте новой фразы пре-рендерим
-        // оба такта тем же render_style (детерминирован контекстом —
-        // результат совпадает с живым рендером; второй такт идет
-        // по контексту первого: энергия/гейны за такт почти не едут).
-        // RNG отдельный (присутствие от него не зависит — только
-        // велосити-джиттер на граничных уровнях, для точек неважно).
-        // Взрыв раз в 32 шага на потоке композера (не аудио):
-        // due-штампы абсолютны, тайминг не трогаем.
+        // Фраза для колеса: маски настоящих нот фразы (32 доли = 2
+        // такта × 16 шагов). Точки на колесе — ровно то, что звучит:
+        // отдельного пре-рендера больше нет, поэтому показа и звука
+        // разойтись не может.
         if self.song.phrase_index != self.last_planned {
             self.last_planned = self.song.phrase_index;
             self.phrase_start = self.step_count;
-            let mut plan = [0u32; 4];
-            let mut prng: StdRng = rand::SeedableRng::seed_from_u64(
-                self.song.seed_hash
-                    ^ (self.song.phrase_index as u64).wrapping_mul(0x9E3779B97F4A7C15)
-                    ^ 0x51A5,
-            );
-            let plan_intensity = snapshot(&self.intensity).clamp(0.0, 2.0);
-            for m in 0..2usize {
-                for sim in 0..steps_per_measure {
-                    let mut pctx = StepContext {
-                        step: self.step_count + m * steps_per_measure + sim,
-                        step_in_measure: sim,
-                        base_step_secs,
-                        active_tracks: active,
-                        song: &self.song,
-                        rng: &mut prng,
-                        intensity: plan_intensity,
-                    };
-                    for n in render_style(style, &mut pctx) {
-                        let bit =
-                            1u32 << (m * steps_per_measure + sim).min(31);
-                        match Slot::from_id(n.instrument_id).map(Slot::role) {
-                            Some(InstrumentRole::Kick) => plan[0] |= bit,
-                            Some(InstrumentRole::Snare | InstrumentRole::Hat) => {
-                                plan[1] |= bit
-                            }
-                            Some(InstrumentRole::Bass) => plan[2] |= bit,
-                            Some(
-                                InstrumentRole::Lead
-                                | InstrumentRole::Vocal
-                                | InstrumentRole::Chords,
-                            ) => plan[3] |= bit,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            self.plan = plan;
+            self.plan = [0u32; 4];
         }
 
         let mut sctx = StepContext {
@@ -383,13 +398,45 @@ impl Composer {
             active_tracks: active,
             song: &self.song,
             rng: &mut self.rng,
-            intensity: snapshot(&self.intensity).clamp(0.0, 2.0),
+            intensity,
         };
         let mut notes = render_style(&**guard, &mut sctx);
 
-        // Лидер звучит, если все еще в миксе; иначе баланс не трогаем.
-        let effective = self.leader.filter(|l| melodic.contains(l));
-        apply_leader_balance(&mut notes, effective);
+        // Тень перехода: голос следующего куска входит поверх грува
+        // текущего. Только мелодические группы (лид, вокал): грув и
+        // пампа остаются одни, иначе шов превратится в двух голосов.
+        // Громкость тени растёт к концу шва — вход слышен как событие,
+        // а не как фон из ниоткуда. Растёт по шагам, а не по тактам:
+        // голос поднимается плавно, без ступенек.
+        let shadow_gain = self
+            .arranger
+            .joint_step_progress(steps_per_measure, step_in_measure)
+            .powf(1.2)
+            .clamp(0.0, 1.0);
+        if shadow_gain > 0.0 {
+            if let Some(shadow) = self.shadow.as_mut() {
+                let mut shctx = StepContext {
+                    step: self.step_count,
+                    step_in_measure,
+                    base_step_secs,
+                    active_tracks: active,
+                    song: &shadow.song,
+                    rng: &mut self.shadow_rng,
+                    intensity,
+                };
+                for mut n in render_style(&**guard, &mut shctx) {
+                    let melodic = matches!(
+                        Slot::from_id(n.instrument_id).map(Slot::role),
+                        Some(InstrumentRole::Lead) | Some(InstrumentRole::Vocal)
+                    );
+                    if !melodic {
+                        continue;
+                    }
+                    n.velocity *= shadow_gain;
+                    notes.push(n);
+                }
+            }
+        }
 
         // Свинг сида поверх стиля: у каждого сида свой кач.
         // Считаем ДО снимка: длительность нужна и штампам, и точной
@@ -404,16 +451,40 @@ impl Composer {
             .as_secs_f32()
             / duration.max(0.001))
         .clamp(0.0, 1.0);
-        let phrase_phase =
-            (phrase_pos as f32 + step_frac) / phrase_len.max(1) as f32;
+        let phrase_phase = (phrase_pos as f32 + step_frac) / phrase_len.max(1) as f32;
+
+        // Маски фразы — по настоящим нотам (включая голос тени): колесо
+        // и звук берут один и тот же источник, поэтому разойтись не могут.
+        if !notes.is_empty() {
+            let bit = 1u32 << phrase_pos.min(31);
+            for n in notes.iter() {
+                match Slot::from_id(n.instrument_id).map(Slot::role) {
+                    Some(InstrumentRole::Kick) => self.plan[0] |= bit,
+                    Some(InstrumentRole::Snare | InstrumentRole::Hat) => self.plan[1] |= bit,
+                    Some(InstrumentRole::Bass) => self.plan[2] |= bit,
+                    Some(InstrumentRole::Lead | InstrumentRole::Vocal | InstrumentRole::Chords) => {
+                        self.plan[3] |= bit
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Живой снимок для визуалайзера: доля такта + маски звучавших
         // долей по главным голосам (бит = 16-я доля, сброс на границе
         // такта) + план фразы (оборот руки — фраза, точки стоят сразу).
-        // Окно темы — в ногу с движком (визит секции).
+        // Позиция темы — та же формула, что в play_guide: первая
+        // половина мотива в первом такте фразы, вторая — во втором.
         if let Ok(mut snap) = self.visual.write() {
-            let rot = self.song.stage % self.song.motif.len().max(1);
-            let pos =
-                (step_in_measure / 2 + rot) % self.song.motif.len().max(1);
+            let motif_len = self.song.motif.len().max(1);
+            let bar_in_phrase = self.song.measure_index.saturating_sub(1) % 2;
+            let bar_span = (steps_per_measure / 2).max(1);
+            let rot = self.song.stage % motif_len;
+            let pos = (bar_in_phrase * bar_span + step_in_measure / 2 + rot) % motif_len;
+            let active_motif = if self.song.use_alt_motif {
+                self.song.motif_b
+            } else {
+                self.song.motif
+            };
             let mut hits = snap.bar_hits;
             let mut kick = snap.kick_hits;
             let mut snare = snap.snare_hits;
@@ -432,14 +503,10 @@ impl Composer {
                 for n in notes.iter() {
                     match Slot::from_id(n.instrument_id).map(Slot::role) {
                         Some(InstrumentRole::Kick) => kick |= bit,
-                        Some(InstrumentRole::Snare | InstrumentRole::Hat) => {
-                            snare |= bit
-                        }
+                        Some(InstrumentRole::Snare | InstrumentRole::Hat) => snare |= bit,
                         Some(InstrumentRole::Bass) => bass |= bit,
                         Some(
-                            InstrumentRole::Lead
-                            | InstrumentRole::Vocal
-                            | InstrumentRole::Chords,
+                            InstrumentRole::Lead | InstrumentRole::Vocal | InstrumentRole::Chords,
                         ) => theme |= bit,
                         _ => {}
                     }
@@ -457,10 +524,9 @@ impl Composer {
             *snap = VisualSnap {
                 section: section_index(self.song.section),
                 energy: self.song.energy,
-                motif: self.song.motif,
+                motif: active_motif,
                 motif_pos: pos as u8,
-                step_phase: step_in_measure as f32
-                    / steps_per_measure.max(1) as f32,
+                step_phase: step_in_measure as f32 / steps_per_measure.max(1) as f32,
                 bar_hits: hits,
                 kick_hits: kick,
                 snare_hits: snare,
@@ -502,13 +568,32 @@ impl Composer {
             }
 
             let (notes, step_duration) = self.next_step();
-            let n = notes.len() as u64;
+            // Метка шага — всегда, даже если на шаге нет нот: движок по
+            // ней знает честную длину шага и строит точную сетку времени.
+            // Без меток сетка строится по нотам, пропуски оцениваются
+            // линейно, и тайминг уплывает (ритм сбивается).
+            let step_us = (step_duration.max(0.001) * 1_000_000.0) as u32;
+            let _ = self.marks.push(StepMark {
+                step: self.step_count.saturating_sub(1) as u64,
+                us: step_us,
+            });
+            // Полная очередь: дропаем новейшую ноту, старые не трогаем.
+            // Считаем отдельно: молчаливый дроп — это «ритм сбился»,
+            // а по счетчику видно, что именно генератор не успевает.
+            let mut ok = 0u64;
+            let mut lost = 0u64;
             for note in notes {
-                // Полная очередь: дропаем новейшую ноту, старые не трогаем.
-                let _ = self.queue.push(note);
+                if self.queue.push(note).is_ok() {
+                    ok += 1;
+                } else {
+                    lost += 1;
+                }
             }
-            if n > 0 {
-                self.pushed.fetch_add(n, Ordering::Relaxed);
+            if ok > 0 {
+                self.pushed.fetch_add(ok, Ordering::Relaxed);
+            }
+            if lost > 0 {
+                self.dropped.fetch_add(lost, Ordering::Relaxed);
             }
 
             // Шагомер без дрейфа: спим до дедлайна, отставание не накапливаем.
@@ -536,41 +621,4 @@ pub fn start_composing(
     seed: u64,
 ) {
     Composer::new(queue, style_lock, mixer, stop, is_paused, seed).run();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn leader_rotates_per_section_visit() {
-        let candidates = vec![3usize, 6, 7, 11];
-        // Визиты 0,1,2,3 → индексы 0,1,2,3; визит 4 — снова 0.
-        // Лидерство стоит весь раздел формы, меняется на границе.
-        assert_eq!(pick_leader(&candidates, 0), Some(3));
-        assert_eq!(pick_leader(&candidates, 1), Some(6));
-        assert_eq!(pick_leader(&candidates, 2), Some(7));
-        assert_eq!(pick_leader(&candidates, 4), Some(3));
-        // Меньше двух кандидатов — лидера нет, баланс не трогаем.
-        assert_eq!(pick_leader(&[3], 4), None);
-        assert_eq!(pick_leader(&[], 4), None);
-    }
-
-    #[test]
-    fn leader_balance_boosts_lead_only() {
-        let mut notes = vec![
-            NoteEvent::new(2, 36, 0.8, 0.1), // kick: не трогаем
-            NoteEvent::new(1, 40, 0.8, 0.2), // bass: не трогаем
-            NoteEvent::new(6, 72, 0.5, 0.2), // pluck-лидер: вверх
-            NoteEvent::new(7, 60, 0.5, 0.4), // keys-поддержка: вниз
-        ];
-        apply_leader_balance(&mut notes, Some(6));
-        assert_eq!(notes[0].velocity, 0.8);
-        assert_eq!(notes[1].velocity, 0.8);
-        assert!((notes[2].velocity - 0.54).abs() < 1e-6);
-        assert!((notes[3].velocity - 0.475).abs() < 1e-6);
-        // Без лидера — ничего не меняется.
-        apply_leader_balance(&mut notes, None);
-        assert!((notes[2].velocity - 0.54).abs() < 1e-6);
-    }
 }

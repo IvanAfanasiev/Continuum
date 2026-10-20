@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{release_fade, Noise},
+    dsp::{fast_tanh, release_fade, sin01, ExpDecay, Noise},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -36,6 +34,10 @@ struct Kick808Voice {
     /// Первый удар после тишины: слайдить не с чего — стартуем с ноты.
     /// Иначе первый хит чирикает снизу вверх.
     snap: bool,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    body_env: ExpDecay,
+    sweep_env: ExpDecay,
+    click_env: ExpDecay,
 }
 
 impl Voice for Kick808Voice {
@@ -63,6 +65,9 @@ impl Voice for Kick808Voice {
             self.base_smooth = self.target;
             self.snap = false;
         }
+        self.body_env = ExpDecay::start(AMP_DECAY, self.sample_rate);
+        self.sweep_env = ExpDecay::start(SWEEP_RATE, self.sample_rate);
+        self.click_env = ExpDecay::start(CLICK_DECAY, self.sample_rate);
         self.t = 0.0;
         self.phase = 0.0;
         self.noise = Noise::new(super::dsp::note_seed(note, 0x808));
@@ -75,23 +80,22 @@ impl Voice for Kick808Voice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        let body_env = (-AMP_DECAY * self.t).exp();
+        let body_env = self.body_env.next();
         // База ползет к ноте (слайд), свип — от фиксированной атаки:
         // панч сохранен, сустейн мелодический.
         self.base_smooth += (self.target - self.base_smooth) * self.glide_coeff;
-        let freq =
-            self.base_smooth + (FREQ_START_HZ - self.base_smooth) * (-SWEEP_RATE * self.t).exp();
+        let freq = self.base_smooth + (FREQ_START_HZ - self.base_smooth) * self.sweep_env.next();
         self.phase = (self.phase + freq / sample_rate) % 1.0;
-        let body = (self.phase * TAU).sin();
+        let body = sin01(self.phase);
 
-        let click = self.noise.sample() * (-CLICK_DECAY * self.t).exp() * CLICK_GAIN;
+        let click = self.noise.sample() * self.click_env.next() * CLICK_GAIN;
 
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        ((body + click) * DRIVE).tanh() * 0.9 * self.gain * body_env * attack * fade
+        fast_tanh((body + click) * DRIVE) * 0.9 * self.gain * body_env * attack * fade
     }
 
     fn is_active(&self) -> bool {
@@ -162,7 +166,11 @@ mod tests {
         v.set_glide_start(0.0);
         v.trigger(&NoteEvent::new(8, 36, 1.0, 0.5));
         let target = crate::core::midi_to_freq(36).max(32.0);
-        assert!((v.base_smooth - target).abs() < 0.01, "chirp: {}", v.base_smooth);
+        assert!(
+            (v.base_smooth - target).abs() < 0.01,
+            "chirp: {}",
+            v.base_smooth
+        );
         // Второй удар слайдится с прошлого, а не снэпается.
         v.set_glide_start(40.0);
         v.trigger(&NoteEvent::new(8, 43, 1.0, 0.5));

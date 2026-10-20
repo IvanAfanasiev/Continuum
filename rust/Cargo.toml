@@ -21,5 +21,12 @@ jni = "0.22"
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 
+# Debug на устройстве обязан играть без затыков: чистый opt-level=0
+# даёт ~в 5–7 раз медленнее release (замер soak), и мобильному ядру
+# этого не хватает в плотных местах (дроп). Как в v1: dev = opt-level 2
+# (компиляция чуть дольше, звук как в релизе).
+[profile.dev]
+opt-level = 2
+
 [features]
 jni = []

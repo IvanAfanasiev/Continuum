@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{note_seed, release_fade, Noise, Svf},
+    dsp::{fast_tanh, note_seed, release_fade, sin01, ExpDecay, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
@@ -31,6 +29,11 @@ struct SnareVoice {
     samples_left: usize,
     noise: Noise,
     bp: Svf,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    sweep_env: ExpDecay,
+    body_env: ExpDecay,
+    snap_env: ExpDecay,
+    hiss_env: ExpDecay,
 }
 
 impl Voice for SnareVoice {
@@ -43,6 +46,10 @@ impl Voice for SnareVoice {
         self.gain = note.velocity;
         self.t = 0.0;
         self.phase = 0.0;
+        self.sweep_env = ExpDecay::start(BODY_SWEEP, self.sample_rate);
+        self.body_env = ExpDecay::start(BODY_DECAY, self.sample_rate);
+        self.snap_env = ExpDecay::start(SNAP_DECAY, self.sample_rate);
+        self.hiss_env = ExpDecay::start(NOISE_DECAY, self.sample_rate);
         self.bp.reset();
         self.noise = Noise::new(note_seed(note, 0x5A4E));
     }
@@ -54,24 +61,24 @@ impl Voice for SnareVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        let freq = BODY_END_HZ + (BODY_START_HZ - BODY_END_HZ) * (-BODY_SWEEP * self.t).exp();
+        let freq = BODY_END_HZ + (BODY_START_HZ - BODY_END_HZ) * self.sweep_env.next();
         self.phase = (self.phase + freq / sample_rate) % 1.0;
-        let body = (self.phase * TAU).sin() + 0.3 * (self.phase * TAU * 2.0).sin();
-        let body = body * (-BODY_DECAY * self.t).exp() * 0.7;
+        let body = sin01(self.phase) + 0.3 * sin01(self.phase * 2.0);
+        let body = body * self.body_env.next() * 0.7;
 
         let raw_noise = self.noise.sample();
-        let snap = raw_noise * (-SNAP_DECAY * self.t).exp() * SNAP_GAIN;
+        let snap = raw_noise * self.snap_env.next() * SNAP_GAIN;
         let (_, hiss, _) = self
             .bp
             .process(raw_noise, NOISE_CENTER_HZ, NOISE_Q, sample_rate);
-        let hiss = hiss * (-NOISE_DECAY * self.t).exp() * NOISE_GAIN;
+        let hiss = hiss * self.hiss_env.next() * NOISE_GAIN;
 
         let attack_raw = (self.t / ATTACK_SECS).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        ((body + hiss + snap) * 1.4).tanh() * 0.85 * self.gain * attack * fade
+        fast_tanh((body + hiss + snap) * 1.4) * 0.85 * self.gain * attack * fade
     }
 
     fn reset(&mut self) {

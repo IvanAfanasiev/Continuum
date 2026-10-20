@@ -112,18 +112,8 @@ impl Style for PhonkStyle {
         ]
     }
 
-    /// Гость — хор-призрак по сиду (есть/нет).
-    fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Vocal]
-    }
-
-    fn flex_weights(&self) -> &'static [f32] {
-        &[1.0]
-    }
-
-    fn flex_range(&self) -> (usize, usize) {
-        (0, 1)
-    }
+    // Гостей нет: ядро худое и фиксированное, сиды различаются
+    // грувом и темой. Вокальная группа выведена из набора.
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         let bass = RoleGuide {
@@ -159,6 +149,8 @@ impl Style for PhonkStyle {
         let snare = RoleGuide {
             vel_base: 0.9,
             vel_jitter: 0.04,
+            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
+            build_roll: true,
             ..RoleGuide::kit(SNARE_PH, 38, 0.9)
         };
         let hat = RoleGuide {
@@ -196,7 +188,8 @@ impl Style for PhonkStyle {
             phrase_rest: 0.2,
             ..RoleGuide::pitched(KEYS_PH, 0, 0, 1, 1.2, 0.55)
         };
-        // 808 ведет баслайн слайдами, регистр рефа (фолд в mod.rs).
+        // 808 держит корни прогрессии на своей сетке (SUB_PH) в
+        // суб-регистре рефа; слайды между нотами делает голос Kick808.
         let kick808 = RoleGuide {
             vel_base: 0.95,
             vel_energy: 0.05,
@@ -323,9 +316,39 @@ impl Style for PhonkStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
         };
+        // Соло-гитара вне автомикса phonk: ручная краска для фронта.
+        let guitar_lead = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 1.5,
+            vel_base: 0.3,
+            voice: Voicing::Scale {
+                degree: 0,
+                octave: 1,
+                jitter: 1,
+            },
+            ..RoleGuide::pitched(BED_W, 0, 1, 1, 1.5, 0.3)
+        };
         [
-            bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, shaker, formula, wavetable,
+            bass,
+            kick,
+            pad,
+            snare,
+            hat,
+            pluck,
+            keys,
+            kick808,
+            laser,
+            vinyl,
+            vocal,
+            flute,
+            festival,
+            guitar,
+            rain,
+            fuzz,
+            shaker,
+            formula,
+            wavetable,
+            guitar_lead,
         ]
     }
 }
@@ -387,18 +410,29 @@ mod tests {
         let style = PhonkStyle::new();
         let guides = style.slot_guides();
         let at = |slot: Slot| {
-            Slot::ALL.iter().position(|s| *s == slot).map(|i| &guides[i]).unwrap()
+            Slot::ALL
+                .iter()
+                .position(|s| *s == slot)
+                .map(|i| &guides[i])
+                .unwrap()
         };
         let (keys, formula) = (at(Slot::Keys), at(Slot::Formula));
         let deg = |g: &RoleGuide| match g.voice {
-            Voicing::Scale { degree, octave, jitter } => (degree, octave, jitter),
+            Voicing::Scale {
+                degree,
+                octave,
+                jitter,
+            } => (degree, octave, jitter),
             _ => (0, 0, 0),
         };
         let (kd, _, _) = deg(keys);
         let (fd, _, _) = deg(formula);
         assert!(formula.follow_motif, "formula must follow the motif");
         assert_eq!(fd, kd + 2, "formula must sit a third above keys");
-        assert!(style.ensemble().contains(&Slot::Formula), "formula must be in phonk mix");
+        assert!(
+            style.ensemble().contains(&Slot::Formula),
+            "formula must be in phonk mix"
+        );
     }
 
     #[test]

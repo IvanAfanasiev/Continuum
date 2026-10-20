@@ -1,14 +1,15 @@
 use super::{
-    dsp::{release_fade, Noise, Svf},
+    dsp::{fast_tanh, release_fade, Noise, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
 
-/// Чистая электрогитара: струна Карплуса-Стронга с мягким щипком,
-/// расгеадо веером и глушением ghost-нот. Синусы не стали струной —
-/// только физическая модель дает струнный спад (верх умирает первым
-/// сам по себе) и живой раздрай атаки. Для лоуфай-боя поверх Rhodes
-/// и рок-риффов. Полифония 6.
+/// Электрогитара: струна Карплуса-Стронга + кусачий burst + лёгкий
+/// драйв. Чёткая атака самой струны (не щелчок — это не акустика):
+/// яркое возбуждение, собранный фронт, верх умирает сам по ходу звона.
+/// От коротких чопов до длинных протяжных линий — диапазоном управляет
+/// длительность ноты: короткие идут одиночными ударами, длинные
+/// аккорды — веером. Для лоуфай-боя поверх Rhodes и рок-риффов.
 /// Длительность сустейна струны (открытые струны звенят, глушеные — нет).
 const RING_T60_SECS: f32 = 1.4;
 const RING_T60_MUTED_SECS: f32 = 0.12;
@@ -30,8 +31,21 @@ const MAX_RING_SECS: f32 = 1.5;
 const FADE_SECS: f32 = 0.05;
 /// Выход norмирован под микс: струна тише синта, но слышна (тест-пин).
 const VOICE_GAIN: f32 = 0.9;
+/// Характер соло: звон дольше (сустейн-линия), верх открыт (читаемость
+/// перебора), лёгкий драйв (поющая компрессия вместо плоского звона).
+/// Характер риффа: кусачий burst, собранный драйв чопов.
+const LEAD_RING_T60_SECS: f32 = 2.4;
+const LEAD_LP_HZ: f32 = 5200.0;
+const LEAD_DRIVE: f32 = 1.6;
+/// Потолок длины ноты соло: протяжные линии не обрываются на 1.5 с.
+const LEAD_MAX_RING_SECS: f32 = 3.0;
+const RIFF_DRIVE: f32 = 1.4;
+/// Яркость возбуждения (альфа однополюсника burst): было 0.5 —
+/// глухой удар без верхов. Рифф кусается, соло звенит.
+const RIFF_BURST_ALPHA: f32 = 0.7;
+const LEAD_BURST_ALPHA: f32 = 0.85;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct GuitarVoice {
     sample_rate: f32,
     ks_buf: Vec<f32>,
@@ -46,6 +60,60 @@ pub struct GuitarVoice {
     strums: bool,
     t: f32,
     samples_left: usize,
+    /// Характер: сустейн струны, срез верха и драйв выхода.
+    /// Рифф — сухо и собранно, соло — дольше, ярче, с лёгкой
+    /// сатурацией (поющая сустейн-линия вместо плоского звона).
+    ring_t60: f32,
+    lp_hz: f32,
+    drive: f32,
+    /// Яркость burst возбуждения (см. RIFF/LEAD_BURST_ALPHA).
+    burst_alpha: f32,
+    /// Потолок длины ноты, с: короткие чопы обрываются рано,
+    /// длинные линии тянутся (протяжные звуки соло).
+    max_ring: f32,
+}
+
+impl GuitarVoice {
+    /// Рифф: короткие чопы, ладонь, кусачий burst, собранный драйв.
+    pub fn riff() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            ks_buf: Vec::new(),
+            ks_pos: 0,
+            ks_len: 0,
+            damp: 0.0,
+            filter: Svf::default(),
+            noise: Noise::default(),
+            frequency: 0.0,
+            gain: 0.0,
+            muted: false,
+            strums: false,
+            t: 0.0,
+            samples_left: 0,
+            ring_t60: RING_T60_SECS,
+            lp_hz: LP_HZ,
+            drive: RIFF_DRIVE,
+            burst_alpha: RIFF_BURST_ALPHA,
+            max_ring: MAX_RING_SECS,
+        }
+    }
+
+    /// Соло/перебор: длинный звон, открытый верх, поющий драйв.
+    pub fn lead() -> Self {
+        let mut v = Self::riff();
+        v.ring_t60 = LEAD_RING_T60_SECS;
+        v.lp_hz = LEAD_LP_HZ;
+        v.drive = LEAD_DRIVE;
+        v.burst_alpha = LEAD_BURST_ALPHA;
+        v.max_ring = LEAD_MAX_RING_SECS;
+        v
+    }
+}
+
+impl Default for GuitarVoice {
+    fn default() -> Self {
+        Self::riff()
+    }
 }
 
 impl Voice for GuitarVoice {
@@ -62,14 +130,15 @@ impl Voice for GuitarVoice {
         let detune = 1.0 + ((seed % 200) as f32 / 100.0 - 1.0) * 0.0023;
         let ring_var = 0.9 + 0.2 * (((seed >> 9) % 100) as f32 / 100.0);
         self.frequency = midi_to_freq(note.midi_pitch) * detune;
-        let ring = note.duration_secs.clamp(0.05, MAX_RING_SECS);
+        let ring = note.duration_secs.clamp(0.05, self.max_ring);
         self.samples_left = (ring * sample_rate) as usize;
         self.gain = note.velocity;
         // Тихие ghost-ноты играются с глушением струн.
         self.muted = note.velocity < MUTE_VELOCITY;
-        // Бой веером — только акцентированные удары: фингерпикинг и риффы
-        // идут одиночными щипками, иначе каждый перебор звучит двойкой.
-        self.strums = note.velocity > 0.75;
+        // Бой веером — только длинные акцентированные аккорды: короткие
+        // чопы идут одиночными ударами (иначе каждый 16-й чоп звучит
+        // 32-миллисекундной двойкой и перебор мажется).
+        self.strums = note.velocity > 0.75 && note.duration_secs >= 0.3;
         self.t = 0.0;
         // Струна: линия задержки на период тона + затухание под T60.
         // Глушеные звенят 0.12 с (ладонь), открытые — 1.1 с.
@@ -79,24 +148,26 @@ impl Voice for GuitarVoice {
             RING_T60_MUTED_SECS
         } else {
             // Хуманизация звона: сустейн дышит от ноты к ноте.
-            RING_T60_SECS * ring_var
+            self.ring_t60 * ring_var
         };
         self.damp = (-6.908 * self.ks_len as f32 / (t60 * sample_rate)).exp();
-        // Мягкий щипок: шум через однополюсный lowpass — округлый фронт
-        // без щелчка медиатора. Burst стабилен в пределах кванта velocity
-        // (иначе энергия прыгает вдвое от удара к удару), дышат только
-        // строй и звон (ниже) — живо, но не расхлябанно.
+        // Щипок возбуждения: шум через лёгкий lowpass (яркость — характером).
+        // Burst стабилен в пределах кванта velocity (иначе энергия прыгает
+        // вдвое от удара к удару), дышат только строй и звон (ниже) —
+        // живо, но не расхлябанно.
         // Нормируем к полному размаху: мягкость дает фильтр, а не тишина.
         let vq = (note.velocity * 4.0) as u32;
-        self.noise = Noise::new(
-            0x6174 ^ (note.midi_pitch as u32).wrapping_mul(0x9E37) ^ vq,
-        );
+        self.noise = Noise::new(0x6174 ^ (note.midi_pitch as u32).wrapping_mul(0x9E37) ^ vq);
         self.ks_buf.resize(self.ks_len, 0.0);
+        // Возбуждение: шум через лёгкий lowpass — кусачий фронт, верх
+        // умирает сам по ходу звона (KS-усреднение). Было alpha 0.5 —
+        // глухой удар без верхов (половина «калимбы»).
+        let alpha = self.burst_alpha;
         let mut lp = 0.0f32;
         let mut peak = 0.0f32;
         for b in self.ks_buf.iter_mut() {
             let n = self.noise.sample();
-            lp += 0.5 * (n - lp);
+            lp += alpha * (n - lp);
             *b = lp;
             peak = peak.max(lp.abs());
         }
@@ -150,11 +221,11 @@ impl Voice for GuitarVoice {
         self.ks_buf[self.ks_pos] = self.damp * 0.5 * (cur + nxt);
         self.ks_pos = (self.ks_pos + 1) % self.ks_len;
 
-        let cutoff = if self.muted { LP_MUTED_HZ } else { LP_HZ };
+        let cutoff = if self.muted { LP_MUTED_HZ } else { self.lp_hz };
         let (warm, _, _) = self.filter.process(cur, cutoff, LP_Q, sample_rate);
 
         self.t += 1.0 / sample_rate;
-        warm * self.gain * attack * fade * strum * VOICE_GAIN
+        fast_tanh(warm * self.drive) * self.gain * attack * fade * strum * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -176,6 +247,48 @@ mod tests {
 
     fn guitars() -> VoicePool {
         VoicePool::guitars(16, 6)
+    }
+
+    #[test]
+    fn short_chops_dont_fan() {
+        // Короткие чопы — одиночные удары (32мс веер на каждом 16-м
+        // мажет быстрый перебор), длинные аккорды — веером.
+        fn is_strum(dur: f32) -> bool {
+            let mut v = GuitarVoice::riff();
+            v.set_sample_rate(44_100.0);
+            v.trigger(&NoteEvent::new(14, 57, 0.9, dur));
+            v.strums
+        }
+        assert!(!is_strum(0.1), "chop fanned");
+        assert!(is_strum(1.0), "long chord not strummed");
+    }
+
+    #[test]
+    fn lead_sustains_longer_than_riff() {
+        // Соло держит звон дольше риффа (сустейн-линия vs чоп):
+        // энергия второй половины у лида выше при той же ноте.
+        fn late_energy(lead: bool) -> f32 {
+            let sr = 44_100.0;
+            let mut pool = if lead {
+                VoicePool::guitar_leads(20, 1)
+            } else {
+                VoicePool::guitars(14, 1)
+            };
+            pool.set_sample_rate(sr);
+            pool.trigger(&NoteEvent::new(14, 57, 0.9, 1.5));
+            let mut sum = 0.0;
+            for i in 0..(1.5 * sr) as usize {
+                let s = pool.next_sample();
+                assert!(s.is_finite());
+                if i >= (0.75 * sr) as usize {
+                    sum += s.abs();
+                }
+            }
+            sum
+        }
+        let riff = late_energy(false);
+        let lead = late_energy(true);
+        assert!(lead > riff, "solo decays like riff: {lead} vs {riff}");
     }
 
     #[test]

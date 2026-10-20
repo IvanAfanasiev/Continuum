@@ -18,10 +18,7 @@ const JNI_VERSION_1_6: c_int = 0x0001_0006;
 /// нам нужен только JavaVM: аудио-запросы идут статическими методами,
 /// объект контекста не используется.
 #[no_mangle]
-pub unsafe extern "system" fn JNI_OnLoad(
-    vm: *mut c_void,
-    _reserved: *mut c_void,
-) -> c_int {
+pub unsafe extern "system" fn JNI_OnLoad(vm: *mut c_void, _reserved: *mut c_void) -> c_int {
     ndk_context::initialize_android_context(vm, std::ptr::null_mut());
     JNI_VERSION_1_6
 }

@@ -978,16 +978,24 @@ impl SseDecode for crate::playback::EngineStats {
         let mut var_frames = <u64>::sse_decode(deserializer);
         let mut var_pushed = <u64>::sse_decode(deserializer);
         let mut var_consumed = <u64>::sse_decode(deserializer);
+        let mut var_dropped = <u64>::sse_decode(deserializer);
+        let mut var_late = <u64>::sse_decode(deserializer);
+        let mut var_reanchors = <u64>::sse_decode(deserializer);
         let mut var_queued = <u64>::sse_decode(deserializer);
         let mut var_audioConfig = <String>::sse_decode(deserializer);
         let mut var_restarts = <u64>::sse_decode(deserializer);
+        let mut var_outputLatencyMs = <f32>::sse_decode(deserializer);
         return crate::playback::EngineStats {
             frames: var_frames,
             pushed: var_pushed,
             consumed: var_consumed,
+            dropped: var_dropped,
+            late: var_late,
+            reanchors: var_reanchors,
             queued: var_queued,
             audio_config: var_audioConfig,
             restarts: var_restarts,
+            output_latency_ms: var_outputLatencyMs,
         };
     }
 }
@@ -1355,9 +1363,13 @@ impl flutter_rust_bridge::IntoDart for crate::playback::EngineStats {
             self.frames.into_into_dart().into_dart(),
             self.pushed.into_into_dart().into_dart(),
             self.consumed.into_into_dart().into_dart(),
+            self.dropped.into_into_dart().into_dart(),
+            self.late.into_into_dart().into_dart(),
+            self.reanchors.into_into_dart().into_dart(),
             self.queued.into_into_dart().into_dart(),
             self.audio_config.into_into_dart().into_dart(),
             self.restarts.into_into_dart().into_dart(),
+            self.output_latency_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1505,9 +1517,13 @@ impl SseEncode for crate::playback::EngineStats {
         <u64>::sse_encode(self.frames, serializer);
         <u64>::sse_encode(self.pushed, serializer);
         <u64>::sse_encode(self.consumed, serializer);
+        <u64>::sse_encode(self.dropped, serializer);
+        <u64>::sse_encode(self.late, serializer);
+        <u64>::sse_encode(self.reanchors, serializer);
         <u64>::sse_encode(self.queued, serializer);
         <String>::sse_encode(self.audio_config, serializer);
         <u64>::sse_encode(self.restarts, serializer);
+        <f32>::sse_encode(self.output_latency_ms, serializer);
     }
 }
 

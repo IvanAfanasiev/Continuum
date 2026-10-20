@@ -1,9 +1,8 @@
 use super::{
-    dsp::{release_fade, Svf},
+    dsp::{fast_tanh, release_fade, sin01, ExpDecay, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
-use std::f32::consts::TAU;
 
 /// Фестивальный суперсо-лид: широкая стена из чистых интервалов
 /// (унисон, 10/9, 4/3, 3/2, октава) через яркий щелчок среза.
@@ -39,6 +38,9 @@ pub struct FestivalVoice {
     /// Поворот стены от питча: та же нота — тот же стек,
     /// разные ноты — разные краски (мотив не монотонен).
     rot: usize,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    amp_env: ExpDecay,
+    cutoff_env: ExpDecay,
 }
 
 impl Voice for FestivalVoice {
@@ -54,6 +56,8 @@ impl Voice for FestivalVoice {
         self.t = 0.0;
         self.phase = 0.0;
         self.rot = (note.midi_pitch % 5) as usize;
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
         self.filter.reset();
     }
 
@@ -66,7 +70,7 @@ impl Voice for FestivalVoice {
         let sample_rate = self.sample_rate;
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = (-AMP_DECAY_RATE * self.t).exp();
+        let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.phase = (self.phase + self.frequency / sample_rate) % 4096.0;
@@ -76,15 +80,15 @@ impl Voice for FestivalVoice {
         let mut raw = 0.0;
         for i in 0..5 {
             let ratio = JUST_WALL[(i + self.rot) % 5] * WALL_SHIMMER[i];
-            raw += (TAU * self.phase * ratio).sin();
+            raw += sin01(self.phase * ratio);
         }
         raw /= 5.0;
 
-        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * (-FILTER_SNAP_RATE * self.t).exp();
+        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.cutoff_env.next();
         let (low, _, _) = self.filter.process(raw, cutoff, FILTER_Q, sample_rate);
 
         self.t += 1.0 / sample_rate;
-        (low * 1.3).tanh() * self.gain * amp * attack * fade * VOICE_GAIN
+        fast_tanh(low * 1.3) * self.gain * amp * attack * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {

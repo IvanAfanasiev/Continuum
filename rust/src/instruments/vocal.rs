@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{release_fade, Noise, Svf},
+    dsp::{release_fade, sin01, ExpDecay, Noise, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -26,9 +24,16 @@ const FORMANT_Q: f32 = 2.0;
 const BREATH_GAIN: f32 = 0.022;
 const BREATH_HZ: f32 = 2400.0;
 const ATTACK_SECS: f32 = 0.09;
-const AMP_DECAY_RATE: f32 = 2.2;
-const MAX_RING_SECS: f32 = 1.8;
-const FADE_SECS: f32 = 0.08;
+const AMP_DECAY_RATE: f32 = 1.7;
+/// Длинный релиз вместо эха: хор плывёт сам, без дилэя-прослойки.
+/// Было 1.8 — обрезанный хвост просил эхо; теперь хвост живёт
+/// в голосе (плюс растяжка длительности ниже).
+const MAX_RING_SECS: f32 = 3.0;
+const FADE_SECS: f32 = 0.2;
+/// Растяжка длительности ноты: вокальные фразы перекрываются,
+/// линия плывёт, а не тычет отдельными чопами. Пула 4 голосов
+/// хватает (вокал редкий, краж почти нет).
+const RING_STRETCH: f32 = 1.6;
 const VOICE_GAIN: f32 = 0.5;
 
 #[derive(Clone, Default)]
@@ -48,6 +53,9 @@ pub struct VocalVoice {
     samples_left: usize,
     pub(crate) f1_hz: f32,
     pub(crate) f2_hz: f32,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    amp_env: ExpDecay,
+    scoop_env: ExpDecay,
 }
 
 impl Voice for VocalVoice {
@@ -57,7 +65,7 @@ impl Voice for VocalVoice {
 
     fn trigger(&mut self, note: &NoteEvent) {
         self.frequency = midi_to_freq(note.midi_pitch);
-        let ring = note.duration_secs.clamp(0.05, MAX_RING_SECS);
+        let ring = (note.duration_secs * RING_STRETCH).clamp(0.05, MAX_RING_SECS);
         self.ring_secs = ring;
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
@@ -70,6 +78,9 @@ impl Voice for VocalVoice {
         // хором, а не слогами по нотам. Шум детерминирован нотой.
         self.f1_hz = AH.0;
         self.f2_hz = AH.1;
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        // Scoop: константа времени 30 мс → rate 1/0.03.
+        self.scoop_env = ExpDecay::start(1.0 / 0.03, self.sample_rate);
         self.noise = Noise::new(super::dsp::note_seed(note, 0xB0CA));
     }
 
@@ -82,13 +93,13 @@ impl Voice for VocalVoice {
         let sample_rate = self.sample_rate;
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = (-AMP_DECAY_RATE * self.t).exp();
+        let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sample_rate) % 1.0;
-        let wobble = 1.0 + VIBRATO_DEPTH * (self.vib_phase * TAU).sin();
+        let wobble = 1.0 + VIBRATO_DEPTH * sin01(self.vib_phase);
         // Scoop: голос въезжает снизу (−4% за 30 мс), как живой onset.
-        let scoop = 1.0 - 0.04 * (-self.t / 0.03).exp();
+        let scoop = 1.0 - 0.04 * self.scoop_env.next();
         let freq = self.frequency * wobble * scoop;
 
         self.phase = (self.phase + freq / sample_rate) % 4096.0;
@@ -96,19 +107,21 @@ impl Voice for VocalVoice {
         // Только синусы — алиасинга нет по построению.
         let mut raw = 0.0;
         for (ratio, amp) in CHOIR_PARTIALS {
-            raw += (TAU * self.phase * ratio).sin() * amp;
+            raw += sin01(self.phase * ratio) * amp;
         }
 
         // Гласная плывет ah → oh за время ноты (доля пройденного кольца).
+        // Срез квантуем до 1 Гц (0.14%, неслышно): кэш коэффициентов
+        // SVF попадает сотни сэмплов подряд вместо пересчёта `tan`.
         let morph = (self.t / self.ring_secs).clamp(0.0, 1.0);
-        let f1 = AH.0 + (OH.0 - AH.0) * morph;
-        let f2 = AH.1 + (OH.1 - AH.1) * morph;
+        let f1 = (AH.0 + (OH.0 - AH.0) * morph).round();
+        let f2 = (AH.1 + (OH.1 - AH.1) * morph).round();
         let (_, vow1, _) = self.form1.process(raw, f1, FORMANT_Q, sample_rate);
         let (_, vow2, _) = self.form2.process(raw, f2, FORMANT_Q, sample_rate);
         // Дыхание: шум через полосу 2.4 кГц поверх гласных.
-        let (_, breath, _) = self
-            .breath_bp
-            .process(self.noise.sample(), BREATH_HZ, 1.2, sample_rate);
+        let (_, breath, _) =
+            self.breath_bp
+                .process(self.noise.sample(), BREATH_HZ, 1.2, sample_rate);
 
         self.t += 1.0 / sample_rate;
         (vow1 + vow2 + breath * BREATH_GAIN) * self.gain * amp * attack * fade * VOICE_GAIN

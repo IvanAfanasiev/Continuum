@@ -658,16 +658,25 @@ class _MotifWheelState extends State<_MotifWheel> {
   double _anchorP = 0.0;
   DateTime _anchorT = DateTime.now();
 
-  /// Маски голосов из последнего опроса (план текущей фразы):
-  /// точки стоят с начала фразы на своих местах — опоздания нет.
-  /// Рука и точки идут от одних часов движка, поэтому совпадают.
+  /// История кадров (время приёма, кадр): звук позади генерации на
+  /// выходную задержку, поэтому показываем не свежий кадр, а тот,
+  /// что соответствует слышимому моменту (now - задержка).
+  final List<(DateTime, LiveVisual)> _history = [];
+
+  /// Выходная задержка из движка (мс) + маржа опроса/чанка.
+  /// Маржа 120мс покрывает опрос колеса (100мс) и чанк рендера (50мс).
+  double _latencyMs = 0;
+  static const _marginMs = 120.0;
+  int _statsTick = 0;
+
+  /// Маски голосов из последнего опроса: это настоящие ноты текущей
+  /// фразы (движок отдаёт то, что реально прозвучало), а не отдельный
+  /// пре-рендер. Поэтому точка на колесе и звук — это одно и то же
+  /// событие, разойтись они не могут.
   int _liveKick = 0;
   int _liveSnare = 0;
   int _liveBass = 0;
   int _liveTheme = 0;
-  /// Сыграно фразы: эти точки светятся ярко, будущие — тускло.
-  /// Рука никогда не выглядит опоздавшей: впереди тусклые (предстоят).
-  int _played = 0;
 
   /// Сглаженная фаза руки 0..1: тянется к цели (якорь + время × BPM),
   /// а не прыгает на нее — свингованные 16-е дышат внутри такта,
@@ -715,21 +724,56 @@ class _MotifWheelState extends State<_MotifWheel> {
         final v = await playbackLiveVisual();
         if (mounted) {
           setState(() {
-            _frame = v;
-            // Якорь руки — точная фаза фразы каждый опрос: равномерный
-            // ход без лесенки шагов.
-            _anchorP = v.phrasePhase;
-            _anchorT = DateTime.now();
-            // План фразы — как есть: точки совпадают с рукой.
-            _liveKick = v.pkick;
-            _liveSnare = v.psnare;
-            _liveBass = v.pbass;
-            _liveTheme = v.ptheme;
-            _played = v.pplayed;
+            final now = DateTime.now();
+            // Копим историю, старое режем (2.5с хватает с запасом:
+            // задержка выхода ≤ ~1с + маржа).
+            _history.add((now, v));
+            while (_history.length > 2 &&
+                now.difference(_history.first.$1).inMilliseconds > 2500) {
+              _history.removeAt(0);
+            }
+            // Кадр слышимого момента: самый свежий не новее now-задержка.
+            final delayMs =
+                (_latencyMs > 0 ? _latencyMs : 150.0) + _marginMs;
+            final cutoff =
+                now.subtract(Duration(milliseconds: delayMs.round()));
+            var shown = v;
+            var shownT = now;
+            for (final e in _history) {
+              if (!e.$1.isAfter(cutoff)) {
+                shown = e.$2;
+                shownT = e.$1;
+              }
+            }
+            _frame = shown;
+            // Якорь сдвигаем на задержку: рука показывает фазу,
+            // звучащую сейчас, а не сгенерированную сейчас.
+            _anchorP = shown.phrasePhase;
+            _anchorT =
+                shownT.add(Duration(milliseconds: delayMs.round()));
+            // Ноты фразы — как есть: точки совпадают с рукой.
+            _liveKick = shown.pkick;
+            _liveSnare = shown.psnare;
+            _liveBass = shown.pbass;
+            _liveTheme = shown.ptheme;
           });
         }
       } catch (_) {
         // Кадр необязателен — рука идет от якоря, колесо живет.
+      }
+      // Задержку обновляем раз в секунду: она дрейфует медленно.
+      _statsTick++;
+      if (_statsTick % 10 == 0) {
+        try {
+          final s = await playbackEngineStats();
+          if (mounted) {
+            setState(() {
+              _latencyMs = s.outputLatencyMs;
+            });
+          }
+        } catch (_) {
+          // Статистика необязательна — останется прошлая оценка.
+        }
       }
     });
   }
@@ -747,8 +791,9 @@ class _MotifWheelState extends State<_MotifWheel> {
     final hand = _display;
     final bpm = _bpm();
     final phraseSecs = 480.0 / bpm;
-    // Точки — живой такт из последнего опроса: загораются в момент
-    // звучания под рукой (те же часы, рассинхрона нет).
+    // Точки — настоящие ноты фразы из последнего опроса: загораются
+    // в момент звучания под рукой (те же часы, рассинхрона нет) и
+    // тают за стрелкой.
     final kick = _liveKick;
     final snare = _liveSnare;
     final bass = _liveBass;
@@ -769,7 +814,6 @@ class _MotifWheelState extends State<_MotifWheel> {
                   snare: snare,
                   bass: bass,
                   theme: theme,
-                  played: _played,
                   phase: hand,
                   energy: energy,
                 ),
@@ -812,20 +856,24 @@ class _WheelPainter extends CustomPainter {
     required this.snare,
     required this.bass,
     required this.theme,
-    required this.played,
     required this.phase,
     required this.energy,
   });
 
-  /// Маски голосов по долям фразы (бит = 32-я доля фразы).
+  /// Маски голосов по долям фразы (бит = 32-я доля фразы): настоящие
+  /// ноты фразы — ровно то, что звучало.
   final int kick;
   final int snare;
   final int bass;
   final int theme;
-  /// Сыграно: ярко; план без бита — тускло (предстоит).
-  final int played;
+  /// Фаза руки 0..1 (доля фразы).
   final double phase;
   final double energy;
+
+  /// Сколько фразы точка тает за стрелкой. След короче фразы, поэтому
+  /// обнуление масок на границе фразы не видно: старые точки уже
+  /// погасли.
+  static const _fadeSpan = 0.75;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -846,8 +894,8 @@ class _WheelPainter extends CustomPainter {
 
     // Орбита голоса: свой радиус — точки голосов не лежат друг на друге,
     // каждый голос читается отдельно. Доли и даунбит фразы крупнее.
-    // Двухтон: сыграно — ярко, предстоит — тускло (рука не выглядит
-    // опоздавшей: впереди всегда тусклые, а не «пропущенные»).
+    // Радарный след: точка загорается, когда стрелка до нее дошла, и
+    // плавно тает, когда стрелка ушла дальше.
     void voice(int mask, double orbit, Color color, double size) {
       // Едва видимая орбита.
       canvas.drawCircle(
@@ -865,19 +913,24 @@ class _WheelPainter extends CustomPainter {
             Offset(
                 r * orbit * math.cos(ang), r * orbit * math.sin(ang));
         final px = near(i);
+        // Давность точки: сколько фразы прошло с момента, как стрелка
+        // прошла мимо. 0 — точка под стрелкой, дальше — тает.
+        var age = (phase - i / n) % 1.0;
+        if (age < 0) age += 1.0;
+        final fade = (1.0 - age / _fadeSpan).clamp(0.0, 1.0);
         // Доля такта (каждая 4-я) и даунбит фразы крупнее: метр виден.
         final beat = i % 4 == 0 ? 1.0 : 0.0;
         final down = i == 0 ? 1.5 : 0.0;
-        final done = (played & (1 << i)) != 0;
+        final now = px > 0.55;
+        // Под стрелкой — вспышка: точка совпала с звуком.
+        final alpha = now ? 1.0 : (0.10 + 0.90 * fade * fade);
         canvas.drawCircle(
           p,
           size + beat + down + 3.0 * px * px,
           Paint()
-            ..color = px > 0.55
+            ..color = now
                 ? const Color(0xFFFFB300)
-                : done
-                    ? color
-                    : color.withValues(alpha: 0.30),
+                : color.withValues(alpha: alpha),
         );
       }
     }

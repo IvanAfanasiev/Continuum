@@ -1,9 +1,8 @@
 use super::{
-    dsp::{release_fade, square_blep, Svf},
+    dsp::{fast_tanh, release_fade, sin01, square_blep, ExpDecay, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
-use std::f32::consts::TAU;
 
 /// Лазерный лид: формульный запитч («pew») через резонансный свип.
 /// Высота падает с 2.8x к ноте, а тембр шагает чистыми отношениями
@@ -44,6 +43,10 @@ pub struct LaserVoice {
     samples_left: usize,
     /// Сглаженное отношение строя: глид вместо ступеньки.
     r_slew: f32,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    zap_env: ExpDecay,
+    amp_env: ExpDecay,
+    cutoff_env: ExpDecay,
 }
 
 impl Voice for LaserVoice {
@@ -60,6 +63,9 @@ impl Voice for LaserVoice {
         self.phase = 0.0;
         self.phase_sub = 0.0;
         self.r_slew = 1.0;
+        self.zap_env = ExpDecay::start(ZAP_RATE, self.sample_rate);
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
         self.filter.reset();
     }
 
@@ -71,12 +77,12 @@ impl Voice for LaserVoice {
 
         let sample_rate = self.sample_rate;
         // Запитч вниз: старт в 2.8 раза выше ноты, быстрое падение.
-        let zap = 1.0 + ZAP_AMOUNT * (-ZAP_RATE * self.t).exp();
+        let zap = 1.0 + ZAP_AMOUNT * self.zap_env.next();
         let freq = self.frequency * zap;
 
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = (-AMP_DECAY_RATE * self.t).exp();
+        let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.phase_sub = (self.phase_sub + (self.frequency * 0.5) / sample_rate) % 1.0;
@@ -90,18 +96,16 @@ impl Voice for LaserVoice {
         let k = (RATIO_GLIDE_RATE / sample_rate).min(1.0);
         self.r_slew += (r_t - self.r_slew) * k;
         let r = self.r_slew;
-        let tone = ((TAU * self.phase * r).sin()
-            + (TAU * self.phase * r * DETUNE).sin())
-            * 0.5;
+        let tone = (sin01(self.phase * r) + sin01(self.phase * r * DETUNE)) * 0.5;
         let sub = square_blep(self.phase_sub, self.frequency * 0.5, sample_rate) * SUB_GAIN;
 
-        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * (-FILTER_SNAP_RATE * self.t).exp();
+        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.cutoff_env.next();
         let (low, _, _) = self
             .filter
             .process(tone + sub, cutoff, FILTER_Q, sample_rate);
 
         self.t += 1.0 / sample_rate;
-        (low * 1.4).tanh() * self.gain * amp * attack * fade * VOICE_GAIN
+        fast_tanh(low * 1.4) * self.gain * amp * attack * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {

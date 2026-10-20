@@ -211,7 +211,8 @@ impl ProtoEngine {
         let freq = midi_to_freq(midi);
         let x = local * self.beat16() * freq + step as f32 * 0.5;
         // Фонк-стек чистого строя: унисон + квинта + октава.
-        let tone = (TAU * x).sin() * 0.55 + (TAU * x * 1.5).sin() * 0.25 + (TAU * x * 2.0).sin() * 0.2;
+        let tone =
+            (TAU * x).sin() * 0.55 + (TAU * x * 1.5).sin() * 0.25 + (TAU * x * 2.0).sin() * 0.2;
         let d = local * self.beat16();
         // Края шага гасятся: гейт включается/выключается без щелчка.
         let edge = (local / 0.05).min(1.0) * ((1.0 - local) / 0.05).min(1.0);
@@ -298,7 +299,12 @@ pub fn proto_soak(seed: u64, seconds: f32, sample_rate: f32) -> ProtoSoak {
 
 /// WAV-экспорт прототипа (PCM16 stereo, заголовок вручную —
 /// как основной тракт, без внешних зависимостей).
-pub fn proto_wav(seed: u64, seconds: f32, sample_rate: f32, path: &str) -> Result<ProtoSoak, String> {
+pub fn proto_wav(
+    seed: u64,
+    seconds: f32,
+    sample_rate: f32,
+    path: &str,
+) -> Result<ProtoSoak, String> {
     let mut eng = ProtoEngine::new(seed, sample_rate);
     let sr = eng.sample_rate;
     let target = (seconds.max(0.0) * sr) as u64;
@@ -352,7 +358,8 @@ fn write_wav(pcm: &[i16], sample_rate: u32, path: &str) -> Result<(), String> {
     let mut f = std::fs::File::create(path).map_err(|e| format!("{path}: {e}"))?;
     f.write_all(&h).map_err(|e| format!("{path}: {e}"))?;
     for s in pcm {
-        f.write_all(&s.to_le_bytes()).map_err(|e| format!("{path}: {e}"))?;
+        f.write_all(&s.to_le_bytes())
+            .map_err(|e| format!("{path}: {e}"))?;
     }
     Ok(())
 }

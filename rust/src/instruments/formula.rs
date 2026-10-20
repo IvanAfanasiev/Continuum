@@ -1,5 +1,5 @@
 use super::{
-    dsp::{release_fade, square_blep, Svf},
+    dsp::{fast_tanh, release_fade, sin01, square_blep, ExpDecay, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -40,13 +40,11 @@ fn raw(mode: u8, x: f32, tune: u32) -> f32 {
         // Фонк-строй: высота шагает чистыми отношениями каждые полцикла.
         1 => {
             let r = PHONK_RATIOS[(x * 2.0).floor().rem_euclid(4.0) as usize];
-            (TAU * x * r).sin()
+            sin01(x * r)
         }
         // Микротональный стек дропа: унисон + квинта 3/2 + тон 9/8.
         // Только синусы — алиасинга нет по построению.
-        2 => {
-            (TAU * x).sin() * 0.6 + (TAU * x * 1.5).sin() * 0.3 + (TAU * x * 1.125).sin() * 0.25
-        }
+        2 => sin01(x) * 0.6 + sin01(x * 1.5) * 0.3 + sin01(x * 1.125) * 0.25,
         // Bytebeat с периодом ноты: 256 шагов на цикл, грязь цифры.
         // Период привязан к высоте (а не к частоте дискретизации) —
         // формула поет ноту, а не визжит. Приглушен против остальных
@@ -83,6 +81,12 @@ pub struct FormulaVoice {
     /// Сглаженный выход bytebeat (режим 3): ступеньки 6-бит
     /// квантования давятся питч-трекинг фильтром, характер остается.
     bb_s: f32,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    amp_env: ExpDecay,
+    cutoff_env: ExpDecay,
+    /// Коэффициент сглаживания bytebeat (режим 3): зависит только
+    /// от высоты ноты — считается раз в `trigger`, а не на сэмпл.
+    bb_k: f32,
 }
 
 impl Voice for FormulaVoice {
@@ -102,6 +106,10 @@ impl Voice for FormulaVoice {
         self.fm_phase = 0.0;
         self.r_slew = 1.0;
         self.bb_s = 0.0;
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
+        let cut = (self.frequency * 8.0).min(12000.0);
+        self.bb_k = 1.0 - (-TAU * cut / self.sample_rate).exp();
         self.filter.reset();
     }
 
@@ -119,53 +127,44 @@ impl Voice for FormulaVoice {
             0 => {
                 let f = self.frequency;
                 let m1 = square_blep(x % 1.0, f, sample_rate) * 0.5 + 0.5;
-                let m2 =
-                    square_blep((x * 2.0) % 1.0, f * 2.0, sample_rate) * 0.5 + 0.5;
-                let m4 =
-                    square_blep((x * 4.0) % 1.0, f * 4.0, sample_rate) * 0.5 + 0.5;
+                let m2 = square_blep((x * 2.0) % 1.0, f * 2.0, sample_rate) * 0.5 + 0.5;
+                let m4 = square_blep((x * 4.0) % 1.0, f * 4.0, sample_rate) * 0.5 + 0.5;
                 (-1.0 + 0.25 * m2 + m4 * m1 + 0.625) * 0.7
             }
             // Фонк-строй: отношение глидирует к цели (~14 мс), фаза
             // интегрируется — ступеньки строя слышны, щелчка нет.
             1 => {
-                let r_t =
-                    PHONK_RATIOS[(x * 2.0).floor().rem_euclid(4.0) as usize];
+                let r_t = PHONK_RATIOS[(x * 2.0).floor().rem_euclid(4.0) as usize];
                 let k = (RATIO_GLIDE_RATE / sample_rate).min(1.0);
                 self.r_slew += (r_t - self.r_slew) * k;
-                self.fm_phase =
-                    (self.fm_phase + self.frequency * self.r_slew / sample_rate)
-                        % 1.0;
-                (TAU * self.fm_phase).sin()
+                self.fm_phase = (self.fm_phase + self.frequency * self.r_slew / sample_rate) % 1.0;
+                sin01(self.fm_phase)
             }
             // Bytebeat: 6-битные ступеньки сглажены однополюсником
             // со срезом от высоты (8×freq, потолок 12 кГц) — чиптюн
             // остается, ультразвуковые ступени и фолдбек уходят.
             // Срез ниже (4×) душил уровень на низах: ступени несут
             // энергию волны, давим только ультразвук.
-            // Коэффициент — точный (1−e^(−..)), а не линейный: линейный
-            // давал k≥1 на верхах и фильтр не работал вовсе.
+            // Коэффициент посчитан в trigger (постоянен на ноту).
             3 => {
                 let step = raw(3, x, self.tune);
-                let cut = (self.frequency * 8.0).min(12000.0);
-                let k = 1.0 - (-TAU * cut / sample_rate).exp();
-                self.bb_s += (step - self.bb_s) * k;
+                self.bb_s += (step - self.bb_s) * self.bb_k;
                 self.bb_s
             }
             _ => raw(self.mode, x, self.tune),
         };
 
         // Велосити открывает фильтр: тихие ноты темнее, громкие злее.
-        let cutoff =
-            FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.velocity * (-FILTER_SNAP_RATE * self.t).exp();
+        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.velocity * self.cutoff_env.next();
         let (low, _, _) = self.filter.process(r, cutoff, FILTER_Q, sample_rate);
 
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = (-AMP_DECAY_RATE * self.t).exp();
+        let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        (low * 1.3).tanh() * self.gain * amp * attack * fade * VOICE_GAIN
+        fast_tanh(low * 1.3) * self.gain * amp * attack * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -190,7 +189,9 @@ mod tests {
         let mut pool = VoicePool::formulas(18, 4);
         pool.set_sample_rate(sr);
         pool.trigger(&NoteEvent::new(18, pitch, vel, secs));
-        (0..(secs * sr) as usize).map(|_| pool.next_sample()).collect()
+        (0..(secs * sr) as usize)
+            .map(|_| pool.next_sample())
+            .collect()
     }
 
     #[test]
@@ -234,7 +235,11 @@ mod tests {
         for i in 0..n {
             sum += raw(0, i as f32 / 1000.0, 60);
         }
-        assert!((sum / n as f32).abs() < 0.05, "bitacid has DC: {}", sum / n as f32);
+        assert!(
+            (sum / n as f32).abs() < 0.05,
+            "bitacid has DC: {}",
+            sum / n as f32
+        );
     }
 
     #[test]

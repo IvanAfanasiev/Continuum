@@ -1,7 +1,7 @@
 use std::f32::consts::TAU;
 
 use super::{
-    dsp::{note_seed, release_fade, Svf},
+    dsp::{fast_tanh, note_seed, release_fade, ExpDecay, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -57,6 +57,9 @@ pub struct WavetableVoice {
     velocity: f32,
     t: f32,
     samples_left: usize,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    amp_env: ExpDecay,
+    cutoff_env: ExpDecay,
 }
 
 impl Voice for WavetableVoice {
@@ -68,8 +71,7 @@ impl Voice for WavetableVoice {
         let freq = midi_to_freq(note.midi_pitch);
         // Полоса таблицы — до Найквиста и не выше: верхние гармоники
         // высокой ноты отрезаются, а не заворачиваются в свист.
-        let nyquist_harm =
-            (self.sample_rate * 0.45 / freq.max(20.0)).floor() as usize;
+        let nyquist_harm = (self.sample_rate * 0.45 / freq.max(20.0)).floor() as usize;
         let harms = nyquist_harm.clamp(2, MAX_HARM);
         let seed = note_seed(note, 0x1AB1E);
         // Наклон спектра от velocity: тихие — синус с теплом,
@@ -99,6 +101,8 @@ impl Voice for WavetableVoice {
         self.velocity = note.velocity;
         self.gain = note.velocity;
         self.t = 0.0;
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
         self.filter.reset();
     }
 
@@ -118,17 +122,16 @@ impl Voice for WavetableVoice {
         let raw = self.table[i0] * (1.0 - frac) + self.table[i1] * frac;
         self.phase = (self.phase + self.step) % 1.0;
 
-        let cutoff = FILTER_FLOOR_HZ
-            + FILTER_SNAP_HZ * self.velocity * (-FILTER_SNAP_RATE * self.t).exp();
+        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.velocity * self.cutoff_env.next();
         let (low, _, _) = self.filter.process(raw, cutoff, FILTER_Q, sample_rate);
 
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = (-AMP_DECAY_RATE * self.t).exp();
+        let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        (low * 1.3).tanh() * self.gain * amp * attack * fade * VOICE_GAIN
+        fast_tanh(low * 1.3) * self.gain * amp * attack * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -153,7 +156,9 @@ mod tests {
         let mut pool = VoicePool::wavetables(19, 4);
         pool.set_sample_rate(sr);
         pool.trigger(&NoteEvent::new(19, pitch, vel, secs));
-        (0..(secs * sr) as usize).map(|_| pool.next_sample()).collect()
+        (0..(secs * sr) as usize)
+            .map(|_| pool.next_sample())
+            .collect()
     }
 
     #[test]

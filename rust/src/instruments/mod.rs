@@ -86,6 +86,12 @@ pub enum Group {
 }
 
 impl Group {
+    /// Индекс группы = дискриминант (порядок объявления): бит маски
+    /// слоев аранжировки.
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
     pub const ALL: [Group; 8] = [
         Group::Bass,
         Group::Kick,
@@ -151,10 +157,14 @@ pub enum Slot {
     Shaker = 17,
     Formula = 18,
     Wavetable = 19,
+    /// Соло-гитара (перебор/длинные линии): тот же DSP-ядро, что рифф,
+    /// другой характер (сустейн, верх, лёгкий драйв) и свои направляющие.
+    /// Добавлен позже остальных — номер следующий свободный.
+    GuitarLead = 20,
 }
 
 impl Slot {
-    pub const COUNT: usize = 19;
+    pub const COUNT: usize = 20;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -175,6 +185,7 @@ impl Slot {
         Slot::Shaker,
         Slot::Formula,
         Slot::Wavetable,
+        Slot::GuitarLead,
     ];
 
     pub fn id(self) -> usize {
@@ -207,6 +218,7 @@ impl Slot {
             Slot::Shaker => "shaker",
             Slot::Formula => "formula",
             Slot::Wavetable => "wavetable",
+            Slot::GuitarLead => "guitar lead",
         }
     }
 
@@ -223,9 +235,11 @@ impl Slot {
             Slot::Laser => InstrumentRole::Lead,
             Slot::Vinyl => InstrumentRole::Texture,
             Slot::Vocal => InstrumentRole::Vocal,
-            Slot::Guitar => InstrumentRole::Lead,
+            Slot::Guitar | Slot::GuitarLead => InstrumentRole::Lead,
             Slot::Rain => InstrumentRole::Texture,
-            Slot::Flute | Slot::Festival | Slot::Fuzz | Slot::Formula | Slot::Wavetable => InstrumentRole::Lead,
+            Slot::Flute | Slot::Festival | Slot::Fuzz | Slot::Formula | Slot::Wavetable => {
+                InstrumentRole::Lead
+            }
         }
     }
 
@@ -239,7 +253,13 @@ impl Slot {
             Slot::Pluck | Slot::Laser => Group::Lead,
             Slot::Vocal => Group::Vocal,
             Slot::Vinyl | Slot::Rain => Group::Texture,
-            Slot::Flute | Slot::Festival | Slot::Guitar | Slot::Fuzz | Slot::Formula | Slot::Wavetable => Group::Lead,
+            Slot::Flute
+            | Slot::Festival
+            | Slot::Guitar
+            | Slot::Fuzz
+            | Slot::Formula
+            | Slot::Wavetable
+            | Slot::GuitarLead => Group::Lead,
         }
     }
 
@@ -268,6 +288,7 @@ impl Slot {
             Slot::Shaker => 0.55,
             Slot::Formula => 0.55,
             Slot::Wavetable => 0.55,
+            Slot::GuitarLead => 0.6,
         }
     }
 }
@@ -373,11 +394,11 @@ use festival::FestivalVoice;
 use flute::FluteVoice;
 use formula::FormulaVoice;
 use keys::KeysVoice;
-use wavetable::WavetableVoice;
 use laser::LaserVoice;
 use pad::PadVoice;
 use pluck::PluckVoice;
 use vocal::VocalVoice;
+use wavetable::WavetableVoice;
 
 /// Любой голос полифонического пула. Enum вместо generic-параметра:
 /// конкретный тип в каждом варианте, динамическая диспетчеризация
@@ -560,10 +581,7 @@ impl<V: Voice + Default + Clone> Instrument for Mono<V> {
         // линия течет глиссом, а не рубится на каждой восьмой.
         // Та же высота — свежая атака (повтор артикулируется).
         // Голоса без своего legato идут прежним путем с хвостом.
-        if self.main.is_active()
-            && self.main.has_legato()
-            && self.pitch != Some(note.midi_pitch)
-        {
+        if self.main.is_active() && self.main.has_legato() && self.pitch != Some(note.midi_pitch) {
             self.main.legato(note);
             self.pitch = Some(note.midi_pitch);
             return;
@@ -709,6 +727,19 @@ impl VoicePool {
             InstrumentRole::Lead,
             (0..count)
                 .map(|_| AnyVoice::Guitar(GuitarVoice::default()))
+                .collect(),
+        )
+    }
+
+    /// Соло-гитара (перебор/длинные линии): то же DSP-ядро, характер Lead
+    /// (сустейн, верх, лёгкий драйв). Отдельный слот, т.к. у соло свой
+    /// ритм, регистр и огибающие — и оно звучит одновременно с риффом.
+    pub fn guitar_leads(id: usize, count: usize) -> Self {
+        Self::with_voices(
+            id,
+            InstrumentRole::Lead,
+            (0..count)
+                .map(|_| AnyVoice::Guitar(GuitarVoice::lead()))
                 .collect(),
         )
     }
@@ -898,6 +929,7 @@ mod tests {
             (Shaker, 17),
             (Formula, 18),
             (Wavetable, 19),
+            (GuitarLead, 20),
         ];
         assert_eq!(frozen.len(), Slot::COUNT);
         for (slot, id) in frozen {

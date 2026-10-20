@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{release_fade, Noise, Svf},
+    dsp::{release_fade, sin01, ExpDecay, Noise, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -36,6 +34,8 @@ pub struct FluteVoice {
     gain: f32,
     t: f32,
     samples_left: usize,
+    /// Рекуррентная огибающая вместо посэмплового `exp`.
+    amp_env: ExpDecay,
 }
 
 impl Voice for FluteVoice {
@@ -51,6 +51,7 @@ impl Voice for FluteVoice {
         self.t = 0.0;
         self.phase = 0.0;
         self.phase2 = 0.0;
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
         self.breath.reset();
     }
 
@@ -63,18 +64,18 @@ impl Voice for FluteVoice {
         let sample_rate = self.sample_rate;
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-AMP_DECAY_RATE * self.t).exp();
+        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         // Вибрато расцветает после атаки.
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sample_rate) % 1.0;
         let bloom = (self.t / VIBRATO_BLOOM_SECS).min(1.0);
-        let wobble = 1.0 + VIBRATO_DEPTH * bloom * (self.vib_phase * TAU).sin();
+        let wobble = 1.0 + VIBRATO_DEPTH * bloom * sin01(self.vib_phase);
         let freq = self.frequency * wobble;
 
         self.phase = (self.phase + freq / sample_rate) % 1.0;
         self.phase2 = (self.phase2 + (freq * 2.0) / sample_rate) % 1.0;
-        let tone = (self.phase * TAU).sin() + (self.phase2 * TAU).sin() * SHIMMER_GAIN;
+        let tone = sin01(self.phase) + sin01(self.phase2) * SHIMMER_GAIN;
 
         // Дыхание следует за огибающей.
         let (_, breath_band, _) =

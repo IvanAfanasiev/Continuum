@@ -19,8 +19,7 @@ const BASS_W: &[f32] = &[
     // Оффбитные восьмые вместо стены 16-х: кач между ударами бочки,
     // а не ковер под ней. Стена топила транзиенты (crest 4.4 против 7–12
     // у референсов) и темнила микс.
-    0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8,
-    0.0,
+    0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0,
 ];
 const PAD_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -52,19 +51,16 @@ const KICK_SYNCOP_W: &[f32] = &[
 const KICK_DRIVE8_W: &[f32] = &[
     // Вдох перед единицей: 15-й шаг пустой всегда, иначе связка
     // 14-15-0 дает фламовую очередь вместо грува.
-    1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.35,
-    0.0,
+    1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.35, 0.0,
 ];
 // Драйв с оффбитными толчками: четверка плюс тихая синкопа на слабых.
 const KICK_PUSH_W: &[f32] = &[
-    1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.3, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0,
-    0.0,
+    1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.3, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.0,
 ];
 // Шейкер: песок 16-х, оффбитные восьмые — якоря (шейкер ровный),
 // четверти и 16-е заполняют.
 const SHAKER_W: &[f32] = &[
-    0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3,
-    1.0, 0.4,
+    0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.4,
 ];
 const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W, KICK_PUSH_W];
 const HAT_OFF_W: &[f32] = &[
@@ -112,6 +108,12 @@ impl Style for ClubStyle {
         &SCALE
     }
 
+    fn transition(&self) -> crate::piece::Transition {
+        // Диско-склейка: грув катит дальше, голос следующего куска входит
+        // поверх него — стыка не слышно.
+        crate::piece::Transition::Rolling { bars: 2 }
+    }
+
     fn reverb_wet(&self) -> f32 {
         0.08
     }
@@ -128,8 +130,9 @@ impl Style for ClubStyle {
 
     fn ensemble(&self) -> &'static [Slot] {
         // Deep house: биты, ударные, бас, сквозной плак темы,
-        // Rhodes-стабы, шейкер и формульный лид дропа.
-        // Без синтезаторных верхов и шумовых подложек.
+        // Rhodes-стабы, шейкер. Без синтезаторных верхов и шумовых
+        // подложек. Формула — гость по сиду (см. flex), а не резидент:
+        // её математическая злость не каждому сиду к лицу.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -138,13 +141,14 @@ impl Style for ClubStyle {
             Slot::Pluck,
             Slot::Keys,
             Slot::Shaker,
-            Slot::Formula,
         ]
     }
 
-    /// Гость deep house: соул-хор по сиду (есть/нет).
+    /// Гость deep house: формульный лид дропа — по сиду (есть/нет).
+    /// Ядро жанра стабильно, специя одна. Хора больше нет:
+    /// вокальная группа выведена из набора.
     fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Vocal]
+        &[Slot::Formula]
     }
 
     fn flex_weights(&self) -> &'static [f32] {
@@ -205,6 +209,8 @@ impl Style for ClubStyle {
         let snare = RoleGuide {
             vel_base: 0.95,
             poles: Some(SNARE_POLES),
+            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
+            build_roll: true,
             ..RoleGuide::kit(CLAP_W, 38, 0.95)
         };
         let hat = RoleGuide {
@@ -219,7 +225,9 @@ impl Style for ClubStyle {
             poles: Some(HAT_POLES),
             // Хэт держит сетку полюсов: собственный пульс давал фэйзинг
             // против 16-х и сбивал ритм — бит важнее дрейфа.
-            emergent_beats: 0.0,
+            // Грув хэта свой на каждую секцию (у дропа — свой бит),
+            // выбор детерминирован сидом и секцией.
+            section_poles: true,
             ..RoleGuide::kit(HAT_W, 42, 0.65)
         };
         // Сквозная тема битмейкера: плак ведет мотив сида через секции —
@@ -256,7 +264,9 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(STAB_W, 2, 1, 0, 1.5, 0.55)
         };
-        // 808 следует за баслайном (слайды между фразами), тот же four-floor.
+        // 808 держит сетку four-floor корнями прогрессии (тот же
+        // гармонический путь, что у саба); слайд между нотами — дело
+        // голоса Kick808, генератор лишь ставит корни на доли.
         // Перед дропом — саб-ролл: удар вместо звона тарелки.
         // Регистр тот же, что у саба (фолд в mod.rs): 808 — бас, а не лид.
         let kick808 = RoleGuide {
@@ -407,9 +417,39 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
         };
+        // Соло-гитара вне автомикса club: ручная краска для фронта.
+        let guitar_lead = RoleGuide {
+            energy_response: 1.0,
+            duration_mult: 1.5,
+            vel_base: 0.35,
+            voice: Voicing::Scale {
+                degree: 0,
+                octave: 2,
+                jitter: 1,
+            },
+            ..RoleGuide::pitched(BED_W, 0, 2, 1, 1.5, 0.35)
+        };
         [
-            bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, shaker, formula, wavetable,
+            bass,
+            kick,
+            pad,
+            snare,
+            hat,
+            pluck,
+            keys,
+            kick808,
+            laser,
+            vinyl,
+            vocal,
+            flute,
+            festival,
+            guitar,
+            rain,
+            fuzz,
+            shaker,
+            formula,
+            wavetable,
+            guitar_lead,
         ]
     }
 }
@@ -464,18 +504,37 @@ mod tests {
         let style = ClubStyle::new();
         let guides = style.slot_guides();
         let at = |slot: Slot| {
-            Slot::ALL.iter().position(|s| *s == slot).map(|i| &guides[i]).unwrap()
+            Slot::ALL
+                .iter()
+                .position(|s| *s == slot)
+                .map(|i| &guides[i])
+                .unwrap()
         };
         let (pluck, formula) = (at(Slot::Pluck), at(Slot::Formula));
         let deg = |g: &RoleGuide| match g.voice {
-            Voicing::Scale { degree, octave, jitter } => (degree, octave, jitter),
+            Voicing::Scale {
+                degree,
+                octave,
+                jitter,
+            } => (degree, octave, jitter),
             _ => (0, 0, 0),
         };
         let (pd, po, _) = deg(pluck);
         let (fd, fo, _) = deg(formula);
         assert!(formula.follow_motif, "formula must follow the motif");
-        assert_eq!((fo, fd), (po, pd + 2), "formula must sit a third above pluck");
-        assert!(style.ensemble().contains(&Slot::Formula), "formula must be in club mix");
+        assert_eq!(
+            (fo, fd),
+            (po, pd + 2),
+            "formula must sit a third above pluck"
+        );
+        assert!(
+            style.flex_pool().contains(&Slot::Formula),
+            "formula must be a club guest"
+        );
+        assert!(
+            !style.ensemble().contains(&Slot::Formula),
+            "formula must not be a club resident"
+        );
     }
 
     #[test]
@@ -549,8 +608,7 @@ mod tests {
             let mut leaders = HashSet::new();
             let mut checked = 0;
             for (stage, psteps) in &pluck {
-                let leader =
-                    super::super::theme_leader(&carriers, seed_hash, *stage).unwrap();
+                let leader = super::super::theme_leader(&carriers, seed_hash, *stage).unwrap();
                 leaders.insert(leader);
                 if leader == FORMULA_ID {
                     // Отдыхающую формулу (пустой раздел) пропускаем:

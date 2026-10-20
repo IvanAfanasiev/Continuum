@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{note_seed, release_fade, Noise, Svf},
+    dsp::{note_seed, release_fade, sin01, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
@@ -28,6 +26,8 @@ struct VinylVoice {
     t: f32,
     wander_phase: f32,
     pop_env: f32,
+    /// Коэффициент спада пылинки: посчитан раз, а не `exp` на сэмпл.
+    pop_coeff: f32,
     samples_left: usize,
     noise: Noise,
     hiss_lp: Svf,
@@ -36,6 +36,7 @@ struct VinylVoice {
 impl Voice for VinylVoice {
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sane_sample_rate(sample_rate);
+        self.pop_coeff = (-POP_DECAY / self.sample_rate).exp();
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
@@ -65,13 +66,13 @@ impl Voice for VinylVoice {
         let raw = self.noise.sample();
         let (hiss, _, _) = self.hiss_lp.process(raw, HISS_LP_HZ, 0.7, sample_rate);
         self.wander_phase = (self.wander_phase + WANDER_HZ / sample_rate) % 1.0;
-        let wander = 1.0 + WANDER_DEPTH * (self.wander_phase * TAU).sin();
+        let wander = 1.0 + WANDER_DEPTH * sin01(self.wander_phase);
 
         // Пылинка: выброс шума включает быстрый спад.
         if raw > POP_THRESH {
             self.pop_env = raw;
         }
-        self.pop_env *= (-POP_DECAY / sample_rate).exp();
+        self.pop_env *= self.pop_coeff;
         let pop = self.pop_env * POP_GAIN;
 
         self.t += 1.0 / sample_rate;

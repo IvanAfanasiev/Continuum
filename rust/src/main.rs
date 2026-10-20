@@ -39,6 +39,9 @@ struct Cli {
     /// Добавочные слоты в микс рендера (`--with 19`): прослушка
     /// ручных голосов поверх дефолта стиля.
     with: Vec<usize>,
+    /// Соло-слоты рендера (`--solo 6`): звучат только они, дефолт
+    /// стиля не применяется. Спотлайт для саунд-дизайна.
+    solo: Vec<usize>,
 }
 
 impl Cli {
@@ -52,6 +55,7 @@ impl Cli {
             wav_secs: None,
             proto: false,
             with: Vec::new(),
+            solo: Vec::new(),
         }
     }
 }
@@ -128,6 +132,20 @@ fn parse_cli(args: &[String]) -> Cli {
             if let Ok(n) = value.parse::<usize>() {
                 cli.with.push(n);
             }
+        } else if arg == "--solo" {
+            match args.get(i + 1) {
+                Some(next) if !next.starts_with("--") => {
+                    if let Ok(n) = next.parse::<usize>() {
+                        cli.solo.push(n);
+                        i += 1;
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(value) = arg.strip_prefix("--solo=") {
+            if let Ok(n) = value.parse::<usize>() {
+                cli.solo.push(n);
+            }
         } else if let Some(value) = arg.strip_prefix("--seed=") {
             if let Ok(n) = value.parse::<u64>() {
                 cli.seed = n;
@@ -158,7 +176,8 @@ fn print_help() {
          cargo run -- 1234 deephouse\n  \
          cargo run -- lofi --render 64\n  \
          cargo run -- club --soak 300\n  \
-         cargo run -- club 424242 --wav club.wav --secs 60",
+         cargo run -- club 424242 --wav club.wav --secs 60\n  \
+         cargo run -- club 424242 --wav keys.wav --secs 30 --solo 7",
         styles::style_names().join(", ")
     );
 }
@@ -224,7 +243,10 @@ fn main() {
             }
             return;
         }
-        if let Some(secs) = cli.soak_secs.or(cli.render_steps.map(|_| DEFAULT_SOAK_SECS)) {
+        if let Some(secs) = cli
+            .soak_secs
+            .or(cli.render_steps.map(|_| DEFAULT_SOAK_SECS))
+        {
             let r = proto::proto_soak(cli.seed, secs, 44_100.0);
             println!(
                 "proto: seed {}, audio {:.1}s, frames: {}",
@@ -262,7 +284,15 @@ fn main() {
     if let Some(path) = cli.wav_path {
         let secs = cli.wav_secs.unwrap_or(DEFAULT_WAV_SECS);
         let wall = Instant::now();
-        match render_wav(&style_name, cli.seed, secs, 44_100.0, &path, &cli.with) {
+        match render_wav(
+            &style_name,
+            cli.seed,
+            secs,
+            44_100.0,
+            &path,
+            &cli.with,
+            &cli.solo,
+        ) {
             Ok(report) => {
                 print_soak(&report, wall.elapsed().as_secs_f32());
                 println!("  wrote: {path}");

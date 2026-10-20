@@ -5,6 +5,7 @@ pub mod core;
 pub mod engine;
 pub mod instruments;
 pub mod mixer;
+pub mod piece;
 pub mod playback;
 pub mod proto;
 // На десктопе нативный поток — заглушки (там cpal); мертвый код

@@ -1,5 +1,5 @@
 use super::{
-    dsp::{note_seed, release_fade, square_blep, Svf},
+    dsp::{note_seed, release_fade, square_blep, ExpDecay, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
@@ -23,6 +23,11 @@ const OPEN_DECAY: f32 = 9.0;
 /// как в спеке перкуссии. Было 0.5 мс — щелкало.
 const ATTACK_SECS: f32 = 0.0015;
 const FADE_SECS: f32 = 0.006;
+/// Шумовой слой поверх BLEP-металла: живой хэт — это шум тарелки,
+/// одни квадраты звучат стерильно (ср. v1: шум 0.65 + звон 0.35).
+/// Тихо, чтобы не шипеть: воздух, а не песок.
+const NOISE_GAIN: f32 = 0.18;
+const METAL_GAIN: f32 = 0.82;
 
 #[derive(Clone, Default)]
 struct HatVoice {
@@ -33,6 +38,10 @@ struct HatVoice {
     gain: f32,
     samples_left: usize,
     hp: Svf,
+    /// Рекуррентная огибающая вместо посэмплового `exp`.
+    env: ExpDecay,
+    /// Шум тарелки: пересеивается нотой (одинаковые тики одинаковы).
+    noise: Noise,
 }
 
 impl Voice for HatVoice {
@@ -51,6 +60,7 @@ impl Voice for HatVoice {
         self.decay = if open { OPEN_DECAY } else { CLOSED_DECAY };
         self.gain = note.velocity;
         self.t = 0.0;
+        self.env = ExpDecay::start(self.decay, self.sample_rate);
         self.hp.reset();
         // Фазы осцилляторов рассеиваем от ноты: металл живет перебиениями
         // (одинаковые фазы каждый хит дали бы machine-gun), choke-щелчок
@@ -60,6 +70,7 @@ impl Voice for HatVoice {
             let bits = seed.wrapping_add((i as u32).wrapping_mul(0x9E3779B9));
             *phase = (bits % 1000) as f32 / 1000.0;
         }
+        self.noise = Noise::new(seed ^ 0x9E51);
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -75,9 +86,10 @@ impl Voice for HatVoice {
             metal += square_blep(*phase, hz, sample_rate);
         }
         metal /= OSC_HZ.len() as f32;
+        let src = metal * METAL_GAIN + self.noise.sample() * NOISE_GAIN;
 
-        let (_, _, bright) = self.hp.process(metal, HP_HZ, HP_Q, sample_rate);
-        let env = (-self.decay * self.t).exp();
+        let (_, _, bright) = self.hp.process(src, HP_HZ, HP_Q, sample_rate);
+        let env = self.env.next();
         let attack_raw = (self.t / ATTACK_SECS).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);

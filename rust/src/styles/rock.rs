@@ -1,9 +1,11 @@
 use super::{RoleGuide, Style, StyleGroup, Voicing};
 use crate::instruments::Slot;
 
-/// Rock: механический концерт. Перегруженный синт вместо гитар,
-/// вдавленная бочка, хлесткий снейр, бас восьмыми и крэши как удары
-/// молота. Никаких переборов, свинга и эмбиент-пелены: жестко и ровно.
+/// Rock: гитарный концерт. Мощный рифф гитары ведёт, рев фазза
+/// удваивает стену, вдавленная бочка, хлесткий снейр, бас риффует
+/// вслед за гитарой вплоть до D3. Никаких пианино, хоров и синдров:
+/// состав — группа (гитара, бас, ударные), а не оркестр.
+/// Никаких переборов, свинга и эмбиент-пелены: жестко и ровно.
 const SCALE: [u8; 5] = [48, 51, 53, 55, 58];
 
 const KICK_W: &[f32] = &[
@@ -18,8 +20,7 @@ const KICK_P2: &[f32] = &[
 // Двойные удары: халф-тайм с дабл-кик флером перед даунбитом
 // (15-й шаг пустой — вдох перед единицей).
 const KICK_DBL_W: &[f32] = &[
-    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.8,
-    0.0,
+    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.8, 0.0,
 ];
 const KICK_POLES: &[&[f32]] = &[KICK_W, KICK_P1, KICK_P2, KICK_DBL_W];
 
@@ -40,8 +41,7 @@ const HAT_P1: &[f32] = &[
 const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_P1];
 // Шейкер: ровные восьмые, тихо.
 const SHAKER_ROCK_W: &[f32] = &[
-    0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6,
-    0.0,
+    0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.6, 0.0,
 ];
 
 const BASS_W: &[f32] = &[
@@ -64,8 +64,12 @@ const RIFF_POLES: &[&[f32]] = &[RIFF_W, RIFF_P1, RIFF16_W];
 // по ступеням темы. Общий полюс риффа: фраза решает, чоппы или пулемет,
 // исполнители (фазз, гитара) играют ее каждый своим тембром.
 const RIFF16_W: &[f32] = &[
-    0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7,
-    0.6,
+    0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.5, 0.6, 0.5, 0.7, 0.6,
+];
+// Соло-скелет: редкие длинные доли (перебор), а не чоппы риффа.
+// Тот же мотив, другой ритм — соло отвечает риффу.
+const ROCK_LEAD_W: &[f32] = &[
+    0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.0,
 ];
 
 const BED_W: &[f32] = &[
@@ -111,6 +115,12 @@ impl Style for RockStyle {
         &SCALE
     }
 
+    fn transition(&self) -> crate::piece::Transition {
+        // Рок стыкуется резко: короткий хвост с ударом, дальше следующий
+        // кусок сразу с полной энергией.
+        crate::piece::Transition::Cut
+    }
+
     fn reverb_wet(&self) -> f32 {
         0.08
     }
@@ -134,35 +144,20 @@ impl Style for RockStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Механика: бочка, снейр, хэт, бас, чистая гитара риффом и рев фазза.
-        // Без тарелок: металлический звон не к месту даже на стыках.
-        // Без гитарных переборов, клавиш и текстур.
+        // Группа, а не оркестр: бочка, снейр, хэт, бас, гитара риффом
+        // и соло-гитара перебором. Без тарелок: металлический звон
+        // не к месту даже на стыках. Без гитарных переборов чужих
+        // голосов, клавиш и текстур. Фазз — вручную (стена по желанию).
+        // Без гостей: состав фиксирован (как живая группа), сиды
+        // различаются риффом, грувом и темой, а не набором.
         &[
             Slot::Bass,
             Slot::Kick,
             Slot::Snare,
             Slot::Hat,
             Slot::Guitar,
-            Slot::Fuzz,
+            Slot::GuitarLead,
         ]
-    }
-
-    /// Гость по сиду: редкое пианино или далекие чопы поверх стены.
-    /// Чопы чаще, пианино — редкая специя. Бюджет 1–2.
-    fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Keys, Slot::Vocal]
-    }
-
-    fn flex_weights(&self) -> &'static [f32] {
-        &[0.6, 1.0]
-    }
-
-    fn flex_range(&self) -> (usize, usize) {
-        (1, 2)
-    }
-
-    fn flex_count(&self) -> usize {
-        1
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
@@ -204,6 +199,8 @@ impl Style for RockStyle {
             vel_base: 0.9,
             vel_jitter: 0.04,
             poles: Some(SNARE_POLES),
+            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
+            build_roll: true,
             ..RoleGuide::kit(SNARE_W, 38, 0.9)
         };
         let hat = RoleGuide {
@@ -214,7 +211,8 @@ impl Style for RockStyle {
             vel_jitter: 0.06,
             poles: Some(HAT_POLES),
             // Хэт держит сетку полюсов: пульс вместо сетки сбивал ритм.
-            emergent_beats: 0.0,
+            // Грув свой на секцию: у дропа свой бит.
+            section_poles: true,
             ..RoleGuide::kit(HAT_W, 42, 0.42)
         };
         let pluck = RoleGuide {
@@ -301,26 +299,48 @@ impl Style for RockStyle {
         // Унисон с фаззом октава в октаву: стена риффа, а не фон.
         // Чоппирующие восьмые поверх рева, без перегруза (он у фазза).
         // Второй полюс — пулеметные 16-е медиатором (ref: Thunderstruck).
+        // Ведёт без отдыха: рифф relentless, передышка — у стены фазза.
         let guitar = RoleGuide {
             energy_response: 1.0,
             duration_mult: 1.0,
-            vel_base: 0.75,
+            vel_base: 0.85,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 1,
             },
             follow_motif: true,
-            phrase_rest: 0.2,
+            phrase_rest: 0.0,
             poles: Some(RIFF_POLES),
-            ..RoleGuide::pitched(RIFF_W, 0, 1, 1, 1.0, 0.75)
+            ..RoleGuide::pitched(RIFF_W, 0, 1, 1, 1.0, 0.85)
         };
         let rain = RoleGuide {
             duration_mult: 150.0,
             vel_base: 0.2,
             ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.2)
         };
-        // Рев вместо гитар: рифф по мотиву сида, стена на дропе.
+        // Соло поверх риффа: поёт тему редко и длинно (перебор),
+        // а не чоппит вместе с риффом. Другой ритм (редкие доли),
+        // та же тема — вопрос-ответ с риффом, а не унисон.
+        // Октава та же, что у риффа (вверх — писк, вниз — каша с басом).
+        let guitar_lead = RoleGuide {
+            energy_response: 1.5,
+            duration_mult: 2.2,
+            vel_base: 0.7,
+            vel_energy: 0.2,
+            vel_jitter: 0.06,
+            voice: Voicing::Scale {
+                degree: 0,
+                octave: 1,
+                jitter: 0,
+            },
+            follow_motif: true,
+            phrase_rest: 0.45,
+            ..RoleGuide::pitched(ROCK_LEAD_W, 0, 1, 0, 2.2, 0.7)
+        };
+        // Рев фазза: рифф по мотиву сида, стена на дропе.
+        // (Вне дефолта группы: включается вручную. Дефолт — чистые
+        // гитары: рифф + соло.)
         let fuzz = RoleGuide {
             energy_response: 1.6,
             duration_mult: 0.7,
@@ -370,8 +390,62 @@ impl Style for RockStyle {
             ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
         };
         [
-            bass, kick, pad, snare, hat, pluck, keys, kick808, laser, vinyl, vocal, flute,
-            festival, guitar, rain, fuzz, shaker, formula, wavetable,
+            bass,
+            kick,
+            pad,
+            snare,
+            hat,
+            pluck,
+            keys,
+            kick808,
+            laser,
+            vinyl,
+            vocal,
+            flute,
+            festival,
+            guitar,
+            rain,
+            fuzz,
+            shaker,
+            formula,
+            wavetable,
+            guitar_lead,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instruments::Slot;
+
+    #[test]
+    fn rock_is_a_fixed_band() {
+        // Состав рока — группа, а не оркестр: ударные, бас, рифф
+        // и соло-гитара. Никаких пианино, хоров, синтов и гостей
+        // по сидам: сиды различаются риффом, а не набором.
+        let style = RockStyle::new();
+        let ensemble = style.ensemble();
+        for slot in [
+            Slot::Bass,
+            Slot::Kick,
+            Slot::Snare,
+            Slot::Hat,
+            Slot::Guitar,
+            Slot::GuitarLead,
+        ] {
+            assert!(ensemble.contains(&slot), "{slot:?} missing from band");
+        }
+        assert_eq!(ensemble.len(), 6, "band bloated: {ensemble:?}");
+        assert!(style.flex_pool().is_empty(), "guests in a fixed band");
+        // Гитара ведёт без отдыха и в полную (рельеф — у стены фазза).
+        let guides = style.slot_guides();
+        let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();
+        assert_eq!(guides[gi].phrase_rest, 0.0, "riff must not rest");
+        assert!(
+            guides[gi].vel_base >= 0.85,
+            "riff too quiet: {}",
+            guides[gi].vel_base
+        );
     }
 }

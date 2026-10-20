@@ -41,6 +41,23 @@ pub const NOTE_QUEUE_CAPACITY: usize = 1024;
 /// Сид по умолчанию, если не передан через CLI.
 pub const DEFAULT_SEED: u64 = 424242;
 
+/// Границы живой ручки темпа, BPM. Один источник истины для UI,
+/// композера, офлайн-рендера и статуса — чтобы clamp не жил только
+/// в одном сеттере и не расходился с реально звучащим темпом.
+pub const MIN_TEMPO_BPM: f32 = 50.0;
+pub const MAX_TEMPO_BPM: f32 = 180.0;
+
+/// Валидация BPM: не-числа и неположительные — «нет значения»,
+/// остальное зажимается в [`MIN_TEMPO_BPM`]..=[`MAX_TEMPO_BPM`].
+/// Чистая функция: вызывающий сам решает, брать ли дефолт стиля.
+pub fn normalize_tempo(bpm: f32) -> Option<f32> {
+    if bpm.is_finite() && bpm > 0.0 {
+        Some(bpm.clamp(MIN_TEMPO_BPM, MAX_TEMPO_BPM))
+    } else {
+        None
+    }
+}
+
 /// Перевод MIDI-ноты в частоту, Гц. Формула равномерно-темперированного строя.
 /// Раньше копировалась в `bass.rs` и `pad.rs` (в паде — с багом каста к `i8`).
 pub fn midi_to_freq(midi: u8) -> f32 {

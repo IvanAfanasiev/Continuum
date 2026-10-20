@@ -1,5 +1,5 @@
 use super::{
-    dsp::{release_fade, Noise, Svf},
+    dsp::{release_fade, ExpDecay, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
@@ -21,6 +21,8 @@ struct ShakerVoice {
     samples_left: usize,
     noise: Noise,
     hp: Svf,
+    /// Рекуррентная огибающая вместо посэмплового `exp`.
+    env: ExpDecay,
 }
 
 impl Voice for ShakerVoice {
@@ -35,6 +37,7 @@ impl Voice for ShakerVoice {
         self.samples_left = len.max(1.0) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
+        self.env = ExpDecay::start(BODY_DECAY, self.sample_rate);
         self.hp.reset();
         self.noise = Noise::new(super::dsp::note_seed(note, 0x54A4));
     }
@@ -48,7 +51,7 @@ impl Voice for ShakerVoice {
         let sample_rate = self.sample_rate;
         let a = (self.t / ATTACK_SECS).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
-        let body = self.noise.sample() * (-BODY_DECAY * self.t).exp();
+        let body = self.noise.sample() * self.env.next();
         let (_, _, bright) = self.hp.process(body, HP_HZ, HP_Q, sample_rate);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 

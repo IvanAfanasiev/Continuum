@@ -1,5 +1,5 @@
 use super::{
-    dsp::{release_fade, saw_blep, square_blep, Svf},
+    dsp::{fast_tanh, note_seed, release_fade, saw_blep, square_blep, ExpDecay, Noise, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -18,6 +18,11 @@ const MAX_RING_SECS: f32 = 0.35;
 const ATTACK_SECS: f32 = 0.002;
 const FADE_SECS: f32 = 0.02;
 const VOICE_GAIN: f32 = 0.7;
+/// Щипок: скорость спада и своя рампа. Громкость — как медиатор:
+/// слышно атаку, а не второй инструмент поверх струны.
+const PICK_DECAY: f32 = 150.0;
+const PICK_RAMP_SECS: f32 = 0.0005;
+const PICK_GAIN: f32 = 0.12;
 
 #[derive(Clone, Default)]
 pub struct PluckVoice {
@@ -30,6 +35,14 @@ pub struct PluckVoice {
     gain: f32,
     t: f32,
     samples_left: usize,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`: один multiply
+    /// на сэмпл, коэффициенты посчитаны в `trigger`.
+    amp_env: ExpDecay,
+    cutoff_env: ExpDecay,
+    /// Щипок: короткий шумовой транзиент до мягкого тела.
+    pick_env: ExpDecay,
+    /// Шум щипка: пересеивается нотой (одинаковые щипки одинаковы).
+    noise: Noise,
 }
 
 impl Voice for PluckVoice {
@@ -46,6 +59,11 @@ impl Voice for PluckVoice {
         self.phase_saw1 = 0.0;
         self.phase_saw2 = 0.0;
         self.phase_sub = 0.0;
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
+        // Щипок гаснет за ~7 мс: атака струны, а не второй инструмент.
+        self.pick_env = ExpDecay::start(PICK_DECAY, self.sample_rate);
+        self.noise = Noise::new(note_seed(note, 0x971C));
         self.filter.scrub_denormals();
     }
 
@@ -58,7 +76,7 @@ impl Voice for PluckVoice {
         let sample_rate = self.sample_rate;
         let attack_raw = (self.t / ATTACK_SECS).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
-        let amp = (-AMP_DECAY_RATE * self.t).exp();
+        let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.phase_saw1 = (self.phase_saw1 + self.frequency / sample_rate) % 1.0;
@@ -69,13 +87,19 @@ impl Voice for PluckVoice {
             * 0.5;
         let sub = square_blep(self.phase_sub, self.frequency * 0.5, sample_rate) * SUB_GAIN;
 
-        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * (-FILTER_SNAP_RATE * self.t).exp();
+        let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.cutoff_env.next();
         let (low, _, _) = self
             .filter
             .process(saw + sub, cutoff, FILTER_Q, sample_rate);
 
+        // Щипок идёт МИМО мягкой S-атаки тела (своя рампа 0.5 мс):
+        // иначе 2 мс атака душит транзиент и щипка не слышно.
+        // Урок из баса: щелчок раньше тела, не внутри него.
+        let pick_ramp = (self.t / PICK_RAMP_SECS).min(1.0);
+        let pick = self.noise.sample() * self.pick_env.next() * PICK_GAIN * pick_ramp;
+
         self.t += 1.0 / sample_rate;
-        (low * 1.3).tanh() * self.gain * amp * attack * fade * VOICE_GAIN
+        (fast_tanh(low * 1.3) * attack + pick) * self.gain * amp * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -94,6 +118,29 @@ impl Voice for PluckVoice {
 mod tests {
     use super::super::{Instrument, VoicePool};
     use super::*;
+
+    #[test]
+    fn pick_transient_leads_body() {
+        // Щипок идёт до тела: в первые 2 мс (пока S-атака почти закрыта)
+        // уже есть широкополосный транзиент — медиатор слышно.
+        // Детерминирован нотой: повтор — тот же щипок.
+        fn onset_peak() -> f32 {
+            let sr = 44_100.0;
+            let mut pluck = VoicePool::plucks(6, 1);
+            pluck.set_sample_rate(sr);
+            pluck.trigger(&NoteEvent::new(6, 72, 1.0, 0.5));
+            (0..88)
+                .map(|_| pluck.next_sample().abs())
+                .fold(0.0f32, f32::max)
+        }
+        let peak = onset_peak();
+        assert!(peak > 0.02, "pick inaudible: {peak}");
+        assert_eq!(
+            onset_peak().to_bits(),
+            peak.to_bits(),
+            "pick not deterministic"
+        );
+    }
 
     #[test]
     fn pluck_snaps_and_decays() {

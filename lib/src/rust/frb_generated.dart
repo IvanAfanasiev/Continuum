@@ -999,15 +999,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EngineStats dco_decode_engine_stats(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return EngineStats(
       frames: dco_decode_u_64(arr[0]),
       pushed: dco_decode_u_64(arr[1]),
       consumed: dco_decode_u_64(arr[2]),
-      queued: dco_decode_u_64(arr[3]),
-      audioConfig: dco_decode_String(arr[4]),
-      restarts: dco_decode_u_64(arr[5]),
+      dropped: dco_decode_u_64(arr[3]),
+      late: dco_decode_u_64(arr[4]),
+      reanchors: dco_decode_u_64(arr[5]),
+      queued: dco_decode_u_64(arr[6]),
+      audioConfig: dco_decode_String(arr[7]),
+      restarts: dco_decode_u_64(arr[8]),
+      outputLatencyMs: dco_decode_f_32(arr[9]),
     );
   }
 
@@ -1195,16 +1199,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_frames = sse_decode_u_64(deserializer);
     var var_pushed = sse_decode_u_64(deserializer);
     var var_consumed = sse_decode_u_64(deserializer);
+    var var_dropped = sse_decode_u_64(deserializer);
+    var var_late = sse_decode_u_64(deserializer);
+    var var_reanchors = sse_decode_u_64(deserializer);
     var var_queued = sse_decode_u_64(deserializer);
     var var_audioConfig = sse_decode_String(deserializer);
     var var_restarts = sse_decode_u_64(deserializer);
+    var var_outputLatencyMs = sse_decode_f_32(deserializer);
     return EngineStats(
       frames: var_frames,
       pushed: var_pushed,
       consumed: var_consumed,
+      dropped: var_dropped,
+      late: var_late,
+      reanchors: var_reanchors,
       queued: var_queued,
       audioConfig: var_audioConfig,
       restarts: var_restarts,
+      outputLatencyMs: var_outputLatencyMs,
     );
   }
 
@@ -1443,9 +1455,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_64(self.frames, serializer);
     sse_encode_u_64(self.pushed, serializer);
     sse_encode_u_64(self.consumed, serializer);
+    sse_encode_u_64(self.dropped, serializer);
+    sse_encode_u_64(self.late, serializer);
+    sse_encode_u_64(self.reanchors, serializer);
     sse_encode_u_64(self.queued, serializer);
     sse_encode_String(self.audioConfig, serializer);
     sse_encode_u_64(self.restarts, serializer);
+    sse_encode_f_32(self.outputLatencyMs, serializer);
   }
 
   @protected

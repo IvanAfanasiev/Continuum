@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{note_seed, release_fade, Noise, Svf},
+    dsp::{note_seed, release_fade, sin01, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
@@ -28,6 +26,8 @@ struct RainVoice {
     drop_phase: f32,
     drop_freq: f32,
     drop_env: f32,
+    /// Коэффициент спада капли: посчитан раз, а не `exp` на сэмпл.
+    drop_coeff: f32,
     samples_left: usize,
     noise: Noise,
     wash_lp: Svf,
@@ -36,6 +36,7 @@ struct RainVoice {
 impl Voice for RainVoice {
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sane_sample_rate(sample_rate);
+        self.drop_coeff = (-DROP_DECAY / self.sample_rate).exp();
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
@@ -63,7 +64,7 @@ impl Voice for RainVoice {
         let raw = self.noise.sample();
         let (wash, _, _) = self.wash_lp.process(raw, WASH_LP_HZ, 0.7, sample_rate);
         self.wander_phase = (self.wander_phase + WANDER_HZ / sample_rate) % 1.0;
-        let wander = 1.0 + WANDER_DEPTH * (self.wander_phase * TAU).sin();
+        let wander = 1.0 + WANDER_DEPTH * sin01(self.wander_phase);
 
         // Капля: выброс шума запускает высокий пинг.
         if raw > DROP_THRESH {
@@ -73,9 +74,9 @@ impl Voice for RainVoice {
             self.drop_env = 1.0;
             self.drop_phase = 0.0;
         }
-        self.drop_env *= (-DROP_DECAY / sample_rate).exp();
+        self.drop_env *= self.drop_coeff;
         self.drop_phase = (self.drop_phase + self.drop_freq / sample_rate) % 1.0;
-        let drop = (self.drop_phase * TAU).sin() * self.drop_env * DROP_GAIN;
+        let drop = sin01(self.drop_phase) * self.drop_env * DROP_GAIN;
 
         self.t += 1.0 / sample_rate;
         (wash * WASH_GAIN * wander + drop) * self.gain * attack * fade * 0.5

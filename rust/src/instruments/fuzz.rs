@@ -1,9 +1,8 @@
 use super::{
-    dsp::{release_fade, Svf},
+    dsp::{fast_tanh, release_fade, sin01, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
-use std::f32::consts::TAU;
 
 /// Фазз-синт: битовая формула из «math functions» (`−1 + ¼m₂ + m₄·m₁`)
 /// плюс жирная суб-октава — через tanh-перегруз и темный lowpass.
@@ -60,12 +59,12 @@ impl Voice for FuzzVoice {
         let m2 = ((x * 2.0).floor() as i64 & 1) as f32;
         let m4 = ((x * 4.0).floor() as i64 & 1) as f32;
         let bit = (-1.0 + 0.25 * m2 + m4 * m1 + 0.625) * 0.7;
-        let s = (TAU * x * 0.5).sin();
+        let s = sin01(x * 0.5);
 
         // Перегруз вместо громкости: гармоники растут, пик — нет.
         // Суб жирный: стена давит низом, а не визжит верхом.
         let driven = (bit + s * 0.9) * DRIVE;
-        let shaped = driven.tanh();
+        let shaped = fast_tanh(driven);
         let (warm, _, _) = self.filter.process(shaped, TONE_HZ, TONE_Q, sample_rate);
 
         let u = (self.t / ATTACK_SECS).min(1.0);

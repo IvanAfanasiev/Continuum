@@ -1,6 +1,9 @@
 use std::f32::consts::TAU;
 
-use super::{dsp::release_fade, dsp::Svf, sane_sample_rate, NoteEvent, Voice};
+use super::{
+    dsp::{fast_sin, note_seed, release_fade, sin01, ExpDecay, Noise, Svf},
+    sane_sample_rate, NoteEvent, Voice,
+};
 use crate::core::midi_to_freq;
 
 const INDEX_FLOOR: f32 = 0.15;
@@ -53,6 +56,12 @@ pub struct KeysVoice {
     attack_mul: f32,
     release_mul: f32,
     hp: Svf,
+    /// Шум молоточка: пересеивается нотой (одинаковые удары одинаковы).
+    noise: Noise,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    amp_env: ExpDecay,
+    index_env: ExpDecay,
+    tine_env: ExpDecay,
 }
 
 impl Voice for KeysVoice {
@@ -70,12 +79,15 @@ impl Voice for KeysVoice {
         self.index_start = 1.2 + 1.6 * note.velocity;
         // Звон молоточка тает с высотой: наверху tine foldится.
         let tine_hz = self.frequency * TINE_RATIO;
-        let tine_fade = ((TINE_GONE_HZ - tine_hz)
-            / (TINE_GONE_HZ - TINE_FULL_HZ))
-        .clamp(TINE_FLOOR, 1.0);
+        let tine_fade =
+            ((TINE_GONE_HZ - tine_hz) / (TINE_GONE_HZ - TINE_FULL_HZ)).clamp(TINE_FLOOR, 1.0);
         self.tine_gain = (0.12 + 0.45 * note.velocity) * tine_fade;
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
+        self.noise = Noise::new(note_seed(note, 0x4E4D));
+        self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
+        self.index_env = ExpDecay::start(INDEX_DECAY, self.sample_rate);
+        self.tine_env = ExpDecay::start(TINE_DECAY, self.sample_rate);
         self.hp.reset();
         self.t = 0.0;
         self.car_phase = 0.0;
@@ -96,33 +108,48 @@ impl Voice for KeysVoice {
         let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
         let attack_raw = (self.t / attack_secs).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
-        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * (-AMP_DECAY_RATE * self.t).exp();
+        let amp = SUSTAIN_LEVEL + (1.0 - SUSTAIN_LEVEL) * self.amp_env.next();
         let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
         let fade = release_fade(self.samples_left, fade_len);
 
         // FM 1:1 с падающим индексом: колокол в атаке, синус в сустейне.
-        let index = INDEX_FLOOR + (self.index_start - INDEX_FLOOR) * (-INDEX_DECAY * self.t).exp();
+        let index = INDEX_FLOOR + (self.index_start - INDEX_FLOOR) * self.index_env.next();
         self.mod_phase = (self.mod_phase + self.frequency / sample_rate) % 1.0;
         self.car_phase = (self.car_phase + self.frequency / sample_rate) % 1.0;
-        let body = (self.car_phase * TAU + index * (self.mod_phase * TAU).sin()).sin();
+        let body = fast_sin(self.car_phase * TAU + index * sin01(self.mod_phase));
 
         // Металлический «tine» молоточка.
         self.tine_phase = (self.tine_phase + (self.frequency * TINE_RATIO) / sample_rate) % 1.0;
-        let tine = (self.tine_phase * TAU).sin() * (-TINE_DECAY * self.t).exp() * self.tine_gain;
+        let tine = sin01(self.tine_phase) * self.tine_env.next() * self.tine_gain;
+
+        // Молоточек (первые 8 мс): войлок + дерево + шум. Мозг читает
+        // атаку как «акустика», дальше ветка молчит (один бранч).
+        // Уровни — как живой удар: тихо, но заметно (ср. v1 piano).
+        let hammer = if self.t < 0.008 {
+            let env = 1.0 - self.t / 0.008;
+            let felt = sin01(self.t * 1180.0) * 0.004;
+            let wood = sin01(self.t * 92.0) * 0.012;
+            (self.noise.sample() * 0.006 + felt + wood) * env * env
+        } else {
+            0.0
+        };
 
         self.trem_phase = (self.trem_phase + TREMOLO_HZ / sample_rate) % 1.0;
-        let tremolo = 1.0 + TREMOLO_DEPTH * (self.trem_phase * TAU).sin();
+        let tremolo = 1.0 + TREMOLO_DEPTH * sin01(self.trem_phase);
 
         self.t += 1.0 / sample_rate;
-        let raw = (body * 0.75 + tine) * self.gain * amp * attack * fade * tremolo;
+        // Молоточек — до атаки тела (как щипок плака): мягкий вход
+        // Rhodes душит транзиент, если тот внутри его огибающей.
+        let raw = (body * 0.75 + tine) * attack + hammer;
+        let raw = raw * self.gain * amp * fade * tremolo;
         // High-pass 180 Гц: низ под Rhodes вырезан, место басу и бочке.
         let (_, _, hipped) = self.hp.process(raw, HP_HZ, 0.7, sample_rate);
         // Полировка от высоты: постоянное число гармоник вместо
         // фиксированных 9.5 кГц — верхние ноты не свистят.
-        let polish_cut = (self.frequency * POLISH_HARMS)
-            .clamp(POLISH_FLOOR_HZ, POLISH_HZ);
-        let (polished, _, _) =
-            self.polish.process(hipped, polish_cut, POLISH_Q, sample_rate);
+        let polish_cut = (self.frequency * POLISH_HARMS).clamp(POLISH_FLOOR_HZ, POLISH_HZ);
+        let (polished, _, _) = self
+            .polish
+            .process(hipped, polish_cut, POLISH_Q, sample_rate);
         polished * VOICE_GAIN
     }
 
@@ -162,7 +189,10 @@ mod tests {
         }
         let sharp = early_energy(0.8);
         let soft = early_energy(1.8);
-        assert!(soft < sharp, "articulation ignored: soft={soft} sharp={sharp}");
+        assert!(
+            soft < sharp,
+            "articulation ignored: soft={soft} sharp={sharp}"
+        );
     }
 
     #[test]

@@ -8,18 +8,21 @@
 //! заглушки, чтобы собирались FRB и десктоп.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     Mutex,
 };
 
-/// Чанк рендера/записи: 0.1с при 48 кГц (онсеты точнее шага сетки).
-pub(crate) const CHUNK_FRAMES: usize = 4800;
+/// Чанк рендера/записи: 0.05с при 48 кГц. Короче квант — меньше
+/// слышимая дыра от одного медленного чанка (50 мс против 100 мс)
+/// и точнее онсеты. Мельче (25 мс) — вдвое больше JNI-вызовов
+/// без слышимого выигрыша.
+pub(crate) const CHUNK_FRAMES: usize = 2400;
 /// Частота нативного трека (AudioTrack ресемплит сам, как раньше).
 pub(crate) const TRACK_SR: f32 = 48000.0;
 /// Байтов буфера трека: секунда (противодавление без спина).
 const TRACK_BUF_BYTES: i32 = 48000 * 2 * 4;
-/// Блоков в захвате экспертизы (30 секунд по 0.1с).
-const CAPTURE_BLOCKS: usize = 300;
+/// Блоков в захвате экспертизы (30 секунд по 0.05с).
+const CAPTURE_BLOCKS: usize = 600;
 
 /// Поколение потока: stop/start впритык убивает старый цикл.
 static GEN: AtomicU64 = AtomicU64::new(0);
@@ -29,13 +32,37 @@ static ALIVE: AtomicBool = AtomicBool::new(false);
 static DIAG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Захват потока в файл: путь + осталось блоков.
 static CAPTURE: Mutex<Option<(std::fs::File, usize)>> = Mutex::new(None);
+/// Буферная очередь AudioTrack (отдано минус съедено), мс: оценка того,
+/// насколько звучащее отстает от отрендеренного. Пишет аудио-цикл
+/// каждые 5 секунд, читает UI для синхронизации визуалайзера
+/// (колесо должно показывать то, что звучит, а не то, что
+/// сгенерировалось). Ноль — поток не играет / неизвестно.
+static LATENCY_MS: AtomicI64 = AtomicI64::new(0);
 
-/// Счетчики тракта для сводки (каждые 100 блоков ≈ 10 секунд).
+/// Очередь буфера трека для фронта, мс. Только Android: там позиция
+/// хэда читается нативным циклом. Остальные платформы — 0 (колбэк cpal
+/// идёт почти в момент звучания, остаток правится маржой фронта).
+#[cfg(target_os = "android")]
+pub(crate) fn output_latency_ms() -> f32 {
+    LATENCY_MS.load(Ordering::Relaxed).max(0) as f32
+}
+
+#[cfg(not(target_os = "android"))]
+pub(crate) fn output_latency_ms() -> f32 {
+    0.0
+}
+
+/// Счетчики тракта для сводки (каждые 100 блоков ≈ 5 секунд).
 struct Counters {
     chunks: u64,
     slow: u64,
     render_ms_total: u64,
     pending_max: usize,
+    /// Кадров отдано треку всего (для дрейфа часов).
+    written: u64,
+    /// Последняя позиция хэда + база обёртки 32-битного счётчика.
+    last_head: i64,
+    head_base: i64,
 }
 
 pub(crate) fn diag_push(line: String) {
@@ -297,19 +324,63 @@ fn audio_loop(gen: u64) {
         let track_global = env.new_global_ref(&track)?;
         env.delete_local_ref(track);
 
-        env.call_method(&track_global, jni::jni_str!("play"), jni::jni_sig!("()V"), &[])?;
-
         let mut counters = Counters {
             chunks: 0,
             slow: 0,
             render_ms_total: 0,
             pending_max: 0,
+            written: 0,
+            last_head: 0,
+            head_base: 0,
         };
         let mut last_summary = Instant::now();
         let mut last_pushed = 0u64;
         let controller = crate::api::playback::shared_controller();
+        // Префилл: 3 чанка в буфер ДО play — старт без underrun-дыры
+        // (иначе трек с первой миллисекунды потребляет быстрее, чем
+        // мы производим). Ошибка/пустота здесь не фатальны: главный
+        // цикл ниже сам выйдет через существующий путь «write failed».
+        for _ in 0..3 {
+            if !alive() {
+                break;
+            }
+            let pcm = controller.render_pull(CHUNK_FRAMES as u64, TRACK_SR);
+            if pcm.is_empty() {
+                break;
+            }
+            capture_write(&pcm);
+            let write_res: jni::errors::Result<i32> =
+                env.with_local_frame(8, |env| {
+                    let arr = env.new_float_array(pcm.len())?;
+                    arr.set_region(env, 0, &pcm)?;
+                    let n = env
+                        .call_method(
+                            &track_global,
+                            jni::jni_str!("write"),
+                            jni::jni_sig!("([FIII)I"),
+                            &[
+                                JValue::Object(&arr),
+                                JValue::Int(0),
+                                JValue::Int(pcm.len() as i32),
+                                JValue::Int(1),
+                            ],
+                        )?
+                        .i()?;
+                    Ok(n)
+                });
+            match write_res {
+                Ok(n) if n >= 0 => {
+                    counters.written += pcm.len() as u64 / 2;
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        env.call_method(&track_global, jni::jni_str!("play"), jni::jni_sig!("()V"), &[])?;
         while alive() {
-            // Каденс realtime: чанк покрывает 0.1с — отработали быстрее,
+            // Каденс realtime: чанк покрывает 0.05с — отработали быстрее,
             // ждем остаток. Без этого при незапирающей записи цикл
             // крутит сотни чанков в секунду (видели 670/с), съедает ядро
             // и морит композер голодом — отсюда редкие ноты.
@@ -321,7 +392,7 @@ fn audio_loop(gen: u64) {
             counters.render_ms_total += ms;
             counters.pending_max =
                 counters.pending_max.max(controller.pump_pending_len());
-            if ms > 50 {
+            if ms > 25 {
                 counters.slow += 1;
                 diag_push(format!(
                     "{} SLOW render: {ms}ms (slow={})",
@@ -332,7 +403,7 @@ fn audio_loop(gen: u64) {
                 let avg = counters.render_ms_total / counters.chunks.max(1);
                 let queued = controller.engine_stats().queued;
                 // Состояние трека и реальный темп: чанков в секунду
-                // в разы больше 10 — запись нигде не тормозит
+                // около 20 (чанки по 50 мс) — запись нигде не тормозит
                 // (трек не потребляет). 3 = PLAYING.
                 let elapsed = last_summary.elapsed().as_secs_f32().max(0.01);
                 last_summary = Instant::now();
@@ -346,13 +417,44 @@ fn audio_loop(gen: u64) {
                     )
                     .map(|v| v.i().unwrap_or(-99))
                     .unwrap_or(-99);
-                // Темп композера: сколько нот сгенерировано за окно.
-                // ~300 = полный микс, ~10 = композер стоит.
+                // Темп композера: сколько нот сгенерировано за окно (5с).
+                // ~150 = полный микс, ~10 = композер стоит.
                 let pushed_now = controller.engine_stats().pushed;
                 let pushed_delta = pushed_now.saturating_sub(last_pushed);
                 last_pushed = pushed_now;
+                // Дрейф часов: отдано треку минус съедено хедом.
+                // Растёт — производим быстрее потребления (буфер пухнет,
+                // норма после префилла ~150-300 мс); около нуля надолго —
+                // идём впритык (риск underrun при первом же spike).
+                let head: i32 = env
+                    .call_method(
+                        &track_global,
+                        jni::jni_str!("getPlaybackHeadPosition"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )
+                    .map(|v| v.i().unwrap_or(-1))
+                    .unwrap_or(-1);
+                let drift_txt = if head >= 0 {
+                    let head = head as i64;
+                    if head < counters.last_head - 1_000_000 {
+                        // Обёртка 32-битного счётчика (~12.4 ч при 48 кГц).
+                        counters.head_base += 0x1_0000_0000;
+                    }
+                    counters.last_head = head;
+                    let drift_ms = (counters.written as i64
+                        - (counters.head_base + head))
+                        * 1000
+                        / TRACK_SR as i64;
+                    // Буферная очередь трека для визуалайзера: колесо
+                    // показывает звучащее, а не отрендеренное.
+                    LATENCY_MS.store(drift_ms.max(0), Ordering::Relaxed);
+                    format!("{drift_ms}ms")
+                } else {
+                    "n/a".to_string()
+                };
                 diag_push(format!(
-                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0}/s playstate={play_state} pushed={pushed_delta})",
+                    "{} render avg {avg}ms (slow={} queued={queued} pending_max={} rate={rate:.0}/s playstate={play_state} pushed={pushed_delta} drift={drift_txt})",
                     diag_now(),
                     counters.slow,
                     counters.pending_max
@@ -377,13 +479,6 @@ fn audio_loop(gen: u64) {
                 continue;
             }
             capture_write(&pcm);
-            // Каденс: чанк покрывает 0.1с звука — ждем остаток.
-            // (см. выше: без каденса цикл уходит в сотни чанков/с).
-            let spent = chunk_start.elapsed();
-            let quantum = std::time::Duration::from_millis(100);
-            if spent < quantum {
-                std::thread::sleep(quantum - spent);
-            }
             // Запись одним куском в локальном фрейме: массив удаляется
             // сразу, таблица ссылок не растет весь трек.
             let write_res: jni::errors::Result<i32> =
@@ -406,13 +501,24 @@ fn audio_loop(gen: u64) {
                     Ok(n)
                 });
             match write_res {
-                Ok(n) if n >= 0 => {}
+                Ok(n) if n >= 0 => {
+                    counters.written += pcm.len() as u64 / 2;
+                }
                 _ => {
                     // Трек умер (маршрут без события): выходим, Dart
                     // пересоздаст цикл по команде play (как раньше heal).
                     diag_push(format!("{} track write failed, exiting", diag_now()));
                     break;
                 }
+            }
+            // Каденс: чанк покрывает 0.05с звука — ждем остаток ПОСЛЕ
+            // записи. Трек получает чанк сразу после рендера (буфер не
+            // голодает из-за сна), а цикл не крутится вхолостую на
+            // сотни чанков/с (съедал ядро и морил композер голодом).
+            let spent = chunk_start.elapsed();
+            let quantum = std::time::Duration::from_millis(50);
+            if spent < quantum {
+                std::thread::sleep(quantum - spent);
             }
         }
 

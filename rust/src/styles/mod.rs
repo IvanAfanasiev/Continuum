@@ -3,7 +3,8 @@
 //! Каждый стиль объявляет: лад, темп, свинг, дефолтный микс по слотам
 //! и по одной направляющей [`RoleGuide`] на слот. Как именно из весов
 //! родятся ноты, решает общий движок [`render_style`]: вес 1.0 —
-//! структурный якорь жанра (всегда играет), веса между — вероятности,
+//! структурный якорь жанра (почти всегда играет, приоритет 0.95;
+//! кик-якорь — всегда), веса между — вероятности,
 //! масштабируемые энергией секции. Никаких номеров шагов в коде стилей.
 //!
 //! Принцип правил: их умеренное количество, а не минимум. Фиксированная
@@ -112,9 +113,13 @@ pub struct RoleGuide {
     pub weights: &'static [f32],
     pub poles: Option<&'static [&'static [f32]]>,
     pub energy_response: f32,
-    /// Молчать во второй половине последнего такта (брейк-пауза).
+    /// Молчать в последней четверти последнего такта BuildUp:
+    /// короткий вдох ровно перед дропом, а не сбивка в конце каждого
+    /// раздела формы.
     pub drop_before_climax: bool,
-    /// Играть каждый N-й такт (пэды через такт и т.п.). 1 = всегда.
+    /// Играть каждый N-й такт от старта сессии (пэды через такт и т.п.).
+    /// Сквозной такт, а не локальный в секции: фаза не сбрасывается
+    /// на стыках формы. 1 = всегда.
     pub every_n_measures: usize,
     /// Оффбитные 8-е звучат длиннее (открытые хэты сами собой).
     pub long_offbeats: bool,
@@ -138,8 +143,6 @@ pub struct RoleGuide {
     /// (мелодическое ДНК трека), а не из дрейфа по ладу.
     /// Так лид играет узнаваемую тему сида — «ремикс на известную песню».
     pub follow_motif: bool,
-    /// Только последний такт секции (крэши, влеты в дроп).
-    pub climax_only: bool,
     /// Интервалы аккорда в ступенях лада (пэды/клавиши берут трезвучие).
     /// None + роль Chords + не мотив = дефолтное трезвучие [0, 2, 4].
     /// Мелодия и ударные всегда одиночные.
@@ -158,19 +161,21 @@ pub struct RoleGuide {
     /// Потолок баса: уползшее выше складывается октавой вниз.
     /// Дефолт 45 (A2, саб). Рок-бас риффует с гитарой выше (52).
     pub bass_top: u8,
-    /// Emergent-пульс в долях (0.0 = выкл, сеточный путь).
-    /// Слот бьет по собственной решетке с периодом из сида, а не по весам:
-    /// несоизмеримость с тактом дает вечно дрейфующий грув без повторов
-    /// (фэйзинг вместо паттерна). Период дышит энергией секции
-    /// (в дропе чаще) и варьируется сидом ±25%. Приоритет над
-    /// weights/poles/gates; структура (every_n, climax, акценты) и баланс
-    /// партий действуют как обычно. Чистая функция глобального шага —
-    /// состояния нет, тот же сид дает тот же поток.
-    pub emergent_beats: f32,
     /// Отдых фразами 0..1: доля фраз, которые носитель темы молчит
     /// целиком (вопрос-ответ фразами: один поет — второй дышит).
     /// Бросок независимый на слот. 0.0 = всегда играет.
     pub phrase_rest: f32,
+    /// Ролл в дроп: последний такт BuildUp слот играет каждую 16-ю
+    /// с нарастанием (снейр-ролл в дроп — лицо жанра). Веса/гейты
+    /// на этом такте игнорируются: заливка всегда доводит.
+    /// Только энергичным (club/rock/phonk/proto), не lofi.
+    pub build_roll: bool,
+    /// Полюса по секциям: грув слота пересдаётся на каждую секцию
+    /// (Main свой бит, Drop свой), а не стоит один на весь трек.
+    /// Якоря формы: дроп каждый раз узнаваем, куплет — свой.
+    /// Выбор детерминирован (сид, слот, секция). Без полюсов флаг
+    /// ничего не делает.
+    pub section_poles: bool,
 }
 
 impl RoleGuide {
@@ -192,18 +197,25 @@ impl RoleGuide {
         top_pitch: 127,
         vel_high_cut: 1.0,
         follow_motif: false,
-        climax_only: false,
         chord: None,
         bass_fifth: false,
         sub_bias: 0.0,
         bass_top: 45,
         arp: false,
-        emergent_beats: 0.0,
         phrase_rest: 0.0,
+        build_roll: false,
+        section_poles: false,
     };
 
     pub fn is_silent(&self) -> bool {
-        self.weights.iter().all(|&w| w <= 0.0)
+        // Молчит только если не звучит ни веса такта, ни единый полюс:
+        // полюса — это грув, а не декорация, и пустые веса с полюсами
+        // обязаны играть (иначе роль пропадает из ансамбля молча).
+        let weights_silent = self.weights.iter().all(|&w| w <= 0.0);
+        let poles_silent = self
+            .poles
+            .is_none_or(|poles| poles.iter().all(|p| p.iter().all(|&w| w <= 0.0)));
+        weights_silent && poles_silent
     }
 
     /// Заготовка ударного: фиксированный питч, остальное по дефолту.
@@ -226,14 +238,14 @@ impl RoleGuide {
             top_pitch: 127,
             vel_high_cut: 1.0,
             follow_motif: false,
-            climax_only: false,
             chord: None,
             bass_fifth: false,
             sub_bias: 0.0,
             bass_top: 45,
             arp: false,
-            emergent_beats: 0.0,
             phrase_rest: 0.0,
+            build_roll: false,
+            section_poles: false,
         }
     }
 
@@ -267,14 +279,14 @@ impl RoleGuide {
             top_pitch: 127,
             vel_high_cut: 1.0,
             follow_motif: false,
-            climax_only: false,
             chord: None,
             bass_fifth: false,
             sub_bias: 0.0,
             bass_top: 45,
             arp: false,
-            emergent_beats: 0.0,
             phrase_rest: 0.0,
+            build_roll: false,
+            section_poles: false,
         }
     }
 }
@@ -296,6 +308,12 @@ pub trait Style: Send + Sync {
     /// спокойным — дыхание темы с редкими подъемами. Дефолт — активная.
     fn arrangement(&self) -> crate::arranger::Score {
         crate::arranger::ENERGETIC_SCORE
+    }
+    /// Как стиль склеивает куски: плавный внахлёст (голос следующего
+    /// входит поверх грува) или резкий стык на границе такта. Энергичные
+    /// стили катят грув через стык, спокойные — закрывают тихо.
+    fn transition(&self) -> crate::piece::Transition {
+        crate::piece::Transition::Rolling { bars: 2 }
     }
     /// Вайтлист инструментов стиля: кто включен при выборе стиля,
     /// остальные глушатся в ноль. Громкости — канонические, у слотов
@@ -381,10 +399,12 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
     let guides = style.slot_guides();
     let scale = style.scale();
     let energy = (style.shape_energy(sctx.song.energy) * sctx.intensity).clamp(0.0, 1.5);
-    // Сколько активных носителей у каждой роли — карта дележа плотности.
+    // Сколько реально звучащих носителей у каждой роли — карта дележа
+    // плотности. Молчащие гайды (нулевые веса и полюса) не считаются:
+    // иначе живые исполнители делят плотность с пустотой.
     let mut role_n = [0usize; 8];
-    for id in sctx.active_tracks {
-        if let Some(s) = Slot::from_id(*id) {
+    for (i, s) in Slot::ALL.iter().enumerate() {
+        if sctx.active_tracks.contains(&s.id()) && !guides[i].is_silent() {
             role_n[s.role().index()] += 1;
         }
     }
@@ -422,9 +442,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
     let mut carriers: Vec<usize> = Slot::ALL
         .iter()
         .enumerate()
-        .filter(|(i, s)| {
-            is_active(**s) && guides[*i].follow_motif && !guides[*i].is_silent()
-        })
+        .filter(|(i, s)| is_active(**s) && guides[*i].follow_motif && !guides[*i].is_silent())
         .map(|(_, s)| s.id())
         .collect();
     if carriers.is_empty() {
@@ -433,14 +451,27 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         }
     }
     let leader = theme_leader(&carriers, sctx.song.seed_hash, sctx.song.stage);
-    // Фаза 1: кики. Заливка (сработал не якорь) запоминается —
-    // бас во второй фазе под нее пригнется.
-    let mut kick_fill = false;
+    // Единый пул мелодических голосов для громкостного баланса:
+    // активные и реально звучащие (не SILENT).
+    let active_melodic: Vec<usize> = Slot::ALL
+        .iter()
+        .enumerate()
+        .filter(|(i, s)| is_active(**s) && !guides[*i].is_silent() && is_melodic_role(s.role()))
+        .map(|(_, s)| s.id())
+        .collect();
+    // Фаза 1: кики. Фундамент — первым, чтобы DSP-дак бочки был готов
+    // к моменту нот остальных слоев (порядок важен движку, не генерации).
     for (i, slot) in Slot::ALL.iter().enumerate() {
         if slot.role() != InstrumentRole::Kick {
             continue;
         }
         if !sctx.active_tracks.contains(&slot.id()) {
+            continue;
+        }
+        // Аранж по слоям: план куска пишет, кто играет в этой секции.
+        // Молчащая группа — не «тише», а молчит: точки на колесе и звук
+        // совпадают, потому что решение одно и то же.
+        if sctx.song.layers & (1 << slot.group().index()) == 0 {
             continue;
         }
         let guide = &guides[i];
@@ -461,22 +492,10 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             1.0 / n.sqrt(),
             fallback == Some(slot.id()),
             false,
-            sctx.step,
-            false,
             // Кики тему не несут: лидерство им не нужно.
             false,
             sctx.rng,
         );
-        if !slot_notes.is_empty()
-            && !is_anchor_step(
-                guide,
-                sctx.song,
-                i,
-                sctx.step_in_measure,
-            )
-        {
-            kick_fill = true;
-        }
         notes.extend(slot_notes);
     }
     // Фаза 2: остальные. Порядок внутри стабилен (Slot::ALL).
@@ -485,6 +504,10 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             continue;
         }
         if !sctx.active_tracks.contains(&slot.id()) {
+            continue;
+        }
+        // Аранж по слоям: план куска пишет, кто играет в этой секции.
+        if sctx.song.layers & (1 << slot.group().index()) == 0 {
             continue;
         }
         let guide = &guides[i];
@@ -497,10 +520,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         // Сгущение в диады — только мелодическим питчевым при пустых
         // аккордовых. Остальные играют как написано.
         let thicken = !has_chords
-            && matches!(
-                slot.role(),
-                InstrumentRole::Lead | InstrumentRole::Vocal
-            )
+            && matches!(slot.role(), InstrumentRole::Lead | InstrumentRole::Vocal)
             && matches!(guide.voice, Voicing::Scale { .. });
         notes.extend(play_guide(
             guide,
@@ -515,14 +535,67 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             1.0 / n.sqrt(),
             fallback == Some(slot.id()),
             thicken,
-            sctx.step,
-            kick_fill,
             // Лидер фразы — в полную, остальные носители — эхом.
             leader == Some(slot.id()),
             sctx.rng,
         ));
     }
+    // Единый баланс партий: лидер темы (а если тему несет не мелодический
+    // голос — выбранный мелодический) чуть громче, остальные мелодические
+    // — поддержка. Второго, независимого лидера в композере больше нет:
+    // иерархия одна и та же для эха темы и для громкостного баланса.
+    apply_leader_balance(
+        &mut notes,
+        balance_leader(&active_melodic, leader, sctx.song.stage),
+    );
     notes
+}
+
+/// Мелодические роли — те, что звучат в верхнем регистре: лид, вокал,
+/// аккорды. Бас и барабаны держат фундамент и в балансе не участвуют.
+fn is_melodic_role(role: InstrumentRole) -> bool {
+    matches!(
+        role,
+        InstrumentRole::Lead | InstrumentRole::Chords | InstrumentRole::Vocal
+    )
+}
+
+/// Лидер баланса: ведущий темы, если он мелодический; иначе —
+/// детерминированная ротация по активным мелодическим голосам.
+/// Меньше двух голосов — балансировать нечего (одного не давим).
+fn balance_leader(
+    active_melodic: &[usize],
+    theme_lead: Option<usize>,
+    stage: usize,
+) -> Option<usize> {
+    if active_melodic.len() < 2 {
+        return None;
+    }
+    theme_lead
+        .filter(|l| active_melodic.contains(l))
+        .or_else(|| Some(active_melodic[stage % active_melodic.len()]))
+}
+
+/// Намеренно сдержанный баланс: генерация не спорит с ручками
+/// пользователя, лишь слегка подсвечивает ведущий голос.
+const LEADER_BOOST: f32 = 1.08;
+const SUPPORT_DIP: f32 = 0.95;
+
+fn apply_leader_balance(notes: &mut [NoteEvent], leader: Option<usize>) {
+    let Some(lead_id) = leader else { return };
+    for note in notes.iter_mut() {
+        let Some(role) = Slot::from_id(note.instrument_id).map(|s| s.role()) else {
+            continue;
+        };
+        if !is_melodic_role(role) {
+            continue;
+        }
+        if note.instrument_id == lead_id {
+            note.velocity = (note.velocity * LEADER_BOOST).min(1.0);
+        } else {
+            note.velocity *= SUPPORT_DIP;
+        }
+    }
 }
 
 /// Ранг роли для резервного носителя темы: лид поет первым,
@@ -545,27 +618,29 @@ const ANCHOR_PRIOR: f32 = 0.95;
 /// Соль якорного гейта: независимый бросок от остальных гейтов слота.
 const ANCHOR_SALT: u64 = 0xA11CE;
 
-/// Якорный ли шаг для гайда: вес после выбора полюса ≥ 1.0.
-/// Та же формула, что в play_guide (без гейтов): бас по ней узнает,
-/// даунбит это (играем вместе) или заливка (пригибаемся).
-/// Emergent-слоты якорей не имеют по построению.
-fn is_anchor_step(
+/// Вес шага с учётом полюса трека: бит прописан выбором полюса,
+/// без него — весами такта. Флаг `section_poles` подмешивает секцию
+/// в соль выбора: грув пересдаётся на секцию (у дропа свой бит).
+fn pole_step_weight(
     guide: &RoleGuide,
     song: &SongContext,
-    slot_idx: usize,
+    key: usize,
     step_in_measure: usize,
-) -> bool {
-    if guide.emergent_beats > 0.0 {
-        return false;
-    }
-    let mut w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
+) -> f32 {
+    let base_w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
     if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
-        let pick = crate::arranger::splitmix64(
-            song.seed_hash ^ (slot_idx as u64).wrapping_mul(0x9E3779B9),
-        ) % poles.len() as u64;
-        w = poles[pick as usize].get(step_in_measure).copied().unwrap_or(0.0);
+        let mut salt = song.seed_hash ^ (key as u64).wrapping_mul(0x9E3779B9);
+        if guide.section_poles {
+            salt ^= (song.section as u64).wrapping_mul(0x5EED);
+        }
+        let pick = crate::arranger::splitmix64(salt) % poles.len() as u64;
+        poles[pick as usize]
+            .get(step_in_measure)
+            .copied()
+            .unwrap_or(0.0)
+    } else {
+        base_w
     }
-    w >= 1.0
 }
 
 /// Затухание тонов аккорда: корень в полную силу, верх тише.
@@ -604,17 +679,12 @@ pub(crate) fn motif_octave(seed_hash: u64) -> i8 {
 /// Заморожено на секцию: первый голос держится весь раздел формы
 /// и меняется только на границе (состав не тасуется внутри песни).
 /// Пусто — вести некому (все молчат как написано).
-pub(crate) fn theme_leader(
-    carriers: &[usize],
-    seed_hash: u64,
-    stage: usize,
-) -> Option<usize> {
+pub(crate) fn theme_leader(carriers: &[usize], seed_hash: u64, stage: usize) -> Option<usize> {
     if carriers.is_empty() {
         return None;
     }
-    let h = crate::arranger::splitmix64(
-        seed_hash ^ 0x1EAD ^ (stage as u64).wrapping_mul(0x9E3779B9),
-    );
+    let h =
+        crate::arranger::splitmix64(seed_hash ^ 0x1EAD ^ (stage as u64).wrapping_mul(0x9E3779B9));
     Some(carriers[(h % carriers.len() as u64) as usize])
 }
 
@@ -643,57 +713,6 @@ fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
         _ => root,
     }
 }
-/// Период emergent-пульса в шагах: статичен весь трек (бит держится),
-/// варьируется сидом ±25%. Дробная часть — только из фэйзинг-набора:
-/// период у малого целого или простой дроби (2.0, 2.5, 1.33…)
-/// дает короткий зацикленный стук — те же 2–3 удара по кругу.
-/// С «хорошей» дробью рисунок дрейфует по тактам, а не крутится.
-fn emergent_period(seed_hash: u64, slot_idx: usize, beats: f32, steps_per_measure: usize) -> f32 {
-    const GOOD_FRAC: [f32; 5] = [0.37, 0.41, 0.53, 0.59, 0.63];
-    let h = crate::arranger::splitmix64(
-        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xE9E9E9,
-    );
-    let span = 0.75 + 0.5 * ((h >> 32) as f32 / (u32::MAX as f32));
-    let mut p = beats * span * steps_per_measure as f32 / 4.0;
-    p = p.clamp(1.25, 16.0);
-    let whole = p.floor();
-    let frac = p - whole;
-    let looped = !(0.2..=0.8).contains(&frac)
-        || (frac - 0.5).abs() < 0.1
-        || (frac - 1.0 / 3.0).abs() < 0.07
-        || (frac - 2.0 / 3.0).abs() < 0.07;
-    if looped {
-        whole + GOOD_FRAC[(h >> 16) as usize % GOOD_FRAC.len()]
-    } else {
-        p
-    }
-}
-
-/// Emergent-пульс: бьет ли глобальный шаг `step`.
-/// Решетка с периодом [`emergent_period`]: звучит, если в шаг попадает
-/// очередной тик. Период СТАТИЧЕН весь трек (разгона в дропе нет —
-/// бит держится). Возвращает (fire, accent): акцент сильнее у четвертей.
-/// Чистая функция — состояния нет, тот же сид дает тот же поток.
-fn emergent_fire(
-    seed_hash: u64,
-    slot_idx: usize,
-    step: usize,
-    step_in_measure: usize,
-    steps_per_measure: usize,
-    beats: f32,
-) -> (bool, f32) {
-    let p = emergent_period(seed_hash, slot_idx, beats, steps_per_measure);
-    let s = step as f32;
-    let fire = ((s + 1.0) / p).floor() > (s / p).floor();
-    let q = steps_per_measure / 4;
-    let accent = if q > 0 {
-        let d = (step_in_measure % q).min(q - step_in_measure % q) as f32;
-        1.0 + 0.35 * (1.0 - d / (q.max(2) / 2) as f32).max(0.0)
-    } else {
-        1.0
-    };
-    (fire, accent)
-}
 /// Детерминированный гейт вероятности: тот же (сид, слот, шаг, соль) —
 /// то же решение. Соль берем от монотонной фразы (растет каждые 2 такта),
 /// поэтому грув держится фразу и пересдается дальше: повторов нет,
@@ -707,28 +726,6 @@ fn fixed_gate(seed_hash: u64, slot_idx: usize, step: usize, salt: u64) -> f32 {
             ^ salt,
     );
     (h >> 32) as f32 / (u32::MAX as f32)
-}
-
-/// Детерминированное блуждание тоники по фразам: префикс-сумма шагов
-/// −1/0/+1 из битов хэша (сид, фраза). Шаг не больше ступени за фразу
-/// (музыкально связно), путь непериодичен (период потока 2^64 —
-/// скелет не замыкается никогда). Тот же сид — тот же путь.
-/// Сложность O(фраза): на суточной сессии ~микросекунды на ноту.
-fn melodic_drift(seed_hash: u64, phrase: usize, span: usize) -> usize {
-    let mut pos: i64 = 0;
-    for p in 0..phrase {
-        let h = crate::arranger::splitmix64(
-            seed_hash
-                ^ (p as u64).wrapping_mul(0x9E3779B97F4A7C15)
-                ^ 0xD21F7,
-        );
-        pos += match h % 3 {
-            0 => 0,
-            1 => 1,
-            _ => -1,
-        };
-    }
-    pos.rem_euclid(span.max(1) as i64) as usize
 }
 
 /// Артикуляция сида: множители атаки/релиза для мягких голосов.
@@ -748,9 +745,8 @@ pub(crate) fn envelope_shape(seed_hash: u64, slot_idx: usize) -> (f32, f32) {
 /// одни сиды играют протяжнее, другие отрывистее («медленнее/быстрее»).
 /// Ударные короткие по построению — им почти не влияет.
 pub(crate) fn duration_shape(seed_hash: u64, slot_idx: usize) -> f32 {
-    let h = crate::arranger::splitmix64(
-        seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xD0A4,
-    );
+    let h =
+        crate::arranger::splitmix64(seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xD0A4);
     0.85 + 0.4 * ((h >> 32) as f32 / (u32::MAX as f32))
 }
 
@@ -775,12 +771,6 @@ fn play_guide(
     // Сгущение в диаду: пустые аккордовые — лид поет корень+терцию.
     // Гармония без мути трезвучий и без смены голоса.
     force_chords: bool,
-    // Глобальный шаг композиции (монотонный счетчик): emergent-пульс
-    // строит решетку от него. Сеточный путь его не читает.
-    global_step: usize,
-    // Заливка кика на этом шаге (не якорь): бас пригибается вдвое,
-    // чтобы не наслаиваться. Даунбит играют вместе в полную.
-    kick_fill: bool,
     // Лидер темы на этой фразе: ведет в полную. Остальные носители —
     // эхом (урезанная плотность, те же шаги). Тесты зовут с true:
     // голос в изоляции звучит как написано.
@@ -802,53 +792,25 @@ fn play_guide(
     } else {
         slot_idx
     };
-    // Полюс грува: один на весь трек от (сид, план). Бит прописан
-    // и держится (уверенная основа), оживляют его только гейты фраз
-    // и свинг сида. Тот же сид — тот же бит; другой сид — другой.
-    let base_w = guide.weights.get(step_in_measure).copied().unwrap_or(0.0);
-    let weight = if let Some(poles) = guide.poles.filter(|p| !p.is_empty()) {
-        let pick = crate::arranger::splitmix64(
-            song.seed_hash ^ (groove_key as u64).wrapping_mul(0x9E3779B9),
-        ) % poles.len() as u64;
-        poles[pick as usize]
-            .get(step_in_measure)
-            .copied()
-            .unwrap_or(0.0)
-    } else {
-        base_w
-    };
-    if weight <= 0.0 {
-        return Vec::new();
-    }
-    if guide.every_n_measures > 1 && !song.measure_index.is_multiple_of(guide.every_n_measures) {
-        return Vec::new();
-    }
-    let climax = song.is_last_measure;
-    // Пауза перед кульминацией — только перед дропом и только последнюю
-    // четверть такта: брейк-дыра на полтакта в конце КАЖДОГО раздела
-    // читалась как сбивка. Время держим, брейк — короткий вдох.
-    let drop_break = matches!(song.section, SongSection::Drop);
-    if guide.drop_before_climax
-        && climax
-        && drop_break
-        && step_in_measure * 4 > steps_per_measure * 3
+    // Структурные фильтры действуют и на ролл: слот, который по плану
+    // молчит этот такт (every_n) или делает вдох перед дропом, не
+    // получает заливку. Иначе редкая партия превращалась в «всегда
+    // в последнем такте билда» вопреки собственной структуре.
+    if guide.every_n_measures > 1
+        && !(song.measure_index.saturating_sub(1)).is_multiple_of(guide.every_n_measures)
     {
         return Vec::new();
     }
-    // Точечные акценты (крэш): только последний такт секции.
-    if guide.climax_only && !climax {
-        return Vec::new();
-    }
-    // Точечные акценты — аранжировка, а не мигание: присутствуют
-    // целыми секциями (гейт от визита), а не фразами.
-    let prior = accent_prior(instrument_id);
-    if prior < 1.0
-        && fixed_gate(
-            song.seed_hash,
-            groove_key,
-            song.stage % 64,
-            0xA66E47
-        ) >= prior
+    let climax = song.is_last_measure;
+    // Пауза перед кульминацией — только перед дропом, в последней
+    // четверти последнего такта BuildUp. Раньше флаг срабатывал на
+    // последнем такте Drop и вырезал четверть уже после удара — это
+    // читалось как сбивка, а не как вдох перед дропом.
+    let before_drop = matches!(song.section, SongSection::BuildUp);
+    if guide.drop_before_climax
+        && climax
+        && before_drop
+        && step_in_measure * 4 >= steps_per_measure * 3
     {
         return Vec::new();
     }
@@ -858,77 +820,106 @@ fn play_guide(
     // не отдыхает никогда (иначе тема перебивается паузой),
     // остальные дышат по независимому броску. Подхват (ключи
     // без темы) не отдыхает: одинокий носитель всегда ведет.
+    // Проверка стоит до ролла: отдых фразы — общее правило формы,
+    // а не строка грува, которую заливка вправе переписать.
     if guide.follow_motif
         && !theme_lead
         && guide.phrase_rest > 0.0
-        && fixed_gate(
-            song.seed_hash,
-            slot_idx,
-            song.phrase_index % 64,
-            0x2E57,
-        ) < guide.phrase_rest
+        && fixed_gate(song.seed_hash, slot_idx, song.phrase_index, 0x2E57) < guide.phrase_rest
     {
         return Vec::new();
     }
 
-    // Emergent-пульс вместо сетки: бьет ли глобальный шаг.
-    // Веса/морфинг/гейты пропускаем; структура выше уже отработала.
-    // Акцент у четвертей — барабанщик выделяет доли (грув, а не стук).
-    let emergent_accent = if guide.emergent_beats > 0.0 {
-        let (fire, accent) = emergent_fire(
-            song.seed_hash,
-            groove_key,
-            global_step,
-            step_in_measure,
-            steps_per_measure,
-            guide.emergent_beats,
-        );
-        if !fire {
+    // Ролл в дроп: последний такт BuildUp ударный слот с флагом
+    // играет каждую 16-ю с нарастанием 0.55→1.0. Это структурная
+    // заливка, а не строка грува: веса шага, полюса и вероятностный
+    // гейт осознанно не применяются. Общие правила формы (every_n,
+    // вдох перед дропом, отдых фразы) выше уже отработали.
+    // Ролл доводит до последней 16-й такта: заливка вливается в
+    // даунбит дропа, а не обрывается за шаг до него.
+    // Только Kit-голоса (снейр): питчевым флаг не ставится.
+    if guide.build_roll && matches!(song.section, SongSection::BuildUp) && song.is_last_measure {
+        let Voicing::Kit(pitch) = guide.voice else {
+            return Vec::new();
+        };
+        let rise = 0.55 + 0.45 * step_in_measure as f32 / steps_per_measure.max(1) as f32;
+        let mut velocity = (guide.vel_base * rise
+            + energy * guide.vel_energy
+            + rng.gen_range(-guide.vel_jitter..=guide.vel_jitter))
+        .clamp(0.1, 1.0);
+        if guide.vel_high_cut < 1.0 {
+            let octaves_above = ((pitch as f32 - 40.0) / 12.0).max(0.0);
+            velocity = (velocity * guide.vel_high_cut.powf(octaves_above)).clamp(0.05, 1.0);
+        }
+        if let Some(r) = role {
+            velocity *= song.stage_gain(r);
+        }
+        velocity *= beat_accent(step_in_measure, steps_per_measure);
+        if velocity < 0.05 {
             return Vec::new();
         }
-        accent
-    } else {
-        1.0
-    };
+        return vec![NoteEvent::new(
+            instrument_id,
+            pitch,
+            velocity,
+            base_step_secs * 0.5,
+        )];
+    }
+    // Полюс грува: бит прописан выбором полюса (сид, план; при
+    // section_poles — ещё и секция: у дропа свой бит) и держится.
+    // Оживляют его только гейты фраз и свинг сида. Тот же сид —
+    // тот же бит; другой сид — другой.
+    let weight = pole_step_weight(guide, song, groove_key, step_in_measure);
+    if weight <= 0.0 {
+        return Vec::new();
+    }
+    // Точечные акценты — аранжировка, а не мигание: присутствуют
+    // целыми секциями (гейт от визита), а не фразами.
+    // Сквозной stage без `% 64`: короткий период давал дословные
+    // повторы эффектов каждые 64 визита.
+    let prior = accent_prior(instrument_id);
+    if prior < 1.0 && fixed_gate(song.seed_hash, groove_key, song.stage, 0xA66E47) >= prior {
+        return Vec::new();
+    }
 
-    // Сеточный путь: вероятности + гейт сида. Emergent-слот его
-    // пропускает (решение уже принято пульсом выше).
+    // Сеточный путь: вероятности + гейт сида.
     // Кик-якоря — абсолюти: фундамент бьет всегда, без дыхания.
     // Остальные якоря дышат приоритетом 0.95.
-    if guide.emergent_beats <= 0.0 {
-        let kick_anchor =
-            weight >= 1.0 && matches!(role, Some(InstrumentRole::Kick));
-        let probability = if weight >= 1.0 {
-            // Якорь — сильный приоритет, а не гарантия: даунбит дышит.
-            // Кроме кика: там гарантия.
-            ANCHOR_PRIOR
-        } else {
-            // Плотность сида масштабирует все вероятности: разреженные
-            // и густые сиды одного стиля. Доля роли: носителей несколько —
-            // каждый реже (делят пространство), один — в полную силу.
-            // Якоря идут своим приоритетом и не масштабируются.
-            // Заливок больше нет: кульминация — это энергия, а не буст.
-            let p =
-                weight * energy * energy * guide.energy_response * song.density * role_share;
-            p.clamp(0.0, 1.0)
-        };
-        // Гейт сида: решение зависит от (сид, план, шаг, фраза), поэтому
-        // грув стоит ровно фразу и никогда не повторяется дословно.
-        // Носители темы делят бросок: разреженный входит в шаги густого.
-        // Якоря идут отдельным броском (своя соль) — пропуск якоря
-        // не влечет пропуски остальных шагов и наоборот.
-        // Кик-якорь гейт не проходит вовсе.
-        let salt = if weight >= 1.0 {
-            ANCHOR_SALT ^ (song.phrase_index as u64)
-        } else {
-            song.phrase_index as u64
-        };
-        if !kick_anchor
-            && probability < 1.0
-            && fixed_gate(song.seed_hash, groove_key, step_in_measure, salt) >= probability
-        {
-            return Vec::new();
-        }
+    let kick_anchor = weight >= 1.0 && matches!(role, Some(InstrumentRole::Kick));
+    let probability = if weight >= 1.0 {
+        // Якорь — сильный приоритет, а не гарантия: даунбит дышит.
+        // Кроме кика: там гарантия.
+        ANCHOR_PRIOR
+    } else {
+        // Плотность сида масштабирует все вероятности: разреженные
+        // и густые сиды одного стиля. Доля роли: носителей несколько —
+        // каждый реже (делят пространство), один — в полную силу.
+        // Якоря идут своим приоритетом и не масштабируются.
+        // Заливок больше нет: кульминация — это энергия, а не буст.
+        let p = weight * energy * energy * guide.energy_response * song.density * role_share;
+        p.clamp(0.0, 1.0)
+    };
+    // Гейт сида: решение зависит от (сид, план, такт, фраза).
+    // Второй такт фразы получает свою соль — рисунок развивается,
+    // а не дублирует первый такт дословно. Якоря (weight >= 1.0)
+    // держат общий скелет фразы: их соль не включает такт.
+    // Носители темы делят бросок: разреженный входит в шаги густого.
+    // Якоря идут отдельным броском (своя соль) — пропуск якоря
+    // не влечет пропуски остальных шагов и наоборот.
+    // Кик-якорь гейт не проходит вовсе.
+    let bar_in_phrase = song.measure_index.saturating_sub(1) % 2;
+    let salt = if weight >= 1.0 {
+        ANCHOR_SALT ^ (song.phrase_index as u64)
+    } else {
+        (song.phrase_index as u64)
+            .wrapping_mul(2)
+            .wrapping_add(bar_in_phrase as u64)
+    };
+    if !kick_anchor
+        && probability < 1.0
+        && fixed_gate(song.seed_hash, groove_key, step_in_measure, salt) >= probability
+    {
+        return Vec::new();
     }
     // Иерархия темы: ведет один (лидер секции), остальные — эхом.
     // Общий бросок на всех вторящих: эхо звучит вместе, в те же шаги.
@@ -937,12 +928,7 @@ fn play_guide(
     // Вложенность базовых гейтов цела: разреженный и так подмножество.
     if (guide.follow_motif || force_motif)
         && !theme_lead
-        && fixed_gate(
-            song.seed_hash,
-            7777,
-            step_in_measure,
-            song.stage as u64,
-        ) >= LEAD_ECHO
+        && fixed_gate(song.seed_hash, 7777, step_in_measure, song.stage as u64) >= LEAD_ECHO
     {
         return Vec::new();
     }
@@ -950,8 +936,7 @@ fn play_guide(
     let mut velocity = (guide.vel_base
         + energy * guide.vel_energy
         + rng.gen_range(-guide.vel_jitter..=guide.vel_jitter))
-    .clamp(0.1, 1.0)
-        * emergent_accent;
+    .clamp(0.1, 1.0);
 
     // Артикуляция сида для мягких голосов: та же нота тем же голосом —
     // с разной мягкостью у разных сидов. Ударные идут как есть.
@@ -995,16 +980,23 @@ fn play_guide(
         if let Some(r) = role {
             velocity *= song.stage_gain(r);
         }
+        // Иерархия долей и в ударных: даунбит — полный голос (×1.25),
+        // третья — чуть тише, слабые — как написано. Бит качает
+        // динамикой, а не ровной стеной одинаковых ударов.
+        velocity *= beat_accent(step_in_measure, steps_per_measure);
         if velocity < 0.05 {
             return Vec::new();
         }
         return vec![NoteEvent::new(instrument_id, pitch, velocity, duration)];
     }
 
-    let (tone_base, octaves) = match guide.voice {
+    // `line_fold` — на сколько октав линия темы уходит вниз целиком,
+    // чтобы потолок регистра не резал отдельные ноты (иначе линия
+    // рвётся скачком на октаву посреди фразы).
+    let (tone_base, degree, octaves, line_fold) = match guide.voice {
         Voicing::Kit(_) => unreachable!("kit handled above"),
         Voicing::Scale {
-            degree,
+            degree: voice_degree,
             octave,
             jitter,
         } => {
@@ -1025,29 +1017,63 @@ fn play_guide(
             } else {
                 // Аккомпанемент идет за прогрессией: бас — корнями
                 // вместе со всеми (дрона на одной ноте больше нет),
-                // остальные — в полную. Гармонический ритм — 8 тактов:
-                // аккорд стоит и держит фразу, а не едет каждые 2 такта.
+                // остальные — в полную. Гармонический ритм — от сида:
+                // одни сиды меняют аккорд каждые 2 такта (движение),
+                // другие держат по 8 (фундамент). Почерк сида, а не
+                // один темп гармонии на всех.
                 // Регистр баса держит фолд, блуждание — джиттер гайда.
-                song.prog[(song.measure_index / 8) % song.prog.len()] as usize
+                // Прогрессия идет по сквозному такту сессии: сброс на
+                // каждом стыке секций превращал движение в топтание
+                // на первом аккорде в любой короткой секции.
+                song.prog[(song.measure_index.saturating_sub(1) / prog_bar_len(song.seed_hash))
+                    % song.prog.len()] as usize
             };
-            let (degree, jitter) = if use_motif {
+            let (degree, jitter, contour_max) = if use_motif {
                 // Живой мотив: тема секции (A везде, B на Drop/PostChorus)
                 // плюс окно визита (секции идут подряд — окно едет на шаг,
                 // тема развивается, а не пересдается и не стоит на месте).
                 // ДНК сида сохранена, но дословных повторов нет.
                 // Без транспозиции ответа: терция вверх на нечетных фразах
                 // рассинхронизировала слои (полутоновые стычки до 37% шагов).
+                // Каданс: последний шаг раздела — тоника (ступень 0).
+                // Раздел закрывается (развитие слышно: фраза куда-то
+                // пришла), следующий открывается своей темой.
                 let theme = if song.use_alt_motif {
                     &song.motif_b
                 } else {
                     &song.motif
                 };
+                // Мотив — 16 ступеней на две доли такта: первая половина
+                // звучит в первом такте фразы, вторая — во втором.
+                // Индекс считается от фазы такта во фразе, а не от
+                // step_in_measure: иначе обе половины фразы пели один
+                // и тот же такт и «длинная тема» не развивалась.
+                let bar_in_phrase = song.measure_index.saturating_sub(1) % 2;
+                let bar_span = (steps_per_measure / 2).max(1);
                 let rot = song.stage % theme.len();
-                let motif_step =
-                    theme[(step_in_measure / 2 + rot) % theme.len()] as usize;
-                (motif_step, 0)
+                let motif_step = if song.is_last_measure && step_in_measure == steps_per_measure - 1
+                {
+                    0
+                } else {
+                    theme[(bar_in_phrase * bar_span + step_in_measure / 2 + rot) % theme.len()]
+                        as usize
+                };
+                // Сдвиг голоса — счетная линия: гайд задает свою ступень
+                // (формульный лид — терцией выше плака), тема задает
+                // контур. Раньше сдвиг гайда терялся, и все носители
+                // пели в унисон: вместо двух голосов — один.
+                let contour = motif_step + voice_degree;
+                // Верх контура в этой фразе: линия должна поместиться
+                // в лад целиком (см. расчет tone_base ниже).
+                let window_len = (2 * bar_span).min(theme.len());
+                let mut contour_max = voice_degree;
+                for k in 0..window_len {
+                    let t = theme[(rot + k) % theme.len()] as usize;
+                    contour_max = contour_max.max(t + voice_degree);
+                }
+                (contour, 0, contour_max)
             } else {
-                let mut d = (degree + prog_shift) % scale.len().max(1);
+                let mut d = (voice_degree + prog_shift) % scale.len().max(1);
                 // Квинтовый бас: оффбитные восьмые ходят на квинту —
                 // баслайн движется, а не топчется на тонике.
                 if guide.bass_fifth && matches!(role, Some(InstrumentRole::Bass)) {
@@ -1057,32 +1083,59 @@ fn play_guide(
                         d = (d + fifth) % scale.len().max(1);
                     }
                 }
-                (d, jitter)
+                (d, jitter, 0)
             };
             let drift = if jitter > 0 {
-                // Блуждание тоже фиксировано сидом и визитом секции:
-                // внутри раздела та же нота в том же месте, дальше —
-                // пересдача на границе (а не посреди песни).
-                (crate::arranger::splitmix64(
-                    song.seed_hash
-                        ^ (slot_idx as u64).wrapping_mul(0xC0FFEE)
-                        ^ (step_in_measure as u64).wrapping_mul(0x9E3779B9)
-                        ^ (song.stage as u64).wrapping_mul(0x85EBCA6B)
-                        ^ 0xD1F7,
-                ) % (jitter as u64 + 1)) as usize
+                // Сильные доли держат гармонию: джиттер схлопывается —
+                // звучит написанная ступень (аккордовый тон скелета).
+                // Слабые доли — проходящие (блуждание как раньше).
+                // Та же идея, что чёт/нечет в марковском семплинге v1:
+                // метр skeleton, ornament — flesh. Детерминировано.
+                let q = (steps_per_measure / 4).max(1);
+                if step_in_measure % q == 0 {
+                    0
+                } else {
+                    // Блуждание тоже фиксировано сидом и визитом секции:
+                    // внутри раздела та же нота в том же месте, дальше —
+                    // пересдача на границе (а не посреди песни).
+                    (crate::arranger::splitmix64(
+                        song.seed_hash
+                            ^ (slot_idx as u64).wrapping_mul(0xC0FFEE)
+                            ^ (step_in_measure as u64).wrapping_mul(0x9E3779B9)
+                            ^ (song.stage as u64).wrapping_mul(0x85EBCA6B)
+                            ^ 0xD1F7,
+                    ) % (jitter as u64 + 1)) as usize
+                }
             } else {
                 0
             };
-            // Тоника стоит парами секций и блуждает детерминированно
-            // (−1/0/+1 по битам хэша пары): локально связно (стоит или
-            // шаг на ступень), глобально непериодично — скелет мелодии
-            // не замыкается в цикл длиной в лад (там было +1 каждую
-            // фразу: период = лад). Визит, а не фраза: центр не
+            // Тоника готова в контексте (инкрементальный walk аранжировщика):
+            // модуль лада берём здесь. Визит, а не фраза: центр не
             // перебивает тему внутри раздела формы.
-            let tonic = melodic_drift(song.seed_hash, song.stage / 2, scale.len());
-            let base = tonic + degree + drift + rotation;
+            let tonic = song.tonic_walk.rem_euclid(scale.len().max(1) as i64) as usize;
+            let len = scale.len();
+            // Центр гармонии — тоника плюс ротация сида. Это КЛАСС
+            // звука, а не высота: контур темы ложится поверх и не
+            // заворачивается по модулю лада. Раньше сумма бралась по
+            // модулю целиком, и как только она переваливала верх лада,
+            // контур переворачивался назад: линия рвалась скачком на
+            // септиму и обратно посреди фразы (арки не было — «горб»).
+            let base_class = (tonic + rotation + drift) % len;
+            // База линии — без контура: контур (ступень темы или
+            // аккорда) добавляется при выборе ступени, иначе линия
+            // теряет саму тему.
+            let tone_base: i32 = if use_motif {
+                // Контур должен влезть в лад целиком: если не влезает —
+                // вся линия уходит вниз на ступень (регистр ровный,
+                // форма темы цела).
+                let overflow = base_class + contour_max + 1;
+                let shift_down = overflow.saturating_sub(len);
+                (base_class - shift_down) as i32
+            } else {
+                (tonic + drift + rotation) as i32
+            };
             // Октава общая для тонов аккорда; подъем проверяем по корню.
-            let root_idx = base % scale.len();
+            let root_idx = (tone_base + degree as i32).rem_euclid(len as i32) as usize;
             // Абсолютная высота — от сида (тон семейства + сдвиг тоники).
             let shift = tonic_shift_for(song.seed_hash);
             let root = modal_tone(scale, root_idx, song.seed_hash).saturating_add_signed(shift);
@@ -1114,13 +1167,47 @@ fn play_guide(
                 // вверх у высоких голосов целиком (74+12→86→74: разделы
                 // звучат одинаково), поэтому высокие уводим вниз.
                 // Правило статично (гайд+сид): унисон не расслаивается.
-                if octave + seed_octave >= 2 { -w } else { w }
+                if octave + seed_octave >= 2 {
+                    -w
+                } else {
+                    w
+                }
+            } else {
+                0
+            };
+            // Потолок регистра: линия темы уходит вниз ЦЕЛИКОМ, а не
+            // отдельными нотами. Иначе верх ноты срезается на октаву
+            // вниз, а нижние остаются — линия рвется посреди фразы.
+            let octaves_line = octave + seed_octave + window_octave;
+            let line_fold = if use_motif {
+                // Верх линии — перебором ступеней, а не по максимальной
+                // ступени: модальный вариант (фригийская вторая) понижает
+                // ступень, и «верхняя ступень» не значит «верхняя нота».
+                // Считали бы по ступени — верхняя нота осталась бы выше
+                // капа и резалась по одной: линия рвалась на октаву.
+                let mut top = 0i32;
+                for k in 0..=contour_max {
+                    let idx = (tone_base + k as i32).rem_euclid(len as i32) as usize;
+                    let p = modal_tone(scale, idx, song.seed_hash) as i32;
+                    if p > top {
+                        top = p;
+                    }
+                }
+                let top = top + shift as i32 + 12 * octaves_line as i32;
+                let cap = guide.top_pitch.min(86) as i32;
+                if top > cap {
+                    (top - cap) / 12 + 1
+                } else {
+                    0
+                }
             } else {
                 0
             };
             (
-                base,
-                octave + if bump { 1 } else { 0 } + seed_octave + window_octave,
+                tone_base,
+                degree,
+                octaves_line + if bump { 1 } else { 0 },
+                line_fold,
             )
         }
     };
@@ -1144,10 +1231,14 @@ fn play_guide(
     };
     let mut out = Vec::with_capacity(intervals.len());
     for (ti, iv) in intervals.iter().enumerate() {
-        let idx = (tone_base as i32 + *iv as i32).rem_euclid(scale.len() as i32) as usize;
-        let mut tone = modal_tone(scale, idx, song.seed_hash)
-            .saturating_add_signed(tonic_shift_for(song.seed_hash))
-            .saturating_add_signed(octaves.saturating_mul(12));
+        let idx = (tone_base + degree as i32 + *iv as i32).rem_euclid(scale.len() as i32) as usize;
+        // Сдвиг линии (line_fold) — общий на фразу: потолок регистра
+        // не режет отдельные ноты, иначе линия рвётся скачком на октаву.
+        let mut tone = (modal_tone(scale, idx, song.seed_hash) as i32
+            + tonic_shift_for(song.seed_hash) as i32
+            + 12 * octaves as i32
+            - 12 * line_fold)
+            .clamp(0, 255) as u8;
         // Потолок темы: сид-октава могла вынести выше гайда —
         // складываем октавой вниз (класс тот же, свиста нет).
         if guide.follow_motif || force_motif {
@@ -1158,8 +1249,8 @@ fn play_guide(
         // Низ держим внизу: уползшее выше капа складываем октавой вниз.
         // Гармония та же (тот же питч-класс). Кап от гайда: саб 45,
         // рок риффует выше (52) вслед за гитарой. Питчевый кик (808)
-        // ведет баслайн — тот же регистровый закон, что у баса:
-        // ударные-киты (фиксированный питч) это не трогает.
+        // сидит в том же суб-регистре, что бас, — общий регистровый
+        // закон низа; ударные-киты (фиксированный питч) это не трогает.
         let low_fold = matches!(role, Some(InstrumentRole::Bass))
             || (matches!(role, Some(InstrumentRole::Kick))
                 && matches!(guide.voice, Voicing::Scale { .. }));
@@ -1183,26 +1274,38 @@ fn play_guide(
         // Без иерархии громкости бит тонет в ровной стене (все стучат
         // равно) — метр слышен, даже когда рисунок синкопирован.
         v *= beat_accent(step_in_measure, steps_per_measure);
+        // Дыхание такта: носители темы чуть swell к середине (±10%).
+        // Арка v1 внутри фразы: пик развития — не на границе, фраза
+        // дышит, а не стучит ровными ударами. Только тема (ударные
+        // и бас держат метр без кача громкости).
+        if guide.follow_motif || force_motif {
+            let pos = step_in_measure as f32 / steps_per_measure.max(1) as f32;
+            v *= 1.0 + 0.10 * (std::f32::consts::PI * pos).sin();
+        }
         // Громкость фразы: баланс партий по ступени круга.
         // Ноль таблицы = тишина (снейра в интро нет — и не должно быть).
         if let Some(r) = role {
             v *= song.stage_gain(r);
         }
-        // Оркестровка: бас знает роль кика — даунбит играют вместе.
-        // Пригибание под заливки — только движковым даком (плавная
-        // огибающая от кика): второе пригибание здесь давало двойную
-        // яму на каждом шепоте синкопы — бас качался дырками.
-        // Флаг заливки принимает движок через порядок фаз (см. render_style),
-        // здесь он не гасит: тишина — тоже инструмент оркестровки.
-        let _ = kick_fill;
+        // Пригибание баса под заливки — только движковым даком
+        // (плавная огибающая от кика). Генератор второй ямы не делает:
+        // это давало двойной провал на каждом синкопированном кике.
         if v >= 0.05 {
-            let mut note = NoteEvent::new(instrument_id, tone, v, duration)
-                .shaped(attack_mul, release_mul);
+            let mut note =
+                NoteEvent::new(instrument_id, tone, v, duration).shaped(attack_mul, release_mul);
             note.sub_bias = guide.sub_bias.clamp(0.0, 1.0);
             out.push(note);
         }
     }
     out
+}
+
+/// Гармонический ритм сида (тактов на аккорд): 2 — движение,
+/// 4 — середина, 8 — фундамент. Выбор детерминирован сидом:
+/// одни сиды гармонически живые, другие статичные. Чистая функция.
+pub(crate) fn prog_bar_len(seed_hash: u64) -> usize {
+    const LENS: [usize; 3] = [2, 4, 8];
+    LENS[(crate::arranger::splitmix64(seed_hash ^ 0x6A12) % 3) as usize]
 }
 
 /// Акцент доли 1.0..1.25: даунбит — полный голос, третья доля —
@@ -1256,12 +1359,14 @@ mod tests {
             stage: 1,
             cycle: 0,
             stage_gains: [1.0; 8],
+            layers: crate::piece::layers_for(SongSection::MainMotif) | crate::piece::L_VOCAL,
             seed_hash: 42,
             density: 1.0,
             motif: [0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3],
             motif_b: [1, 4, 0, 3, 2, 4, 2, 0, 4, 0, 1, 3, 3, 2, 0, 4],
             use_alt_motif: false,
             prog: [0, 0, 0, 0],
+            tonic_walk: 0,
         }
     }
 
@@ -1310,6 +1415,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn arrangement_layers_mute_the_rest() {
+        // Аранж по слоям: план пишет, кто играет. Молчащая группа молчит
+        // по-настоящему (не «тише»), иначе точки на колесе и звук снова
+        // разойдутся.
+        use crate::instruments::{InstrumentRole, Slot};
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let ensemble = style.ensemble();
+            let active: Vec<usize> = Slot::ALL
+                .iter()
+                .filter(|s| ensemble.contains(s))
+                .map(|s| s.id())
+                .collect();
+            let mut rng = rand::SeedableRng::seed_from_u64(424242);
+            let mut arranger = crate::arranger::Arranger::new(424242);
+            let mut song = arranger.advance_measure();
+            // Только грув: ни темы, ни пампы, ни вокала.
+            song.layers = crate::piece::L_GROOVE;
+            let mut heard_lead = 0;
+            let mut heard_groove = 0;
+            for step in 0..64 {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                    song.layers = crate::piece::L_GROOVE;
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                for note in render_style(&*style, &mut sctx) {
+                    let role = Slot::from_id(note.instrument_id).map(|s| s.role());
+                    match role {
+                        Some(
+                            InstrumentRole::Lead | InstrumentRole::Vocal | InstrumentRole::Chords,
+                        ) => heard_lead += 1,
+                        Some(
+                            InstrumentRole::Kick | InstrumentRole::Snare | InstrumentRole::Hat,
+                        ) => heard_groove += 1,
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(heard_lead, 0, "{name}: верх играет при маске грува");
+            assert!(heard_groove > 0, "{name}: грув молчит при своей маске");
+        }
+    }
+
     fn motif_pitches(motif: [u8; 16]) -> Vec<u8> {
         // Проба скелета высоты через якорь-абсолют кик-роли (id 2):
         // гейтов нет — в кадре чистая высота без дыхательных пропусков.
@@ -1338,7 +1498,8 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    0, false, true, &mut rng,
+                    true,
+                    &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1379,7 +1540,8 @@ mod tests {
                     1.0,
                     false,
                     false,
-                    0, false, true, &mut rng,
+                    true,
+                    &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1400,7 +1562,430 @@ mod tests {
         assert_eq!(a.len(), 8);
         assert_ne!(a, b, "motif ignored");
         // Детерминизм: тот же мотив — те же ноты.
-        assert_eq!(a, motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3]));
+        assert_eq!(
+            a,
+            motif_pitches([0, 2, 4, 2, 0, 3, 1, 4, 4, 3, 1, 4, 2, 0, 1, 3])
+        );
+    }
+
+    #[test]
+    fn build_roll_fires_into_drop() {
+        // Ролл: последний такт BuildUp — каждая 16-я с нарастанием,
+        // веса и гейты игнорируются (даже нулевые веса не глушат).
+        // Вне заливки — тишина (обычный путь по весам).
+        fn roll_hits(section: crate::arranger::SongSection, last: bool) -> Vec<f32> {
+            let guide = RoleGuide {
+                weights: &[0.0; 8],
+                build_roll: true,
+                ..RoleGuide::kit(&[0.0; 8], 38, 0.9)
+            };
+            let mut song = test_song(0.5);
+            song.section = section;
+            song.is_last_measure = last;
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            (0..8)
+                .filter_map(|sim| {
+                    play_guide(
+                        &guide,
+                        &[48],
+                        &song,
+                        1.0,
+                        sim,
+                        8,
+                        0.1,
+                        4,
+                        3,
+                        1.0,
+                        false,
+                        false,
+                        true,
+                        &mut rng,
+                    )
+                    .into_iter()
+                    .next()
+                    .map(|n| n.velocity)
+                })
+                .collect()
+        }
+        use crate::arranger::SongSection::*;
+        let roll = roll_hits(BuildUp, true);
+        assert_eq!(roll.len(), 8, "roll must fire every 16th");
+        assert!(
+            roll.last().unwrap() > roll.first().unwrap(),
+            "roll must rise: {roll:?}"
+        );
+        assert!(roll_hits(BuildUp, false).is_empty(), "roll too early");
+        assert!(
+            roll_hits(MainMotif, true).is_empty(),
+            "roll outside buildup"
+        );
+        assert!(roll_hits(Drop, true).is_empty(), "roll inside drop");
+        // Без флага те же нулевые веса молчат и в заливке.
+        let guide = RoleGuide {
+            weights: &[0.0; 8],
+            ..RoleGuide::kit(&[0.0; 8], 38, 0.9)
+        };
+        let mut song = test_song(0.5);
+        song.section = BuildUp;
+        song.is_last_measure = true;
+        let mut rng = rand::SeedableRng::seed_from_u64(3);
+        let silent: Vec<_> = (0..8)
+            .filter_map(|sim| {
+                play_guide(
+                    &guide,
+                    &[48],
+                    &song,
+                    1.0,
+                    sim,
+                    8,
+                    0.1,
+                    4,
+                    3,
+                    1.0,
+                    false,
+                    false,
+                    true,
+                    &mut rng,
+                )
+                .into_iter()
+                .next()
+            })
+            .collect();
+        assert!(silent.is_empty(), "flag off must stay silent");
+    }
+
+    #[test]
+    fn motif_uses_second_half_in_second_bar() {
+        // 16-ступенчатая тема: первый такт фразы поет первые 8 ступеней,
+        // второй — последние 8. Раньше обе половины фразы пели один и
+        // тот же такт темы, и «двухтактный мотив» был фикцией.
+        let motif: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 4, 4, 4, 4];
+        let guide = RoleGuide {
+            weights: &[1.0; 16],
+            follow_motif: true,
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+        };
+        let scale = [48, 50, 52, 53, 55, 57, 59];
+        let probe = |measure: usize| -> Vec<u8> {
+            let mut song = test_song(0.5);
+            song.stage = 0; // rot = 0: индекс темы без сдвига окна
+            song.measure_index = measure;
+            song.motif = motif;
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            (0..8)
+                .filter_map(|step| {
+                    // id 2 = Kick: якорь-абсолют, гейт не дышит.
+                    play_guide(
+                        &guide,
+                        &scale,
+                        &song,
+                        1.0,
+                        step * 2,
+                        16,
+                        0.1,
+                        2,
+                        5,
+                        1.0,
+                        false,
+                        false,
+                        true,
+                        &mut rng,
+                    )
+                    .into_iter()
+                    .next()
+                    .map(|n| n.midi_pitch)
+                })
+                .collect()
+        };
+        let bar1 = probe(1);
+        let bar2 = probe(2);
+        assert_eq!(bar1.len(), 8, "first bar must voice all 8 theme slots");
+        assert_eq!(bar2.len(), 8, "second bar must voice all 8 theme slots");
+        assert!(
+            bar1.iter().all(|p| *p == bar1[0]),
+            "first bar must sing theme[0..8]: {bar1:?}"
+        );
+        assert!(
+            bar2.iter().all(|p| *p == bar2[0]),
+            "second bar must sing theme[8..16]: {bar2:?}"
+        );
+        assert_ne!(bar1[0], bar2[0], "both bars sang the same half");
+    }
+
+    #[test]
+    fn theme_contour_survives_the_scale_edge() {
+        // Контур темы не переворачивается на верхней ступени лада.
+        // Раньше сумма ступеней бралась по модулю длины лада, и как
+        // только она переваливала верх, линия прыгала на септиму вниз
+        // и обратно посреди фразы: арки не было, был «горб».
+        let style = make_style("club").expect("club");
+        let scale = style.scale();
+        let score = style.arrangement();
+        // Направляющая линии: якорь (играет всегда), мотив, высокий
+        // пол, чтобы низ не сложило октавой вниз.
+        let guide = RoleGuide {
+            weights: &[1.0; 16],
+            follow_motif: true,
+            bass_top: 100,
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+        };
+        for seed in [
+            42u64, 1000, 1007, 1014, 1021, 1028, 1035, 1042, 1049, 2001, 2002,
+        ] {
+            let mut arranger = crate::arranger::Arranger::with_score(seed, score);
+            let song = arranger.advance_measure();
+            let mut rng = rand::SeedableRng::seed_from_u64(seed);
+            let mut line: Vec<u8> = Vec::new();
+            for step in 0..16 {
+                // id 2 = Kick: якорь-абсолют, гейт не дышит.
+                let notes = play_guide(
+                    &guide, scale, &song, 1.0, step, 16, 0.1, 2, 2, 1.0, false, false, true,
+                    &mut rng,
+                );
+                if let Some(n) = notes.first() {
+                    line.push(n.midi_pitch);
+                }
+            }
+            assert_eq!(line.len(), 16, "seed {seed}: линия должна быть сплошной");
+            for w in line.windows(2) {
+                let d = (w[1] as i32 - w[0] as i32).abs();
+                assert!(
+                    d < 7,
+                    "seed {seed}: линия рвется скачком на {d} полутонов: {line:?}"
+                );
+            }
+            // Линия идет по форме темы: соседние ступени темы — разные
+            // высоты, а не одна нота на весь такт.
+            let distinct: std::collections::BTreeSet<u8> = line.iter().copied().collect();
+            assert!(
+                distinct.len() >= 3,
+                "seed {seed}: тема не слышна (одна нота): {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_anchor_gates_develop_across_phrase_bars() {
+        // Второй такт фразы получает свою соль гейта: рисунок
+        // развивается, а не дублирует первый такт дословно.
+        // Якоря — исключение (скелет держится фразу), здесь веса 0.5.
+        let guide = RoleGuide {
+            weights: &[0.5; 16],
+            ..RoleGuide::pitched(&[0.5; 16], 0, 1, 0, 1.0, 0.7)
+        };
+        let scale = [48, 50, 52, 53, 55, 57, 59];
+        let mask = |seed: u64, measure: usize| -> Vec<bool> {
+            let mut song = test_song(0.5);
+            song.seed_hash = seed;
+            song.measure_index = measure;
+            song.phrase_index = 0;
+            song.stage = 0;
+            let mut rng = rand::SeedableRng::seed_from_u64(1);
+            (0..16)
+                .map(|step| {
+                    !play_guide(
+                        &guide, &scale, &song, 1.0, step, 16, 0.1, 4, 3, 1.0, false, false, true,
+                        &mut rng,
+                    )
+                    .is_empty()
+                })
+                .collect()
+        };
+        let differing = (0..64u64).filter(|s| mask(*s, 1) != mask(*s, 2)).count();
+        assert!(
+            differing >= 16,
+            "second bar cloned the first: {differing}/64 seeds differ"
+        );
+    }
+
+    #[test]
+    fn drop_break_is_only_before_drop() {
+        // Вдох перед дропом: последняя четверть последнего такта BuildUp.
+        // Не весь Drop-такт (это сбивка после удара) и не каждый BuildUp.
+        let guide = RoleGuide {
+            weights: &[1.0; 8],
+            drop_before_climax: true,
+            ..RoleGuide::kit(&[1.0; 8], 36, 0.9)
+        };
+        let probe = |section, last: bool, step: usize| -> bool {
+            let mut song = test_song(0.5);
+            song.section = section;
+            song.is_last_measure = last;
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            // id 2 = Kick: якорь-абсолют, тишину дает только брейк.
+            !play_guide(
+                &guide,
+                &[48],
+                &song,
+                1.0,
+                step,
+                8,
+                0.1,
+                2,
+                1,
+                1.0,
+                false,
+                false,
+                true,
+                &mut rng,
+            )
+            .is_empty()
+        };
+        use crate::arranger::SongSection::*;
+        for step in 0..6 {
+            assert!(probe(BuildUp, true, step), "too early break at {step}");
+        }
+        for step in 6..8 {
+            assert!(!probe(BuildUp, true, step), "no breath at {step}");
+        }
+        for step in 0..8 {
+            assert!(probe(BuildUp, false, step), "break in non-last BuildUp");
+            assert!(probe(Drop, true, step), "break inside Drop");
+        }
+    }
+
+    #[test]
+    fn section_poles_vary_groove_by_section() {
+        // Полюса по секциям: один сид — разные биты в разных секциях
+        // (у дропа свой), та же секция — тот же бит (якорь формы).
+        use crate::arranger::SongSection;
+        fn pole_for(seed: u64, section: SongSection) -> Vec<usize> {
+            let guide = RoleGuide {
+                weights: &[0.0; 8],
+                poles: Some(POLES),
+                section_poles: true,
+                ..RoleGuide::kit(&[0.0; 8], 36, 0.9)
+            };
+            let mut song = test_song(0.0);
+            song.seed_hash = seed;
+            song.section = section;
+            let mut rng = rand::SeedableRng::seed_from_u64(1);
+            (0..8)
+                .filter(|sim| {
+                    !play_guide(
+                        &guide,
+                        &[48],
+                        &song,
+                        1.0,
+                        *sim,
+                        8,
+                        0.1,
+                        2,
+                        1,
+                        1.0,
+                        false,
+                        false,
+                        true,
+                        &mut rng,
+                    )
+                    .is_empty()
+                })
+                .collect()
+        }
+        use crate::arranger::SongSection::*;
+        // Детерминизм: та же секция — тот же грув.
+        assert_eq!(
+            pole_for(11, Drop),
+            pole_for(11, Drop),
+            "section groove not stable"
+        );
+        // Хотя бы у одного сида из первых 16 секции дают разные биты.
+        let varied = (0..16u64).any(|seed| {
+            let a = pole_for(seed, MainMotif);
+            pole_for(seed, Drop) != a
+                || pole_for(seed, BuildUp) != a
+                || pole_for(seed, PostChorus) != a
+        });
+        assert!(varied, "section poles never vary the groove");
+    }
+
+    #[test]
+    fn prog_rhythm_varies_by_seed() {
+        // Гармонический ритм — почерк сида: встречаются 2, 4 и 8,
+        // тот же сид всегда даёт тот же ритм.
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..32u64 {
+            let h = crate::arranger::splitmix64(seed ^ 0x51ED);
+            let len = prog_bar_len(h);
+            assert!([2, 4, 8].contains(&len), "bad rhythm: {len}");
+            assert_eq!(len, prog_bar_len(h), "not deterministic");
+            seen.insert(len);
+        }
+        assert_eq!(seen.len(), 3, "rhythm never varies: {seen:?}");
+    }
+
+    #[test]
+    fn strong_beats_hold_chord_tones() {
+        // Сильные доли (четверти) поют написанную ступень без джиттера
+        // (скелет гармонии), слабые — с блужданием (проходящие).
+        // Тот же механизм, что чёт/нечет в марковском семплинге v1,
+        // но детерминированный и без отдельного кода под инструмент.
+        fn pitch(jitter: usize, sim: usize) -> u8 {
+            // Проба кик-якорем (id 2): якоря бочки гейт не проходят —
+            // в кадре чистая высота без дыхательных пропусков.
+            let guide = RoleGuide {
+                weights: &[1.0; 8],
+                ..RoleGuide::pitched(&[1.0; 8], 1, 0, jitter, 1.0, 0.8)
+            };
+            let scale = [48, 50, 52, 53, 55, 57, 59];
+            let song = test_song(0.5);
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            play_guide(
+                &guide, &scale, &song, 1.0, sim, 8, 0.1, 2, 0, 1.0, false, false, true, &mut rng,
+            )
+            .into_iter()
+            .next()
+            .map(|n| n.midi_pitch)
+            .expect("strong beat silent")
+        }
+        // Четверти (0 и 4 при сетке 8): джиттер схлопнут — питч тот же,
+        // что у гайда без джиттера.
+        assert_eq!(pitch(2, 0), pitch(0, 0), "downbeat drifts");
+        assert_eq!(pitch(2, 4), pitch(0, 4), "third beat drifts");
+        // Хотя бы одна слабая доля (нечётные при сетке 8) блуждает —
+        // иначе ornament мёртв. Детерминировано: либо всегда, либо никогда.
+        let moved = (1..8).any(|sim| sim % 2 == 1 && pitch(2, sim) != pitch(0, sim));
+        assert!(moved, "passing tones never wander");
+    }
+
+    #[test]
+    fn section_end_closes_on_tonic() {
+        // Каданс: последний шаг раздела — тоника независимо от мотива.
+        // Раздел закрывается (фраза куда-то пришла), следующий
+        // открывается своей темой. Проба якорным носителем (id 2):
+        // гейтов нет, в кадре чистая высота.
+        fn last_step_pitch(motif: [u8; 16], last_measure: bool) -> u8 {
+            let guide = RoleGuide {
+                weights: &[1.0; 16],
+                follow_motif: true,
+                ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            };
+            let scale = [48, 50, 52, 53, 55, 57, 59];
+            let mut song = test_song(0.5);
+            song.motif = motif;
+            song.is_last_measure = last_measure;
+            let mut rng = rand::SeedableRng::seed_from_u64(3);
+            play_guide(
+                &guide, &scale, &song, 1.0, 15, 16, 0.1, 2, 5, 1.0, false, false, true, &mut rng,
+            )
+            .into_iter()
+            .next()
+            .map(|n| n.midi_pitch)
+            .expect("cadence step silent")
+        }
+        // Высокий мотив в конце раздела падает на ту же тонику,
+        // что низкий мотив (оба — ступень 0).
+        assert_eq!(
+            last_step_pitch([4; 16], true),
+            last_step_pitch([0; 16], true),
+            "cadence misses tonic"
+        );
+        // А не в конце раздела каданса нет: высокий мотив высок.
+        assert_ne!(
+            last_step_pitch([4; 16], true),
+            last_step_pitch([4; 16], false),
+            "cadence fires mid-section"
+        );
     }
 
     const POLE_A: &[f32] = &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
@@ -1419,7 +2004,20 @@ mod tests {
         (0..8)
             .filter(|step| {
                 !play_guide(
-                    &guide, &[48], &song, 1.0, *step, 8, 0.1, 2, slot_idx, 1.0, false, false, 0, false, true, &mut rng,
+                    &guide,
+                    &[48],
+                    &song,
+                    1.0,
+                    *step,
+                    8,
+                    0.1,
+                    2,
+                    slot_idx,
+                    1.0,
+                    false,
+                    false,
+                    true,
+                    &mut rng,
                 )
                 .is_empty()
             })
@@ -1437,16 +2035,15 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         // id 3 = Pad (роль Chords), индекс слота 2.
-        let notes = play_guide(&guide, &scale, &song, 1.0, 0, 8, 0.1, 3, 2, 1.0, false, false, 0, false, true, &mut rng);
+        let notes = play_guide(
+            &guide, &scale, &song, 1.0, 0, 8, 0.1, 3, 2, 1.0, false, false, true, &mut rng,
+        );
         assert_eq!(notes.len(), 3, "pad must voice a triad");
         let mut pitches: Vec<u8> = notes.iter().map(|n| n.midi_pitch).collect();
         pitches.sort_unstable();
         // Терция и квинта выше корня, все в пределах октавы.
         assert!(pitches[1] > pitches[0] && pitches[2] > pitches[1]);
-        assert!(
-            pitches[2] - pitches[0] <= 12,
-            "triad too wide: {pitches:?}"
-        );
+        assert!(pitches[2] - pitches[0] <= 12, "triad too wide: {pitches:?}");
     }
 
     #[test]
@@ -1454,7 +2051,6 @@ mod tests {
         // Акценты с prior звучат не в каждой секции, но и не никогда:
         // аранжировка сида, а не долбежка и не тишина. Шаг — визит.
         let guide = RoleGuide {
-            climax_only: true,
             ..RoleGuide::kit(&[1.0; 8], 74, 0.8)
         };
         let mut hits = 0;
@@ -1464,8 +2060,23 @@ mod tests {
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
             // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
-            if !play_guide(&guide, &[48], &song, 1.0, 0, 8, 0.1, 9, 8, 1.0, false, false, 0, false, true, &mut rng)
-                .is_empty()
+            if !play_guide(
+                &guide,
+                &[48],
+                &song,
+                1.0,
+                0,
+                8,
+                0.1,
+                9,
+                8,
+                1.0,
+                false,
+                false,
+                true,
+                &mut rng,
+            )
+            .is_empty()
             {
                 hits += 1;
             }
@@ -1505,10 +2116,7 @@ mod tests {
                 };
                 for note in render_style(&*style, &mut sctx) {
                     let role = Slot::from_id(note.instrument_id).map(|s| s.role());
-                    if matches!(
-                        role,
-                        Some(InstrumentRole::Lead | InstrumentRole::Vocal)
-                    ) {
+                    if matches!(role, Some(InstrumentRole::Lead | InstrumentRole::Vocal)) {
                         assert!(
                             note.midi_pitch <= 86,
                             "{name}: lead too high: {}",
@@ -1588,24 +2196,50 @@ mod tests {
 
     #[test]
     fn tonic_walk_is_bounded_and_never_loops() {
-        // Тоника: старт в нуле, детерминизм, шаг ≤ ступень между фразами.
-        assert_eq!(melodic_drift(42, 0, 7), 0);
-        assert_eq!(melodic_drift(42, 5, 7), melodic_drift(42, 5, 7));
+        // Тоника: старт в нуле, детерминизм, шаг ≤ ступень между парами.
+        // Прямая свёртка шагов (эталон O(n), только для тестов).
+        fn walk(seed_hash: u64, pair: usize, span: usize) -> usize {
+            let mut pos: i64 = 0;
+            for p in 0..pair {
+                pos += crate::arranger::drift_step(seed_hash, p);
+            }
+            pos.rem_euclid(span.max(1) as i64) as usize
+        }
+        assert_eq!(walk(42, 0, 7), 0);
+        assert_eq!(walk(42, 5, 7), walk(42, 5, 7));
         for seed in [0u64, 1, 42, 777] {
             for ph in 0..200usize {
-                let a = melodic_drift(seed, ph, 7) as i64;
-                let b = melodic_drift(seed, ph + 1, 7) as i64;
+                let a = walk(seed, ph, 7) as i64;
+                let b = walk(seed, ph + 1, 7) as i64;
                 let d = (b - a).rem_euclid(7).min((a - b).rem_euclid(7));
                 assert!(d <= 1, "seed {seed} phrase {ph}: jump {d}");
             }
         }
-        // Непериодичность: на окне 200 фраз нет периода ≤ 32
-        // (линейное +1/фраза дало бы период 7 — цикл длиной в лад).
+        // Непериодичность: на окне 200 пар нет периода ≤ 32
+        // (линейное +1/пара дало бы период 7 — цикл длиной в лад).
         for seed in [5u64, 12345] {
-            let path: Vec<usize> = (0..200).map(|ph| melodic_drift(seed, ph, 7)).collect();
-            let loops = (1..=32)
-                .any(|t| path.iter().zip(path.iter().skip(t)).all(|(a, b)| a == b));
+            let path: Vec<usize> = (0..200).map(|ph| walk(seed, ph, 7)).collect();
+            let loops = (1..=32).any(|t| path.iter().zip(path.iter().skip(t)).all(|(a, b)| a == b));
             assert!(!loops, "seed {seed}: walk loops");
+        }
+        // Инкрементальный walk аранжировщика совпадает с прямой
+        // свёрткой на длинном прогоне (600 тактов ≈ 75+ пар визитов):
+        // O(1) на такт без смены музыки.
+        for seed in [0u64, 7, 424242] {
+            let seed_hash = crate::arranger::splitmix64(seed ^ 0x51ED);
+            let mut arranger = crate::arranger::Arranger::new(seed);
+            for _ in 0..600 {
+                let ctx = arranger.advance_measure();
+                let mut pos: i64 = 0;
+                for p in 0..ctx.stage / 2 {
+                    pos += crate::arranger::drift_step(seed_hash, p);
+                }
+                assert_eq!(
+                    ctx.tonic_walk, pos,
+                    "seed {seed} stage {}: incremental drift diverged",
+                    ctx.stage
+                );
+            }
         }
     }
 
@@ -1632,8 +2266,20 @@ mod tests {
             (0..8)
                 .filter_map(|step| {
                     play_guide(
-                        &guide, &scale, &song, 1.0, step * 2, 16, 0.1, 2, 5, 1.0, false,
-                        false, 0, false, true, &mut rng,
+                        &guide,
+                        &scale,
+                        &song,
+                        1.0,
+                        step * 2,
+                        16,
+                        0.1,
+                        2,
+                        5,
+                        1.0,
+                        false,
+                        false,
+                        true,
+                        &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1649,8 +2295,7 @@ mod tests {
         // Развитие без зацикливания: линий за 64 фразы (16 разделов)
         // больше, чем окон ротации-одиночки — блуждание тоники
         // рвет шаблон.
-        let distinct: std::collections::HashSet<Vec<u8>> =
-            (0..64).map(phrase_pitches).collect();
+        let distinct: std::collections::HashSet<Vec<u8>> = (0..64).map(phrase_pitches).collect();
         assert!(
             distinct.len() > 8,
             "skeleton loops: {} distinct",
@@ -1681,8 +2326,20 @@ mod tests {
         let full_line: Vec<(usize, u8)> = (0..16)
             .filter_map(|step| {
                 play_guide(
-                    &anchor_motif, scale, &song, 1.0, step, spm, 0.1, 6, 5, 1.0,
-                    false, false, 0, false, true, &mut rng,
+                    &anchor_motif,
+                    scale,
+                    &song,
+                    1.0,
+                    step,
+                    spm,
+                    0.1,
+                    6,
+                    5,
+                    1.0,
+                    false,
+                    false,
+                    true,
+                    &mut rng,
                 )
                 .into_iter()
                 .next()
@@ -1700,8 +2357,20 @@ mod tests {
             (0..16)
                 .filter_map(|step| {
                     play_guide(
-                        &guides[ki], scale, &song, 1.0, step, spm, 0.1,
-                        Slot::Keys.id(), ki, 1.0, force, false, 0, false, true, &mut rng,
+                        &guides[ki],
+                        scale,
+                        &song,
+                        1.0,
+                        step,
+                        spm,
+                        0.1,
+                        Slot::Keys.id(),
+                        ki,
+                        1.0,
+                        force,
+                        false,
+                        true,
+                        &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -1714,9 +2383,7 @@ mod tests {
         assert!(!forced.is_empty(), "fallback silent");
         assert_ne!(plain, forced, "fallback ignored");
         for (step, pitch) in &forced {
-            if let Some((_, ref_pitch)) =
-                full_line.iter().find(|(s, _)| s == step)
-            {
+            if let Some((_, ref_pitch)) = full_line.iter().find(|(s, _)| s == step) {
                 assert_eq!(*pitch, *ref_pitch, "step {step}: not the motif");
             }
         }
@@ -1751,10 +2418,7 @@ mod tests {
                 }
                 if phrase == 0 && !step_pitches.is_empty() {
                     // Первая нота озвучки — корень: тема на месте.
-                    assert_eq!(
-                        step_pitches[0], *expected,
-                        "render step {sim}: motif lost"
-                    );
+                    assert_eq!(step_pitches[0], *expected, "render step {sim}: motif lost");
                 }
                 heard += step_pitches.len();
             }
@@ -1910,8 +2574,20 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 3,
-            2, 1.0, false, false, 0, false, true, &mut rng,
+            &guide,
+            &[48, 50, 52, 53, 55, 57, 59],
+            &song,
+            1.0,
+            0,
+            8,
+            0.1,
+            3,
+            2,
+            1.0,
+            false,
+            false,
+            true,
+            &mut rng,
         );
         assert!(!notes.is_empty());
         let (a, r) = envelope_shape(42, 2);
@@ -1934,16 +2610,40 @@ mod tests {
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 1,
-            0, 1.0, false, false, 0, false, true, &mut rng,
+            &guide,
+            &[48, 50, 52, 53, 55, 57, 59],
+            &song,
+            1.0,
+            0,
+            8,
+            0.1,
+            1,
+            0,
+            1.0,
+            false,
+            false,
+            true,
+            &mut rng,
         );
         assert!(!notes.is_empty());
         assert_eq!(notes[0].sub_bias, 0.8);
         guide.sub_bias = 0.0;
         let mut rng = rand::SeedableRng::seed_from_u64(9);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.1, 1,
-            0, 1.0, false, false, 0, false, true, &mut rng,
+            &guide,
+            &[48, 50, 52, 53, 55, 57, 59],
+            &song,
+            1.0,
+            0,
+            8,
+            0.1,
+            1,
+            0,
+            1.0,
+            false,
+            false,
+            true,
+            &mut rng,
         );
         assert_eq!(notes[0].sub_bias, 0.0);
     }
@@ -2070,8 +2770,7 @@ mod tests {
                             if note.instrument_id == Slot::Kick.id() {
                                 kicks += 1;
                             }
-                            let gi =
-                                Slot::ALL.iter().position(|s| *s == slot).unwrap();
+                            let gi = Slot::ALL.iter().position(|s| *s == slot).unwrap();
                             if guides[gi].follow_motif {
                                 motif_n += 1;
                             }
@@ -2107,8 +2806,7 @@ mod tests {
             assert!((-2..=2).contains(&s), "shift out of range: {s}");
             assert_eq!(s, tonic_shift_for(h), "not deterministic");
         }
-        let keys: std::collections::HashSet<i8> =
-            (0..64u64).map(tonic_shift_for).collect();
+        let keys: std::collections::HashSet<i8> = (0..64u64).map(tonic_shift_for).collect();
         assert_eq!(keys.len(), 5, "tonics missing: {keys:?}");
     }
 
@@ -2129,8 +2827,7 @@ mod tests {
             song.seed_hash = hash;
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             play_guide(
-                &guide, &scale, &song, 1.0, step, 16, 0.1, 6, 5, 1.0,
-                false, false, 0, false, true, &mut rng,
+                &guide, &scale, &song, 1.0, step, 16, 0.1, 6, 5, 1.0, false, false, true, &mut rng,
             )
             .into_iter()
             .next()
@@ -2172,7 +2869,10 @@ mod tests {
         // кашу вместо струны.
         use crate::instruments::Slot;
         let style = lofi::LofiStyle::new();
-        assert!((1.4..=1.8).contains(&style.swing_ratio()), "swing out of dusty band");
+        assert!(
+            (1.4..=1.8).contains(&style.swing_ratio()),
+            "swing out of dusty band"
+        );
         let guides = style.slot_guides();
         let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();
         assert!(guides[gi].arp, "guitar must fingerpick");
@@ -2224,8 +2924,7 @@ mod tests {
             song.prog = [0, 3, 1, 2];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
             if let Some(n) = play_guide(
-                &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false,
-                false, 0, false, true, &mut rng,
+                &guide, &scale, &song, 1.0, 0, 8, 0.1, 1, 0, 1.0, false, false, true, &mut rng,
             )
             .into_iter()
             .next()
@@ -2249,58 +2948,6 @@ mod tests {
     }
 
     #[test]
-    fn emergent_pulse_phases_without_repeating() {
-        // Пульс: детерминирован, варьируется сидом, темп ровный
-        // (разгона в дропе нет — бит держится), такты не клонируются
-        // (фэйзинг: ≥3 разных рисунка на 8 тактов).
-        let ticks = |seed: u64| -> Vec<Vec<usize>> {
-            (0..8)
-                .map(|bar| {
-                    (0..16)
-                        .filter(|sim| {
-                            let s = *sim;
-                            emergent_fire(seed, 4, bar * 16 + s, s, 16, 0.45).0
-                        })
-                        .collect()
-                })
-                .collect()
-        };
-        let a = ticks(11);
-        assert_eq!(a, ticks(11), "must repeat");
-        assert!(a.iter().any(|b| !b.is_empty()), "pulse silent");
-        let bars: std::collections::HashSet<Vec<usize>> = a.into_iter().collect();
-        assert!(bars.len() >= 3, "bars cloned: {bars:?}");
-        // Другой сид — другой грув.
-        let b = ticks(42);
-        assert_ne!(ticks(11).concat(), b.concat(), "seeds share groove");
-    }
-
-    #[test]
-    fn emergent_periods_avoid_short_loops() {
-        // Без шарманки: интервалы между ударами пульса не стоят
-        // метрономом (один короткий интервал по кругу — те же 2–3
-        // удара). Длинные циклы — норма: бесконечность не значит
-        // отсутствие повторов, их значит незаметность.
-        for seed in 0..32u64 {
-            for slot in [0usize, 4, 5, 17] {
-                for beats in [0.3, 0.45, 0.9, 1.5] {
-                    let hits: Vec<usize> = (0..64)
-                        .filter(|s| emergent_fire(seed, slot, *s, *s % 16, 16, beats).0)
-                        .collect();
-                    assert!(!hits.is_empty(), "pulse silent");
-                    if hits.len() >= 4 {
-                        let gaps: Vec<usize> =
-                            hits.windows(2).map(|w| w[1] - w[0]).collect();
-                        let metronome =
-                            gaps.iter().all(|g| *g == gaps[0]) && gaps[0] <= 8;
-                        assert!(!metronome, "seed {seed} slot {slot}: {gaps:?} loop");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn role_plans_are_shared_by_performers() {
         // План роли — один срез на всех исполнителей (ptr-равенство,
         // не совпадение значений): lofi плак+гитара делят бой,
@@ -2309,7 +2956,11 @@ mod tests {
         let lofi = make_style("lofi").expect("lofi");
         let guides = lofi.slot_guides();
         let at = |s: Slot| {
-            Slot::ALL.iter().position(|x| *x == s).map(|i| &guides[i]).unwrap()
+            Slot::ALL
+                .iter()
+                .position(|x| *x == s)
+                .map(|i| &guides[i])
+                .unwrap()
         };
         assert!(std::ptr::eq(
             at(Slot::Pluck).weights.as_ptr(),
@@ -2318,7 +2969,11 @@ mod tests {
         let rock = make_style("rock").expect("rock");
         let guides = rock.slot_guides();
         let at = |s: Slot| {
-            Slot::ALL.iter().position(|x| *x == s).map(|i| &guides[i]).unwrap()
+            Slot::ALL
+                .iter()
+                .position(|x| *x == s)
+                .map(|i| &guides[i])
+                .unwrap()
         };
         assert!(std::ptr::eq(
             at(Slot::Fuzz).weights.as_ptr(),
@@ -2392,43 +3047,25 @@ mod tests {
     }
 
     #[test]
-    fn bass_ignores_kick_fill_duck_is_engine_side() {
-        // Пригибание баса под заливки — дело движкового дака (плавная
-        // огибающая), композиция громкость не трогает: двойная яма
-        // качала бас дырками на каждом шепоте синкопы. Даунбит и заливка
-        // выходят из play_guide с той же громкостью.
-        let guide = RoleGuide {
-            weights: &[1.0; 8],
-            ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, 1.0, 0.8)
-        };
-        let scale = [48, 51, 53, 55, 58];
-        let song = test_song(0.5);
-        let call = |fill: bool| {
-            let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(
-                &guide, &scale, &song, 1.0, 2, 8, 0.1, 1, 0, 1.0, false,
-                false, 0, fill, true, &mut rng,
-            )
-            .into_iter()
-            .next()
-            .map(|n| n.velocity)
-            .unwrap()
-        };
-        let full = call(false);
-        assert_eq!(call(true), full, "composition must not duck: engine owns it");
-    }
-
-    #[test]
-    fn anchor_detection_mirrors_weights() {
-        // Детектор якорей повторяет формулу весов: якорь, склон, тишина.
-        let song = test_song(0.5);
-        let guide = RoleGuide {
-            weights: &[1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            ..RoleGuide::kit(&[1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 36, 0.9)
-        };
-        assert!(is_anchor_step(&guide, &song, 0, 0));
-        assert!(!is_anchor_step(&guide, &song, 0, 1));
-        assert!(!is_anchor_step(&guide, &song, 0, 2));
+    fn leader_balance_boosts_lead_and_dips_support() {
+        // Единый баланс: лидер мелодии громче, остальные мелодические
+        // тише; барабаны и бас не трогаются. Меньше двух мелодических —
+        // балансировать нечего.
+        let lead = crate::instruments::Slot::Pluck.id();
+        let pad = crate::instruments::Slot::Pad.id();
+        let kick = crate::instruments::Slot::Kick.id();
+        let mut notes = vec![
+            NoteEvent::new(lead, 60, 0.8, 0.1),
+            NoteEvent::new(pad, 60, 0.8, 0.1),
+            NoteEvent::new(kick, 36, 0.8, 0.1),
+        ];
+        let leader = balance_leader(&[lead, pad], Some(lead), 0);
+        assert_eq!(leader, Some(lead));
+        apply_leader_balance(&mut notes, leader);
+        assert!(notes[0].velocity > 0.8, "leader not boosted");
+        assert!(notes[1].velocity < 0.8, "support not dipped");
+        assert_eq!(notes[2].velocity, 0.8, "drums must stay untouched");
+        assert_eq!(balance_leader(&[pad], Some(pad), 0), None);
     }
 
     #[test]
@@ -2488,8 +3125,8 @@ mod tests {
             (0..16)
                 .filter_map(|sim| {
                     play_guide(
-                        &guide, &scale, &song, 1.0, sim, 16, 0.1, 6, 5,
-                        1.0, false, false, 0, false, true, &mut rng,
+                        &guide, &scale, &song, 1.0, sim, 16, 0.1, 6, 5, 1.0, false, false, true,
+                        &mut rng,
                     )
                     .into_iter()
                     .next()
@@ -2504,9 +3141,7 @@ mod tests {
         // возможны, но их мало и они не рвут линию).
         let shared: Vec<(u8, u8)> = a
             .iter()
-            .filter_map(|(s, p)| {
-                b.iter().find(|(t, _)| t == s).map(|(_, q)| (*p, *q))
-            })
+            .filter_map(|(s, p)| b.iter().find(|(t, _)| t == s).map(|(_, q)| (*p, *q)))
             .collect();
         assert!(
             shared.len() >= 12,
@@ -2609,7 +3244,11 @@ mod tests {
                 }
                 pats.insert(pat);
             }
-            assert!(pats.len() >= 6, "{name}: one beat per style ({})", pats.len());
+            assert!(
+                pats.len() >= 6,
+                "{name}: one beat per style ({})",
+                pats.len()
+            );
         }
     }
 
@@ -2664,8 +3303,20 @@ mod tests {
         song.seed_hash = 99;
         let mut rng = rand::SeedableRng::seed_from_u64(3);
         let notes = play_guide(
-            &guide, &[48, 50, 52, 53, 55, 57, 59], &song, 1.0, 0, 8, 0.5, 3, 2,
-            1.0, false, false, 0, false, true, &mut rng,
+            &guide,
+            &[48, 50, 52, 53, 55, 57, 59],
+            &song,
+            1.0,
+            0,
+            8,
+            0.5,
+            3,
+            2,
+            1.0,
+            false,
+            false,
+            true,
+            &mut rng,
         );
         assert!(!notes.is_empty());
         let expected = 0.5 * 2.0 * duration_shape(99, 2);
@@ -2680,9 +3331,10 @@ mod tests {
     fn progression_moves_accompaniment_not_motif() {
         // Аккомпанемент следует прогрессии (разные окна — разные ступени),
         // мотив при той же прогрессии стабилен. Гармонический ритм —
-        // 8 тактов: аккорд стоит и держит фразу. Смотрятся все шаги:
-        // якорь фразы может пропустить даунбит (даунбит дышит) —
-        // контракт про свойство, а не про нулевой шаг.
+        // от сида (2/4/8): пара тактов 1 vs 11 даёт разные окна при любом
+        // ритме, прогрессия [0,2,1,3] даёт разные ступени в этих окнах.
+        // Смотрятся все шаги: якорь фразы может пропустить даунбит
+        // (даунбит дышит) — контракт про свойство, а не про нулевой шаг.
         fn degree_at(measure: usize, follow_motif: bool, step: usize) -> Option<u8> {
             let guide = RoleGuide {
                 weights: &[1.0; 8],
@@ -2692,23 +3344,25 @@ mod tests {
             let scale = [48, 50, 52, 53, 55, 57, 59];
             let mut song = test_song(0.5);
             song.measure_index = measure;
-            song.prog = [0, 2, 0, 0];
+            song.prog = [0, 2, 1, 3];
             let mut rng = rand::SeedableRng::seed_from_u64(3);
-            play_guide(&guide, &scale, &song, 1.0, step, 8, 0.1, 7, 6, 1.0, false, false, 0, false, true, &mut rng)
-                .into_iter()
-                .next()
-                .map(|n| n.midi_pitch)
+            play_guide(
+                &guide, &scale, &song, 1.0, step, 8, 0.1, 7, 6, 1.0, false, false, true, &mut rng,
+            )
+            .into_iter()
+            .next()
+            .map(|n| n.midi_pitch)
         }
-        // Такты 1 (окно 0, прог 0) и 9 (окно 1, прог 2): аккомпанемент сдвинут.
+        // Такты 1 и 11: окна прогрессии разные при ритме 2, 4 и 8.
         let mut shifted = false;
         // Мотив от такта не зависит.
         let mut stable = false;
         for step in 0..8 {
-            if let (Some(a), Some(b)) = (degree_at(1, false, step), degree_at(9, false, step)) {
+            if let (Some(a), Some(b)) = (degree_at(1, false, step), degree_at(11, false, step)) {
                 assert_ne!(a, b, "step {step}: accompaniment ignores progression");
                 shifted = true;
             }
-            if let (Some(a), Some(b)) = (degree_at(1, true, step), degree_at(9, true, step)) {
+            if let (Some(a), Some(b)) = (degree_at(1, true, step), degree_at(11, true, step)) {
                 assert_eq!(a, b, "step {step}: motif follows progression");
                 stable = true;
             }
@@ -2731,8 +3385,20 @@ mod tests {
             total += (0..16)
                 .filter(|step| {
                     !play_guide(
-                        &guide, &[48], &song, 1.0, *step, 16, 0.1, 6, 5, share,
-                        false, false, 0, false, true, &mut rng,
+                        &guide,
+                        &[48],
+                        &song,
+                        1.0,
+                        *step,
+                        16,
+                        0.1,
+                        6,
+                        5,
+                        share,
+                        false,
+                        false,
+                        true,
+                        &mut rng,
                     )
                     .is_empty()
                 })
@@ -2769,8 +3435,20 @@ mod tests {
                 for step in 0..8 {
                     out.push(
                         !play_guide(
-                            &anchor, &[48], &song, 1.0, step, 8, 0.1, 2, 0,
-                            share, false, false, 0, false, true, &mut rng,
+                            &anchor,
+                            &[48],
+                            &song,
+                            1.0,
+                            step,
+                            8,
+                            0.1,
+                            2,
+                            0,
+                            share,
+                            false,
+                            false,
+                            true,
+                            &mut rng,
                         )
                         .is_empty(),
                     );

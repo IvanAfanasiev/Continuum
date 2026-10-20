@@ -1,7 +1,5 @@
-use std::f32::consts::TAU;
-
 use super::{
-    dsp::{note_seed, release_fade, Noise, Svf},
+    dsp::{fast_tanh, note_seed, release_fade, sin01, ExpDecay, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
@@ -18,17 +16,17 @@ const FREQ_END_HZ: f32 = 44.0;
 const SWEEP_RATE: f32 = 160.0;
 const AMP_DECAY: f32 = 7.5;
 const CLICK_DECAY: f32 = 380.0;
-const CLICK_GAIN: f32 = 0.6;
+/// Щелчок погромче (был 0.6): на мелких динамиках фундамент
+/// не слышно, бит везёт именно битер. Хвост короткий — грязи нет.
+const CLICK_GAIN: f32 = 0.7;
 const KNOCK_HZ: f32 = 280.0;
 const KNOCK_DECAY: f32 = 55.0;
 const KNOCK_GAIN: f32 = 0.3;
-const DRIVE: f32 = 1.25;
-/// Гритовый оффсет из formula-прототипа: грязный хвост удара
-/// вместо стерильного затухания. Было 0.25 + драйв 1.7 — постоянка
-/// косила волну в tanh-флэттоп каждый удар (хрип соло-бочки).
-/// Панч держит свип тела, а не перегруз. Драйв поднят с 1.15:
-/// транзиент обязан крыть сустейн баса, иначе бит ведет бас.
-const GRIT: f32 = 0.1;
+const DRIVE: f32 = 1.1;
+/// Гритового оффсета больше нет (был 0.1): постоянка косила волну
+/// в tanh-флэттоп каждый удар (хрип соло-бочки) — чистый удар
+/// держит панч свипом тела, а не перегрузом. Драйв снижен с 1.25:
+/// транзиент обязан крыть сустейн баса, флэттоп — нет.
 const ATTACK_SECS: f32 = 0.001;
 const FADE_SECS: f32 = 0.012;
 
@@ -42,6 +40,11 @@ struct KickVoice {
     samples_left: usize,
     noise: Noise,
     click_bp: Svf,
+    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    body_env: ExpDecay,
+    sweep_env: ExpDecay,
+    knock_env: ExpDecay,
+    click_env: ExpDecay,
 }
 
 impl Voice for KickVoice {
@@ -55,6 +58,10 @@ impl Voice for KickVoice {
         self.t = 0.0;
         self.phase = 0.0;
         self.knock_phase = 0.0;
+        self.body_env = ExpDecay::start(AMP_DECAY, self.sample_rate);
+        self.sweep_env = ExpDecay::start(SWEEP_RATE, self.sample_rate);
+        self.knock_env = ExpDecay::start(KNOCK_DECAY, self.sample_rate);
+        self.click_env = ExpDecay::start(CLICK_DECAY, self.sample_rate);
         self.click_bp.reset();
         // Шум щелчка пересеивается от ноты: одинаковые удары одинаковы,
         // разная velocity дает живую вариацию вместо machine-gun.
@@ -68,17 +75,17 @@ impl Voice for KickVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        let body_env = (-AMP_DECAY * self.t).exp();
-        let freq = FREQ_END_HZ + (FREQ_START_HZ - FREQ_END_HZ) * (-SWEEP_RATE * self.t).exp();
+        let body_env = self.body_env.next();
+        let freq = FREQ_END_HZ + (FREQ_START_HZ - FREQ_END_HZ) * self.sweep_env.next();
         self.phase = (self.phase + freq / sample_rate) % 1.0;
-        let body = (self.phase * TAU).sin();
+        let body = sin01(self.phase);
 
         self.knock_phase = (self.knock_phase + KNOCK_HZ / sample_rate) % 1.0;
-        let knock = (self.knock_phase * TAU).sin() * (-KNOCK_DECAY * self.t).exp() * KNOCK_GAIN;
+        let knock = sin01(self.knock_phase) * self.knock_env.next() * KNOCK_GAIN;
 
         // Щелчок-битер живет первые ~5 мс: шум через полосу 3.5 кГц —
         // удар колотушки, а не сырой белый шум.
-        let raw_click = self.noise.sample() * (-CLICK_DECAY * self.t).exp();
+        let raw_click = self.noise.sample() * self.click_env.next();
         let (_, click_band, _) =
             self.click_bp
                 .process(raw_click, CLICK_BP_HZ, CLICK_BP_Q, sample_rate);
@@ -90,7 +97,7 @@ impl Voice for KickVoice {
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        ((body + knock + click - GRIT) * DRIVE).tanh() * self.gain * body_env * attack * fade
+        fast_tanh((body + knock + click) * DRIVE) * self.gain * body_env * attack * fade
     }
 
     fn reset(&mut self) {

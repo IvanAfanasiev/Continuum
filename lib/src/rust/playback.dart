@@ -13,6 +13,17 @@ class EngineStats {
   final BigInt frames;
   final BigInt pushed;
   final BigInt consumed;
+
+  /// Ноты, потерянные из-за полной очереди: генератор обгоняет движок.
+  /// Ненулевое значение = ритм дырявит (пропадают доли).
+  final BigInt dropped;
+
+  /// Ноты, прозвучавшие позже своей доли: ритм спотыкается.
+  final BigInt late;
+
+  /// Пере-якорения сетки: генератор отставал, расписание переехало
+  /// на текущий кадр (слышно как сбой ритма).
+  final BigInt reanchors;
   final BigInt queued;
 
   /// Выбранный выход (`48000 Гц, F32, 2ch`): видно в баннере,
@@ -23,13 +34,22 @@ class EngineStats {
   /// обрыв колбэков). Видно в баннере при затыке.
   final BigInt restarts;
 
+  /// Выходная задержка (буфер трека), мс: на столько звук позади
+  /// генерации. Колесо фронта сдвигает показ на неё (иначе рука
+  /// и точки бегут впереди слышимого). Ноль = неизвестно/не играет.
+  final double outputLatencyMs;
+
   const EngineStats({
     required this.frames,
     required this.pushed,
     required this.consumed,
+    required this.dropped,
+    required this.late,
+    required this.reanchors,
     required this.queued,
     required this.audioConfig,
     required this.restarts,
+    required this.outputLatencyMs,
   });
 
   @override
@@ -37,9 +57,13 @@ class EngineStats {
       frames.hashCode ^
       pushed.hashCode ^
       consumed.hashCode ^
+      dropped.hashCode ^
+      late.hashCode ^
+      reanchors.hashCode ^
       queued.hashCode ^
       audioConfig.hashCode ^
-      restarts.hashCode;
+      restarts.hashCode ^
+      outputLatencyMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -49,9 +73,13 @@ class EngineStats {
           frames == other.frames &&
           pushed == other.pushed &&
           consumed == other.consumed &&
+          dropped == other.dropped &&
+          late == other.late &&
+          reanchors == other.reanchors &&
           queued == other.queued &&
           audioConfig == other.audioConfig &&
-          restarts == other.restarts;
+          restarts == other.restarts &&
+          outputLatencyMs == other.outputLatencyMs;
 }
 
 /// Один макро-фейдер для UI: имя группы и ее множитель.
