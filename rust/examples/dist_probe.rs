@@ -41,6 +41,32 @@ fn main() {
             (active.iter().map(|v| v * v).sum::<f32>() / active.len() as f32).sqrt()
         };
         let clipped = buf.iter().filter(|v| v.abs() > 0.999).count();
+        // Огибающая: время до пика (в первой половине ноты — до
+        // наложения второй), уровень сустейна, спад после пика.
+        // До второй ноты (она на 100 мс) — иначе пик измеряет наложение.
+        let first_half = (buf.len() as f32 * 0.22) as usize;
+        let mut peak_i = 0usize;
+        for (i, v) in buf[..first_half].iter().enumerate() {
+            if v.abs() > buf[peak_i].abs() {
+                peak_i = i;
+            }
+        }
+        let attack_ms = peak_i as f32 / sr * 1000.0;
+        let tail_start = buf.len() * 3 / 4;
+        let tail: Vec<f32> = buf[tail_start..].iter().map(|v| v.abs()).collect();
+        let tail_rms = if tail.is_empty() {
+            0.0
+        } else {
+            (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt()
+        };
+        let thresh = peak * 0.1;
+        let mut decay_ms = 0.0f32;
+        for (i, v) in buf[peak_i..first_half].iter().enumerate() {
+            if v.abs() < thresh {
+                decay_ms = i as f32 / sr * 1000.0;
+                break;
+            }
+        }
         // Разрывы: отклонение от линейного предсказания. Щелчок — это
         // скачок, который сигнал не «предсказывал».
         let jump_at = |from: usize, to: usize| -> (f32, usize) {
@@ -56,18 +82,19 @@ fn main() {
         };
         let attack = jump_at(0, (sr * 0.005) as usize);
         let release = jump_at(buf.len() - (sr * 0.01) as usize, buf.len());
-        let (thd_db, f0_hz) = thd(&buf, sr);
+        let (thd_db, _f0_hz) = thd(&buf, sr);
         println!(
-            "{:<12} пик={:6.3} крест={:5.1}дБ клип={:4} | атака: разрыв={:6.4} @{} | спад: разрыв={:6.4} @{} | f0≈{:6.0}Гц",
+            "{:<12} пик={:6.3} крест={:5.1}дБ клип={:4} | атака {:6.1}мс, спад {:6.0}мс, сустейн {:5.3} ({:5.1}дБ) | разрыв атаки={:6.4} спад={:6.4}",
             name,
             peak,
             20.0 * (peak / rms.max(1e-6)).log10(),
             clipped,
+            attack_ms,
+            decay_ms,
+            tail_rms,
+            20.0 * (tail_rms / peak.max(1e-6)).log10(),
             attack.0,
-            attack.1,
-            release.0,
-            release.1,
-            f0_hz
+            release.0
         );
         let _ = thd_db;
     }

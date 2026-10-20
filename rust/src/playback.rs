@@ -1995,7 +1995,10 @@ mod tests {
             hf / sum_sq.max(1e-9)
         }
         let lofi = hf_ratio("lofi", 11);
-        assert!(lofi < 0.004, "lofi too bright: {lofi}");
+        // Лоуфай остается глуше клуба, но не глуше референса: вокал-чопы
+        // вернулись в состав (атмосфера), и полоса стала 0.004 при
+        // референсных 0.0107.
+        assert!(lofi < 0.006, "lofi too bright: {lofi}");
         let club = hf_ratio("club", 11);
         assert!(club > 0.001, "club too dark: {club}");
     }

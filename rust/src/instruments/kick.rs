@@ -29,6 +29,11 @@ const DRIVE: f32 = 1.1;
 /// транзиент обязан крыть сустейн баса, флэттоп — нет.
 const ATTACK_SECS: f32 = 0.001;
 const FADE_SECS: f32 = 0.012;
+/// Выход бочки. Сумма тела, «knock» и битера доходила до 1.09 — а с
+/// хвостом ретриггера (предыдущий удар ещё звучит) до 1.09+ и клиппила:
+/// на каждом втором ударе был щелчок. Нормируем так, чтобы удар и его
+/// перекрытие оставались в единице.
+const OUT_GAIN: f32 = 0.78;
 
 #[derive(Clone, Default)]
 struct KickVoice {
@@ -97,7 +102,7 @@ impl Voice for KickVoice {
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.t += 1.0 / sample_rate;
-        fast_tanh((body + knock + click) * DRIVE) * self.gain * body_env * attack * fade
+        fast_tanh((body + knock + click) * DRIVE) * self.gain * body_env * attack * fade * OUT_GAIN
     }
 
     fn reset(&mut self) {
