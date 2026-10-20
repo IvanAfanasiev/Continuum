@@ -170,6 +170,11 @@ pub struct RoleGuide {
     /// на этом такте игнорируются: заливка всегда доводит.
     /// Только энергичным (club/rock/phonk/proto), не lofi.
     pub build_roll: bool,
+    /// Забивка на стыке фразы: в последней доле фразы слот играет
+    /// каждую 16-ю с нарастанием. Сгенерированный переход (не кроссфейд):
+    /// стык слышно как ход в следующую фразу, а не как обрыв.
+    /// Ставится стилем: в спокойном лофай забивки нет.
+    pub phrase_fill: bool,
     /// Полюса по секциям: грув слота пересдаётся на каждую секцию
     /// (Main свой бит, Drop свой), а не стоит один на весь трек.
     /// Якоря формы: дроп каждый раз узнаваем, куплет — свой.
@@ -204,6 +209,7 @@ impl RoleGuide {
         arp: false,
         phrase_rest: 0.0,
         build_roll: false,
+        phrase_fill: false,
         section_poles: false,
     };
 
@@ -245,6 +251,7 @@ impl RoleGuide {
             arp: false,
             phrase_rest: 0.0,
             build_roll: false,
+            phrase_fill: false,
             section_poles: false,
         }
     }
@@ -286,6 +293,7 @@ impl RoleGuide {
             arp: false,
             phrase_rest: 0.0,
             build_roll: false,
+            phrase_fill: false,
             section_poles: false,
         }
     }
@@ -588,6 +596,19 @@ fn carrier_rank(role: InstrumentRole) -> Option<u8> {
     }
 }
 
+/// Позиция доли внутри музыкальной фразы (фраза = два такта).
+fn phrase_position(song: &SongContext, step_in_measure: usize, steps_per_measure: usize) -> usize {
+    let bar_in_phrase = song.measure_index.saturating_sub(1) % 2;
+    bar_in_phrase * steps_per_measure + step_in_measure
+}
+
+/// Зона забивки: последняя доля фразы (четверть такта) — здесь переход
+/// из фразы во фразу.
+fn phrase_fill_zone(steps_per_measure: usize, song: &SongContext, step_in_measure: usize) -> bool {
+    let zone_start = 2 * steps_per_measure - steps_per_measure / 4;
+    phrase_position(song, step_in_measure, steps_per_measure) >= zone_start
+}
+
 /// Приоритет якоря: даже даунбит иногда дышит (1 из 20 ударов
 /// пропускается гейтом сида). Лицо жанра держится статистически,
 /// абсолюта «звучит всегда» больше нет нигде.
@@ -813,11 +834,33 @@ fn play_guide(
     // Ролл доводит до последней 16-й такта: заливка вливается в
     // даунбит дропа, а не обрывается за шаг до него.
     // Только Kit-голоса (снейр): питчевым флаг не ставится.
-    if guide.build_roll && matches!(song.section, SongSection::BuildUp) && song.is_last_measure {
+    //
+    // Переход на стыке фраз — тот же прием: сгенерированная забивка в
+    // последней доле фразы. Не кроссфейд и не тишина: это ноты, которые
+    // ведут в следующую фразу, поэтому стык слышно как ход, а не как
+    // обрыв. Флаг ставит стиль: в спокойном лофай забивки нет.
+    let drop_roll =
+        guide.build_roll && matches!(song.section, SongSection::BuildUp) && song.is_last_measure;
+    let fill = phrase_fill_zone(steps_per_measure, song, step_in_measure);
+    // Забивка не у всех сидов одинаковая: у одного плотнее, у другого
+    // реже. Иначе все сиды получили бы один и тот же хвост — и
+    // различие сидов по вокалу/ритму просело бы.
+    let fill_skip = guide.phrase_fill
+        && fill
+        && fixed_gate(song.seed_hash, slot_idx, step_in_measure, 0xF11E) >= 0.28;
+    if drop_roll || (guide.phrase_fill && fill && !fill_skip) {
         let Voicing::Kit(pitch) = guide.voice else {
             return Vec::new();
         };
-        let rise = 0.55 + 0.45 * step_in_measure as f32 / steps_per_measure.max(1) as f32;
+        let rise = if guide.phrase_fill && fill {
+            // Нарастание внутри забивки: от первой 16-й к последней.
+            let zone_start = 2 * steps_per_measure - steps_per_measure / 4;
+            let done =
+                (phrase_position(song, step_in_measure, steps_per_measure) - zone_start) as f32;
+            0.55 + 0.45 * done / (steps_per_measure / 4).max(1) as f32
+        } else {
+            0.55 + 0.45 * step_in_measure as f32 / steps_per_measure.max(1) as f32
+        };
         let mut velocity = (guide.vel_base * rise
             + energy * guide.vel_energy
             + rng.gen_range(-guide.vel_jitter..=guide.vel_jitter))
@@ -874,18 +917,27 @@ fn play_guide(
         let p = weight * energy * energy * guide.energy_response * song.density * role_share;
         p.clamp(0.0, 1.0)
     };
-    // Гейт сида: решение зависит от (сид, план, такт, фраза).
-    // Второй такт фразы получает свою соль — рисунок развивается,
-    // а не дублирует первый такт дословно. Якоря (weight >= 1.0)
-    // держат общий скелет фразы: их соль не включает такт.
+    // Гейт сида: решение зависит от (сид, план, такт, визит секции).
+    //
+    // Раньше соль брала фразу: рисунок ударных пересдавался каждые две
+    // доли, и на стыке фразы удары то появлялись, то исчезали — на
+    // слух это «скачок» (замер потока: у лофай-кика 831 против 32
+    // внутри фразы). Теперь соль держит ВИЗИТ секции: внутри раздела
+    // грув один, меняется он на границе раздела — как у живой группы.
+    // Якоря (weight >= 1.0) держат общий скелет: их соль не включает
+    // такт, и дыхание даунбита (5% пропусков) не должно «моргать» на
+    // каждой фразе.
     // Носители темы делят бросок: разреженный входит в шаги густого.
     // Якоря идут отдельным броском (своя соль) — пропуск якоря
     // не влечет пропуски остальных шагов и наоборот.
     // Кик-якорь гейт не проходит вовсе.
     let bar_in_phrase = song.measure_index.saturating_sub(1) % 2;
     let salt = if weight >= 1.0 {
+        // Якоря (даунбит) дышат по фразе: 5% пропусков — живой пульс.
         ANCHOR_SALT ^ (song.phrase_index as u64)
     } else {
+        // Прочие ноты (синкопы, штрихи) — своя соль на фразу: рисунок
+        // развивается, а не дублирует предыдущую фразу дословно.
         (song.phrase_index as u64)
             .wrapping_mul(2)
             .wrapping_add(bar_in_phrase as u64)
@@ -1387,6 +1439,62 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn phrase_end_has_a_generated_fill() {
+        // Переход на стыке фразы — сгенерированная забивка: в последней
+        // доле фразы снейр играет 16-е с нарастанием. Это ноты, которые
+        // ведут в следующую фразу, а не кроссфейд.
+        use crate::instruments::{InstrumentRole, Slot};
+        for name in ["club", "rock", "phonk", "proto"] {
+            let style = make_style(name).expect("known style");
+            let mut mixer = crate::mixer::MixerState::new();
+            crate::playback::apply_style_mix(&*style, &mut mixer);
+            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+            let n = mixer.active_ids(&mut buf);
+            let active = buf[..n].to_vec();
+            let mut rng = rand::SeedableRng::seed_from_u64(424242);
+            let mut arranger = crate::arranger::Arranger::new(424242);
+            let mut song = arranger.advance_measure();
+            let mut fill_notes = 0usize;
+            let mut other_notes = 0usize;
+            for step in 0..32usize {
+                let spm = style.steps_per_measure();
+                let sim = step % spm;
+                if sim == 0 && step > 0 {
+                    song = arranger.advance_measure();
+                }
+                let mut sctx = StepContext {
+                    step,
+                    step_in_measure: sim,
+                    base_step_secs: style.base_step_secs(),
+                    active_tracks: &active,
+                    song: &song,
+                    rng: &mut rng,
+                    intensity: 1.0,
+                };
+                let mut notes = render_style(&*style, &mut sctx);
+                notes.retain(|n| {
+                    Slot::from_id(n.instrument_id).map(|s| s.role()) == Some(InstrumentRole::Snare)
+                });
+                // Последняя доля фразы (шаги 28..31 при 16 шагов на такт).
+                let in_fill = step >= 32 - spm / 4;
+                if in_fill {
+                    fill_notes += notes.len();
+                } else {
+                    other_notes += notes.len();
+                }
+            }
+            assert!(
+                fill_notes > 0,
+                "{name}: на стыке фразы нет забивки (fill={fill_notes})"
+            );
+            assert!(
+                fill_notes >= other_notes / 8,
+                "{name}: забивка не отличается от обычной игры: fill={fill_notes} other={other_notes}"
+            );
         }
     }
 

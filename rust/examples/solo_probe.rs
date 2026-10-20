@@ -145,6 +145,90 @@ fn jumps(path: &str) {
     );
 }
 
+/// Спектральный поток по 16-м: насколько спектр меняется от доли к
+/// доле. Стык фразы (каждые 32 доли) сравниваем с обычными долями.
+fn flux(path: &str, bpm: f32) {
+    let (sr, s16) = read_wav_pcm16(path);
+    let mono: Vec<f32> = s16
+        .chunks(2)
+        .map(|c| (c[0] as f32 + c[1] as f32) * 0.5 / 32768.0)
+        .collect();
+    let step = (sr as f32 * 60.0 / bpm / 4.0) as usize; // 16-я
+    if step < 64 || mono.len() < step * 4 {
+        println!("мало данных");
+        return;
+    }
+    // Магнитуда спектра по полосам (8 полос) для каждой 16-й.
+    let bands = 8usize;
+    let mut prev = vec![0f32; bands];
+    let mut fluxes: Vec<f32> = Vec::new();
+    let mut idx = 0usize;
+    while idx + step <= mono.len() {
+        let frame = &mono[idx..idx + step];
+        let mut cur = vec![0f32; bands];
+        for (i, v) in frame.iter().enumerate() {
+            let hz = i as f32 * sr as f32 / step as f32;
+            let b = ((hz / (sr as f32 / 2.0)) * bands as f32) as usize;
+            if b < bands {
+                cur[b] += v.abs();
+            }
+        }
+        let mut fl = 0f32;
+        for b in 0..bands {
+            let d = cur[b] - prev[b];
+            if d > 0.0 {
+                fl += d;
+            }
+        }
+        fluxes.push(fl);
+        prev = cur;
+        idx += step;
+    }
+    // Стыки фраз: каждые 32 доли (2 такта) — доли 0 внутри фразы.
+    // Сравниваем со ВТОРИМИ даунбитами (каждые 16 долей): иначе стык
+    // всегда сравнивается с пустыми долями и метрика врёт.
+    let phrase = 32usize;
+    let mut at_bound = Vec::new();
+    let mut inside = Vec::new();
+    for (i, f) in fluxes.iter().enumerate() {
+        if i < 2 {
+            continue;
+        }
+        if i % phrase == 0 {
+            at_bound.push(*f);
+        } else if i % 16 == 0 {
+            inside.push(*f);
+        }
+    }
+    let mean = |v: &Vec<f32>| -> f32 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        v.iter().sum::<f32>() / v.len() as f32
+    };
+    let sorted = |v: &mut Vec<f32>| -> Vec<f32> {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v.clone()
+    };
+    let b = sorted(&mut at_bound.clone());
+    let ins = sorted(&mut inside.clone());
+    let p95 = |v: &[f32], p: f32| -> f32 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        let i = ((v.len() - 1) as f32 * p) as usize;
+        v[i]
+    };
+    println!(
+        "поток по 16-м: средний={:.4} | на стыке фраз: средний={:.4} p95={:.4} | внутри фразы: средний={:.4} p95={:.4}",
+        mean(&fluxes),
+        mean(&b),
+        p95(&b, 0.95),
+        mean(&ins),
+        p95(&ins, 0.95)
+    );
+}
+
 fn fft(re: &mut [f64], im: &mut [f64]) {
     let n = re.len();
     let mut j = 0usize;
@@ -209,6 +293,49 @@ fn main() {
             }
             print!("{:<24}", path.file_stem().unwrap().to_string_lossy());
             jumps(&path.to_string_lossy());
+        }
+        return;
+    }
+    // Режим потока по соло: кто именно скачет на стыке фразы.
+    if std::env::args().nth(3).as_deref() == Some("fluxall") {
+        let bpm = rust_lib_cont::styles::make_style(&style)
+            .map(|s| s.bpm())
+            .unwrap_or(126.0);
+        let slots = [
+            ("bass", Slot::Bass),
+            ("kick", Slot::Kick),
+            ("snare", Slot::Snare),
+            ("hat", Slot::Hat),
+            ("shaker", Slot::Shaker),
+            ("pluck", Slot::Pluck),
+            ("keys", Slot::Keys),
+            ("pad", Slot::Pad),
+            ("kick808", Slot::Kick808),
+            ("vocal", Slot::Vocal),
+            ("guitar", Slot::Guitar),
+        ];
+        for (name, slot) in slots {
+            let path = format!("{dir}/{style}_flux_{name}.wav");
+            match render_wav(&style, 424242, 40.0, 44_100.0, &path, &[], &[slot.id()]) {
+                Ok(_) => {
+                    print!("{:<10}", name);
+                    flux(&path, bpm);
+                }
+                Err(e) => println!("{name}: {e}"),
+            }
+        }
+        return;
+    }
+    // Режим потока: спектральный поток по 16-м. Показывает, где музыка
+    // «прыгает»: на стыке фраз поток должен быть в рамках обычного.
+    if std::env::args().nth(3).as_deref() == Some("flux") {
+        let path = format!("{dir}/{style}_mix.wav");
+        let bpm = rust_lib_cont::styles::make_style(&style)
+            .map(|s| s.bpm())
+            .unwrap_or(126.0);
+        match render_wav(&style, 424242, 40.0, 44_100.0, &path, &[], &[]) {
+            Ok(_) => flux(&path, bpm),
+            Err(e) => println!("render failed: {e}"),
         }
         return;
     }

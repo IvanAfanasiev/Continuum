@@ -187,6 +187,9 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.5)
         };
         let snare = RoleGuide {
+            // Забивка на стыке фраз: в последней доле фразы снейр
+            // играет каждую 16-ю с нарастанием — стык слышно как ход.
+            phrase_fill: true,
             vel_base: 0.95,
             poles: Some(SNARE_POLES),
             // Ролл в дроп: последний такт билда — 16-е с нарастанием.

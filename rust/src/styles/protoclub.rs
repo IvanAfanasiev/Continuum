@@ -123,6 +123,9 @@ impl Style for ProtoclubStyle {
             ..RoleGuide::pitched(BED_W, 0, 0, 0, 8.0, 0.25)
         };
         let snare = RoleGuide {
+            // Забивка на стыке фраз: в последней доле фразы снейр
+            // играет каждую 16-ю с нарастанием — стык слышно как ход.
+            phrase_fill: true,
             vel_base: 0.9,
             vel_jitter: 0.04,
             // Ролл в дроп: последний такт билда — 16-е с нарастанием.

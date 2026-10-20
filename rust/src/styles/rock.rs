@@ -196,6 +196,9 @@ impl Style for RockStyle {
         };
         // Хлесткий снейр: транзиент + тело. Заливка умеренная.
         let snare = RoleGuide {
+            // Забивка на стыке фраз: в последней доле фразы снейр
+            // играет каждую 16-ю с нарастанием — стык слышно как ход.
+            phrase_fill: true,
             vel_base: 0.9,
             vel_jitter: 0.04,
             poles: Some(SNARE_POLES),
