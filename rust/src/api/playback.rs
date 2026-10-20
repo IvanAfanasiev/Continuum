@@ -83,6 +83,13 @@ pub fn playback_reset_instruments() -> PlaybackStatus {
     controller().reset_instruments()
 }
 
+/// Назначить инструменту чужую партию: «в rock пианино вместо гитары».
+/// `line_id` — id слота-источника (партия), `None` — своя партия.
+/// Назначение общее для стилей и переживает смену стиля.
+pub fn playback_set_line(instrument_id: u64, line_id: Option<u64>) -> PlaybackStatus {
+    controller().set_line(instrument_id, line_id)
+}
+
 /// Макро-фейдер группы 0..1 («kick», «lead», …): один «Kick» вместо
 /// «панч vs 808» — конкретный вариант под капотом выбирает стиль.
 /// Ноль глушит группу целиком. Переживает смену стиля.

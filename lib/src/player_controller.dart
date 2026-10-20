@@ -250,6 +250,14 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Назначить инструменту чужую партию («в rock пианино вместо
+  /// гитары»). `lineId` — id источника партии, `null` — своя партия.
+  Future<void> setLine(BigInt id, BigInt? lineId) async {
+    status = await playbackSetLine(instrumentId: id, lineId: lineId);
+    tracks = await playbackTracks();
+    notifyListeners();
+  }
+
   Future<void> setTempo(double bpm) async {
     status = await playbackSetTempoBpm(bpm: bpm);
     notifyListeners();

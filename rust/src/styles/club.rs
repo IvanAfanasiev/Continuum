@@ -485,6 +485,7 @@ mod tests {
                 song: &song,
                 rng: &mut rng,
                 intensity: 1.0,
+                line_of: &[],
             };
             out.extend(
                 render_style(&style, &mut sctx)
@@ -593,6 +594,7 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
+                    line_of: &[],
                 };
                 for n in render_style(&style, &mut sctx) {
                     let table = if n.instrument_id == PLUCK_ID {
