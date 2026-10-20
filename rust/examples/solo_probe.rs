@@ -111,6 +111,40 @@ fn analyze(path: &str) {
 }
 
 /// FFT на месте (итеративный radix-2, без зависимостей).
+/// Разрывы сигнала: отклонение от линейного предсказания. Большой
+/// разрыв = щелчок (граница ноты или обрыв хвоста).
+fn jumps(path: &str) {
+    let (sr, s16) = read_wav_pcm16(path);
+    // WAV стерео с чередованием L/R: для разрывов берём среднее.
+    let mono: Vec<f32> = s16
+        .chunks(2)
+        .map(|c| (c[0] as f32 + c[1] as f32) * 0.5 / 32768.0)
+        .collect();
+    let n = mono.len();
+    if n < 16 {
+        return;
+    }
+    let mut worst = (0.0f32, 0usize);
+    let mut over = 0usize;
+    for i in 2..n {
+        let pred = 2.0 * mono[i - 1] - mono[i - 2];
+        let d = (mono[i] - pred).abs();
+        if d > worst.0 {
+            worst = (d, i);
+        }
+        if d > 0.01 {
+            over += 1;
+        }
+    }
+    println!(
+        "    разрыв: макс={:.4} @ {:.3}с,с разрывом>0.01: {} ({} ppm)",
+        worst.0,
+        worst.1 as f32 / sr as f32,
+        over,
+        over * 1_000_000 / n
+    );
+}
+
 fn fft(re: &mut [f64], im: &mut [f64]) {
     let n = re.len();
     let mut j = 0usize;
@@ -161,6 +195,35 @@ fn main() {
         .nth(2)
         .unwrap_or_else(|| "build/sounds".to_string());
     let _ = std::fs::create_dir_all(&dir);
+    // Режим разрывов: разбор уже отрендеренных соло-файлов.
+    if std::env::args().nth(3).as_deref() == Some("jumps") {
+        let entries: Vec<_> = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd.flatten().collect(),
+            Err(_) => Vec::new(),
+        };
+        for entry in entries {
+            let path = entry.path();
+            let name = path.to_string_lossy().to_string();
+            if !name.ends_with(".wav") || name.contains("_mix") {
+                continue;
+            }
+            print!("{:<24}", path.file_stem().unwrap().to_string_lossy());
+            jumps(&path.to_string_lossy());
+        }
+        return;
+    }
+    // Режим микса: полная смесь стиля — спектр и разрывы всего трека.
+    if std::env::args().nth(3).as_deref() == Some("mix") {
+        let path = format!("{dir}/{style}_mix.wav");
+        match render_wav(&style, 424242, 20.0, 44_100.0, &path, &[], &[]) {
+            Ok(_) => {
+                analyze(&path);
+                jumps(&path);
+            }
+            Err(e) => println!("render failed: {e}"),
+        }
+        return;
+    }
     let bpm = rust_lib_cont::styles::make_style(&style)
         .map(|s| s.bpm())
         .unwrap_or(126.0);

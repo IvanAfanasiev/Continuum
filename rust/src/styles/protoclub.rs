@@ -197,6 +197,12 @@ impl Style for ProtoclubStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
         };
+        // Дождь: ровная пелена во все фразы (тише винила и музыки).
+        let rain = RoleGuide {
+            duration_mult: 150.0,
+            vel_base: 0.35,
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+        };
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
@@ -229,6 +235,7 @@ impl Style for ProtoclubStyle {
             vinyl,
             vocal,
             guitar,
+            rain,
             shaker,
             guitar_lead,
         ]

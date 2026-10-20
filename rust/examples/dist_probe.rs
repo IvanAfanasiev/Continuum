@@ -41,17 +41,35 @@ fn main() {
             (active.iter().map(|v| v * v).sum::<f32>() / active.len() as f32).sqrt()
         };
         let clipped = buf.iter().filter(|v| v.abs() > 0.999).count();
+        // Разрывы: отклонение от линейного предсказания. Щелчок — это
+        // скачок, который сигнал не «предсказывал».
+        let jump_at = |from: usize, to: usize| -> (f32, usize) {
+            let mut worst = (0.0f32, 0usize);
+            for i in from.max(2)..to.min(buf.len()) {
+                let pred = 2.0 * buf[i - 1] - buf[i - 2];
+                let d = (buf[i] - pred).abs();
+                if d > worst.0 {
+                    worst = (d, i);
+                }
+            }
+            worst
+        };
+        let attack = jump_at(0, (sr * 0.005) as usize);
+        let release = jump_at(buf.len() - (sr * 0.01) as usize, buf.len());
         let (thd_db, f0_hz) = thd(&buf, sr);
         println!(
-            "{:<10} пик={:6.3} rms={:6.3} крест={:5.1}дБ клип={:4} f0≈{:6.0}Гц THD={:5.1}дБ",
+            "{:<12} пик={:6.3} крест={:5.1}дБ клип={:4} | атака: разрыв={:6.4} @{} | спад: разрыв={:6.4} @{} | f0≈{:6.0}Гц",
             name,
             peak,
-            rms,
             20.0 * (peak / rms.max(1e-6)).log10(),
             clipped,
-            f0_hz,
-            thd_db
+            attack.0,
+            attack.1,
+            release.0,
+            release.1,
+            f0_hz
         );
+        let _ = thd_db;
     }
 }
 

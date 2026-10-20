@@ -60,14 +60,18 @@ pub struct VisualSnap {
     /// Точная фаза фразы 0..1 (целые шаги + доля текущего по часам):
     /// якорь колеса без лесенки опросов.
     pub phrase_phase: f32,
-    /// Ноты фразы по голосам (бит = доля фразы): кик, снейр+хэт,
+    /// Фаза окна колеса 0..1 (окно = 4 такта): по ней идёт стрелка и
+    /// считается «возраст» точки. Окно шире фразы, поэтому след не
+    /// обрывается на границе фразы.
+    pub window_phase: f32,
+    /// Ноты окна по голосам (бит = доля окна): кик, снейр+хэт,
     /// бас, тема (лид/вокал/аккорды). Это настоящие ноты, а не план:
     /// колесо показывает ровно то, что звучало, поэтому показа и звука
     /// разойтись не могут.
-    pub pkick: u32,
-    pub psnare: u32,
-    pub pbass: u32,
-    pub ptheme: u32,
+    pub pkick: u64,
+    pub psnare: u64,
+    pub pbass: u64,
+    pub ptheme: u64,
     /// Доли фразы, где что-то звучало (бит = доля фразы).
     /// Сброс на старте фразы.
     pub pplayed: u32,
@@ -77,6 +81,12 @@ pub struct VisualSnap {
 pub(crate) fn section_index(section: crate::arranger::SongSection) -> u8 {
     section as u8
 }
+
+/// Окно колеса: сколько шагов помнятся точки (4 такта = 64 шага).
+/// Шире музыкальной фразы (2 такта) — иначе на границе фразы маски
+/// обнулялись и радар очищался в тот момент, когда стрелка приходит
+/// вверх.
+pub const WHEEL_WINDOW_STEPS: usize = 64;
 
 /// Метка шага: номер шага и его длительность в микросекундах.
 ///
@@ -142,7 +152,7 @@ pub struct Composer {
     last_planned: usize,
     phrase_start: usize,
     /// Маски нот фразы по голосам: кик, перкуссия, бас, мелодия.
-    plan: [u32; 4],
+    plan: [u64; 4],
     /// Партитура стиля (нужна тени перехода).
     score: crate::arranger::Score,
     /// Как стиль склеивает куски.
@@ -249,7 +259,7 @@ impl Composer {
             last_style_name: style_name,
             last_planned: usize::MAX,
             phrase_start: 0,
-            plan: [0u32; 4],
+            plan: [0u64; 4],
             score,
             transition,
             shadow: None,
@@ -381,14 +391,15 @@ impl Composer {
             self.shadow = None;
         }
 
-        // Фраза для колеса: маски настоящих нот фразы (32 доли = 2
-        // такта × 16 шагов). Точки на колесе — ровно то, что звучит:
-        // отдельного пре-рендера больше нет, поэтому показа и звука
-        // разойтись не может.
-        if self.song.phrase_index != self.last_planned {
-            self.last_planned = self.song.phrase_index;
-            self.phrase_start = self.step_count;
-            self.plan = [0u32; 4];
+        // Окно колеса: последние 64 шага (4 такта) настоящих нот.
+        // Точки на колесе — ровно то, что звучит: отдельного пре-рендера
+        // больше нет, поэтому показа и звука разойтись не может.
+        // Окно шире фразы (32 шага) специально: иначе на границе фразы
+        // маски обнулялись — и радар очищался как раз в тот момент, когда
+        // стрелка приходит в верхнюю точку.
+        let window_pos = self.step_count % WHEEL_WINDOW_STEPS;
+        if window_pos == 0 {
+            self.plan = [0u64; 4];
         }
 
         let mut sctx = StepContext {
@@ -452,11 +463,13 @@ impl Composer {
             / duration.max(0.001))
         .clamp(0.0, 1.0);
         let phrase_phase = (phrase_pos as f32 + step_frac) / phrase_len.max(1) as f32;
+        // Фаза окна колеса: стрелка и «возраст» точки считаются по ней.
+        let window_phase = (window_pos as f32 + step_frac) / WHEEL_WINDOW_STEPS as f32;
 
-        // Маски фразы — по настоящим нотам (включая голос тени): колесо
+        // Маски окна — по настоящим нотам (включая голос тени): колесо
         // и звук берут один и тот же источник, поэтому разойтись не могут.
         if !notes.is_empty() {
-            let bit = 1u32 << phrase_pos.min(31);
+            let bit = 1u64 << window_pos.min(WHEEL_WINDOW_STEPS - 1);
             for n in notes.iter() {
                 match Slot::from_id(n.instrument_id).map(Slot::role) {
                     Some(InstrumentRole::Kick) => self.plan[0] |= bit,
@@ -535,6 +548,7 @@ impl Composer {
                 phrase_len: phrase_len as u8,
                 phrase_pos: phrase_pos as u8,
                 phrase_phase,
+                window_phase,
                 pkick: self.plan[0],
                 psnare: self.plan[1],
                 pbass: self.plan[2],

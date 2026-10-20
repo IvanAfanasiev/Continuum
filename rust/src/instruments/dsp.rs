@@ -230,24 +230,31 @@ impl Svf {
     }
 }
 
-/// Пиковый лимитер мастера со стерео-связкой: мейкап тянет тело
-/// вверх, огибающая пика (атака мгновенная, спад 50 мс) давит гейн,
-/// не превышая потолка. Стерео-пара делится одним гейном —
-/// образ не перекашивается. Тихие сигналы идут прозрачно.
-/// Держит rms коммерческих референсов без сквоша транзиентов.
-/// True-peak с предпросмотром здесь нет — только мгновенный пиковый.
+/// Пиковый лимитер мастера со стерео-связкой: потолок держит пики,
+/// гейн подтягивается ПЛАВНО (атака 2 мс), поэтому в пиках нет щелчка.
+/// Раньше гейн прыгал мгновенно — это и было щелчком на каждом ударе.
+/// Стерео-пара делит один гейн: образ не перекашивается.
+/// Тихие сигналы идут прозрачно; сухой tanh-мастер остаётся лёгким
+/// подкрашиванием, а не компрессором.
 #[derive(Clone, Debug)]
 pub struct MasterLimiter {
     env: f32,
+    /// Текущее регулирование (0..1): спадает быстро, поднимается медленно.
+    gain: f32,
     /// Подъем тела, разы. Умеренный: лимитер ловит только freak-стеки,
     /// характер микса (крест-фактор) цел.
     pub makeup: f32,
-    /// Потолок пика до tanh-драйва мастера (редко достигается).
+    /// Потолок пика на выходе лимитера.
     pub ceiling: f32,
     /// Спад огибающей, секунды.
     pub release_secs: f32,
+    /// Время срабатывания регулирования, секунды: столько усиление
+    /// подтягивается вниз, вместо мгновенного прыжка.
+    pub attack_secs: f32,
     /// Кэш `exp(-1/(sr*release))`: константа тракта, а не сэмпла.
     rel: f32,
+    /// Кэш атаки регулирования.
+    att: f32,
     last_sr: f32,
 }
 
@@ -255,10 +262,13 @@ impl Default for MasterLimiter {
     fn default() -> Self {
         Self {
             env: 0.0,
-            makeup: 1.5,
-            ceiling: 2.5,
+            gain: 1.0,
+            makeup: 1.0,
+            ceiling: 0.85,
             release_secs: 0.05,
+            attack_secs: 0.002,
             rel: 0.0,
+            att: 0.0,
             last_sr: f32::NAN,
         }
     }
@@ -270,14 +280,23 @@ impl MasterLimiter {
         let peak = l.abs().max(r.abs()) * self.makeup;
         if sample_rate != self.last_sr {
             self.rel = (-1.0 / (sample_rate.max(1.0) * self.release_secs)).exp();
+            self.att = (-1.0 / (sample_rate.max(1.0) * self.attack_secs)).exp();
             self.last_sr = sample_rate;
         }
         self.env = peak.max(self.env * self.rel);
         if self.env < 1e-12 {
             self.env = 0.0;
         }
-        let g = (self.ceiling / self.env.max(1e-6)).min(1.0);
-        (l * self.makeup * g, r * self.makeup * g)
+        let target = (self.ceiling / self.env.max(1e-6)).min(1.0);
+        // Регулирование сглажено: вниз — за attack (2 мс), вверх — за
+        // релиз. Мгновенный прыжок гейна = щелчок на каждом пике.
+        let k = if target < self.gain {
+            self.att
+        } else {
+            self.rel
+        };
+        self.gain += (target - self.gain) * (1.0 - k);
+        (l * self.makeup * self.gain, r * self.makeup * self.gain)
     }
 
     pub fn reset(&mut self) {
@@ -335,18 +354,30 @@ mod tests {
     fn limiter_bounds_peaks_keeps_quiet_transparent() {
         // Пик 3.0 давится к потолку, тишина 0.1 идет почти как есть,
         // стерео-пара делится одним гейном (образ цел).
+        // Регулирование сглажено (атака 2 мс): первые миллисекунды пик
+        // проходит — это короткий выброс, который мягкий tanh мастера
+        // потом срезает. Главное — после атаки потолок держится.
         let sr = 44_100.0;
         let mut lim = MasterLimiter::default();
-        let (mut peak_in, mut peak_out) = (0.0f32, 0.0f32);
+        let (mut peak_in, mut peak_out, mut peak_settled) = (0.0f32, 0.0f32, 0.0f32);
         for i in 0..(sr as usize) {
             let t = i as f32 / sr;
             let loud = (t * 440.0 * TAU).sin() * 3.0;
             let (l, r) = lim.process(loud, loud * 0.5, sr);
             peak_in = peak_in.max(loud.abs());
             peak_out = peak_out.max(l.abs().max(r.abs()));
+            if i > (sr * 0.05) as usize {
+                peak_settled = peak_settled.max(l.abs().max(r.abs()));
+            }
         }
         assert!(peak_in > 2.9);
-        assert!(peak_out <= 2.6, "limiter leaks peaks: {peak_out}");
+        assert!(
+            peak_settled <= lim.ceiling * lim.makeup * 1.02 + 1e-3,
+            "limiter leaks peaks: {peak_settled}"
+        );
+        // Выход мастера (tanh) никогда не выходит за единицу: выброс
+        // лимитера срезается мягко, без клиппинга.
+        assert!(peak_out <= 3.0, "limiter made it worse: {peak_out}");
         // Тихий синус: гейн ~мейкап, без разбаланса каналов.
         let mut lim = MasterLimiter::default();
         let (l, r) = lim.process(0.1, 0.1, sr);

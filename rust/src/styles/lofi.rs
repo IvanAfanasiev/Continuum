@@ -147,10 +147,9 @@ impl Style for LofiStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Классика: барабаны + бас + Rhodes + гитара + винил.
-        // Вокал-чопы приходят гостем (см. flex). Нарезок-плака нет:
-        // поверх Rhodes и гитары они дают кашу — включить можно вручную,
-        // дефолт чистый.
+        // Классика: барабаны + бас + Rhodes + гитара + винил + вокал-чопы.
+        // Нарезок-плака нет: поверх Rhodes и гитары они дают кашу —
+        // включить можно вручную, дефолт чистый.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -159,24 +158,9 @@ impl Style for LofiStyle {
             Slot::Hat,
             Slot::Keys,
             Slot::Vinyl,
+            Slot::Vocal,
             Slot::Guitar,
         ]
-    }
-
-    /// Гость по сиду: пыльные чопы. Саб-толчок 808 убран из пула:
-    /// фиксированная C1 терлась полутоном обо все sustained-партии
-    /// (замер: 46% шагов со стычками, почти все — 808-й).
-    /// Ровно один гость, низ под контролем лимита плотности.
-    fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Vocal]
-    }
-
-    fn flex_weights(&self) -> &'static [f32] {
-        &[1.0]
-    }
-
-    fn flex_count(&self) -> usize {
-        1
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
@@ -315,6 +299,12 @@ impl Style for LofiStyle {
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 1.8, 0.85)
         };
         // Шейкер вне club: пыльные оффбиты для ручки фронта.
+        // Дождь: ровная пелена во все фразы (тише винила и музыки).
+        let rain = RoleGuide {
+            duration_mult: 150.0,
+            vel_base: 0.35,
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+        };
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
@@ -347,6 +337,7 @@ impl Style for LofiStyle {
             vinyl,
             vocal,
             guitar,
+            rain,
             shaker,
             guitar_lead,
         ]

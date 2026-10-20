@@ -127,10 +127,13 @@ class LiveVisual {
 
   /// Точная фаза фразы 0..1 (якорь колеса).
   final double phrasePhase;
-  final int pkick;
-  final int psnare;
-  final int pbass;
-  final int ptheme;
+
+  /// Фаза окна колеса 0..1 (окно = 4 такта): по ней идёт стрелка.
+  final double windowPhase;
+  final BigInt pkick;
+  final BigInt psnare;
+  final BigInt pbass;
+  final BigInt ptheme;
 
   /// Доли фразы, где что-то звучало (бит = доля фразы).
   final int pplayed;
@@ -149,6 +152,7 @@ class LiveVisual {
     required this.phraseLen,
     required this.phrasePos,
     required this.phrasePhase,
+    required this.windowPhase,
     required this.pkick,
     required this.psnare,
     required this.pbass,
@@ -171,6 +175,7 @@ class LiveVisual {
       phraseLen.hashCode ^
       phrasePos.hashCode ^
       phrasePhase.hashCode ^
+      windowPhase.hashCode ^
       pkick.hashCode ^
       psnare.hashCode ^
       pbass.hashCode ^
@@ -195,6 +200,7 @@ class LiveVisual {
           phraseLen == other.phraseLen &&
           phrasePos == other.phrasePos &&
           phrasePhase == other.phrasePhase &&
+          windowPhase == other.windowPhase &&
           pkick == other.pkick &&
           psnare == other.psnare &&
           pbass == other.pbass &&

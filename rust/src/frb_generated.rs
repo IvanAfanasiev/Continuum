@@ -1140,10 +1140,11 @@ impl SseDecode for crate::playback::LiveVisual {
         let mut var_phraseLen = <u8>::sse_decode(deserializer);
         let mut var_phrasePos = <u8>::sse_decode(deserializer);
         let mut var_phrasePhase = <f32>::sse_decode(deserializer);
-        let mut var_pkick = <u32>::sse_decode(deserializer);
-        let mut var_psnare = <u32>::sse_decode(deserializer);
-        let mut var_pbass = <u32>::sse_decode(deserializer);
-        let mut var_ptheme = <u32>::sse_decode(deserializer);
+        let mut var_windowPhase = <f32>::sse_decode(deserializer);
+        let mut var_pkick = <u64>::sse_decode(deserializer);
+        let mut var_psnare = <u64>::sse_decode(deserializer);
+        let mut var_pbass = <u64>::sse_decode(deserializer);
+        let mut var_ptheme = <u64>::sse_decode(deserializer);
         let mut var_pplayed = <u32>::sse_decode(deserializer);
         return crate::playback::LiveVisual {
             bar_phase: var_barPhase,
@@ -1159,6 +1160,7 @@ impl SseDecode for crate::playback::LiveVisual {
             phrase_len: var_phraseLen,
             phrase_pos: var_phrasePos,
             phrase_phase: var_phrasePhase,
+            window_phase: var_windowPhase,
             pkick: var_pkick,
             psnare: var_psnare,
             pbass: var_pbass,
@@ -1456,6 +1458,7 @@ impl flutter_rust_bridge::IntoDart for crate::playback::LiveVisual {
             self.phrase_len.into_into_dart().into_dart(),
             self.phrase_pos.into_into_dart().into_dart(),
             self.phrase_phase.into_into_dart().into_dart(),
+            self.window_phase.into_into_dart().into_dart(),
             self.pkick.into_into_dart().into_dart(),
             self.psnare.into_into_dart().into_dart(),
             self.pbass.into_into_dart().into_dart(),
@@ -1660,10 +1663,11 @@ impl SseEncode for crate::playback::LiveVisual {
         <u8>::sse_encode(self.phrase_len, serializer);
         <u8>::sse_encode(self.phrase_pos, serializer);
         <f32>::sse_encode(self.phrase_phase, serializer);
-        <u32>::sse_encode(self.pkick, serializer);
-        <u32>::sse_encode(self.psnare, serializer);
-        <u32>::sse_encode(self.pbass, serializer);
-        <u32>::sse_encode(self.ptheme, serializer);
+        <f32>::sse_encode(self.window_phase, serializer);
+        <u64>::sse_encode(self.pkick, serializer);
+        <u64>::sse_encode(self.psnare, serializer);
+        <u64>::sse_encode(self.pbass, serializer);
+        <u64>::sse_encode(self.ptheme, serializer);
         <u32>::sse_encode(self.pplayed, serializer);
     }
 }

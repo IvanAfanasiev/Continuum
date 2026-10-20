@@ -143,24 +143,6 @@ impl Style for ClubStyle {
         ]
     }
 
-    /// Гостей нет: ядро deep house стабильно, а набор инструментов
-    /// задаёт слушатель (в миксе).
-    fn flex_pool(&self) -> &'static [Slot] {
-        &[]
-    }
-
-    fn flex_weights(&self) -> &'static [f32] {
-        &[]
-    }
-
-    fn flex_range(&self) -> (usize, usize) {
-        (0, 1)
-    }
-
-    fn flex_count(&self) -> usize {
-        1
-    }
-
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         // Бас ходит корнями за прогрессией (джиттер 1 — соседние
         // ступени, не прыжки): баслайн вместо дрона на одной ноте.
@@ -316,6 +298,12 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(LEAD_W, 0, 1, 3, 1.5, 0.4)
         };
         // Шейкер deep house: песок 16-х поверх хэта, акцент на оффбитах.
+        // Дождь: ровная пелена во все фразы (тише винила и музыки).
+        let rain = RoleGuide {
+            duration_mult: 150.0,
+            vel_base: 0.35,
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+        };
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
@@ -348,6 +336,7 @@ impl Style for ClubStyle {
             vinyl,
             vocal,
             guitar,
+            rain,
             shaker,
             guitar_lead,
         ]

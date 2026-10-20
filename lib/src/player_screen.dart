@@ -694,11 +694,12 @@ class _MotifWheelState extends State<_MotifWheel> {
       final running =
           widget.controller.running && !widget.controller.paused;
       if (running) {
-        // Цель: якорь фразы + прошедшее время × скорость BPM.
-        // Оборот руки — фраза (2 такта): при 120 BPM фраза ~4 с.
+        // Цель: якорь окна + прошедшее время × скорость BPM.
+        // Оборот руки — окно колеса (4 такта): шире музыкальной фразы,
+        // иначе на границе фразы след обрывался и радар очищался.
         final elapsed =
             DateTime.now().difference(_anchorT).inMilliseconds / 1000.0;
-        final target = (_anchorP + elapsed * _bpm() / 480.0) % 1.0;
+        final target = (_anchorP + elapsed * _bpm() / 960.0) % 1.0;
         var d = (target - _display) % 1.0;
         if (d > 0.5) d -= 1.0;
         if (d.abs() > 0.25) {
@@ -741,14 +742,15 @@ class _MotifWheelState extends State<_MotifWheel> {
             _frame = shown;
             // Якорь сдвигаем на задержку: рука показывает фазу,
             // звучащую сейчас, а не сгенерированную сейчас.
-            _anchorP = shown.phrasePhase;
+            _anchorP = shown.windowPhase;
             _anchorT =
                 shownT.add(Duration(milliseconds: delayMs.round()));
-            // Ноты фразы — как есть: точки совпадают с рукой.
-            _liveKick = shown.pkick;
-            _liveSnare = shown.psnare;
-            _liveBass = shown.pbass;
-            _liveTheme = shown.ptheme;
+            // Ноты окна — как есть: точки совпадают с рукой.
+            // Маски приходят 64-битными (окно колеса — 4 такта).
+            _liveKick = shown.pkick.toInt();
+            _liveSnare = shown.psnare.toInt();
+            _liveBass = shown.pbass.toInt();
+            _liveTheme = shown.ptheme.toInt();
           });
         }
       } catch (_) {
@@ -873,7 +875,7 @@ class _WheelPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final r = size.shortestSide / 2 * 0.92;
     // Фраза = 32 доли (2 такта по 16): позиции точек и руки.
-    const n = 32;
+    const n = 64;
     // Угол руки (0 — верх, по часовой).
     final handA = phase * 6.2831853;
 
@@ -886,7 +888,7 @@ class _WheelPainter extends CustomPainter {
     }
 
     // Орбита голоса: свой радиус — точки голосов не лежат друг на друге,
-    // каждый голос читается отдельно. Доли и даунбит фразы крупнее.
+    // каждый голос читается отдельно. Доли и даунбит окна крупнее.
     // Радарный след: точка загорается, когда стрелка до нее дошла, и
     // плавно тает, когда стрелка ушла дальше.
     void voice(int mask, double orbit, Color color, double size) {
@@ -906,12 +908,12 @@ class _WheelPainter extends CustomPainter {
             Offset(
                 r * orbit * math.cos(ang), r * orbit * math.sin(ang));
         final px = near(i);
-        // Давность точки: сколько фразы прошло с момента, как стрелка
+        // Давность точки: сколько окна прошло с момента, как стрелка
         // прошла мимо. 0 — точка под стрелкой, дальше — тает.
         var age = (phase - i / n) % 1.0;
         if (age < 0) age += 1.0;
         final fade = (1.0 - age / _fadeSpan).clamp(0.0, 1.0);
-        // Доля такта (каждая 4-я) и даунбит фразы крупнее: метр виден.
+        // Доля такта (каждая 4-я) и даунбит окна крупнее: метр виден.
         final beat = i % 4 == 0 ? 1.0 : 0.0;
         final down = i == 0 ? 1.5 : 0.0;
         final now = px > 0.55;

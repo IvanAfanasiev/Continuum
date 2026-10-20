@@ -297,6 +297,12 @@ impl Style for RockStyle {
             ..RoleGuide::pitched(ROCK_LEAD_W, 0, 1, 0, 2.2, 0.7)
         };
         // Шейкер вне club: тихий ровный слой для ручки фронта.
+        // Дождь: ровная пелена во все фразы (тише винила и музыки).
+        let rain = RoleGuide {
+            duration_mult: 150.0,
+            vel_base: 0.35,
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+        };
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
@@ -318,6 +324,7 @@ impl Style for RockStyle {
             vinyl,
             vocal,
             guitar,
+            rain,
             shaker,
             guitar_lead,
         ]
@@ -347,7 +354,6 @@ mod tests {
             assert!(ensemble.contains(&slot), "{slot:?} missing from band");
         }
         assert_eq!(ensemble.len(), 6, "band bloated: {ensemble:?}");
-        assert!(style.flex_pool().is_empty(), "guests in a fixed band");
         // Гитара ведёт без отдыха и в полную (рельеф — у стены фазза).
         let guides = style.slot_guides();
         let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();

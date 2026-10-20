@@ -25,7 +25,11 @@ const NOISE_Q: f32 = 0.9;
 const NOISE_DECAY: f32 = 22.0;
 const NOISE_GAIN: f32 = 1.0;
 const SNAP_DECAY: f32 = 300.0;
-const SNAP_GAIN: f32 = 1.0;
+/// Snap — короткая яркая вспышка атаки. Раньше это был СЫРОЙ белый
+/// шум: полоса от 0 Гц, и на каждом ударе микротреск. Теперь только
+/// верх (4 кГц и выше) — ближе к 909, где «шкок» узкий.
+const SNAP_HP_HZ: f32 = 4000.0;
+const SNAP_GAIN: f32 = 0.45;
 const ATTACK_SECS: f32 = 0.0005;
 const FADE_SECS: f32 = 0.008;
 
@@ -38,6 +42,8 @@ struct SnareVoice {
     samples_left: usize,
     noise: Noise,
     bp: Svf,
+    /// Отдельный highpass для snap: вспышка атаки должна быть узкой.
+    snap_hp: Svf,
     /// Рекуррентные огибающие вместо посэмпловых `exp`.
     sweep_env: ExpDecay,
     body_env: ExpDecay,
@@ -62,6 +68,7 @@ impl Voice for SnareVoice {
         self.snap_env = ExpDecay::start(SNAP_DECAY, self.sample_rate);
         self.hiss_env = ExpDecay::start(NOISE_DECAY, self.sample_rate);
         self.bp.reset();
+        self.snap_hp.reset();
         // Клэп или барабан: решает высота ноты (стиль задает характер
         // инструмента, а не только тембр).
         self.clap = note.midi_pitch >= CLAP_PITCH;
@@ -83,7 +90,10 @@ impl Voice for SnareVoice {
         let body = body * self.body_env.next() * body_gain;
 
         let raw_noise = self.noise.sample();
-        let snap = raw_noise * self.snap_env.next() * SNAP_GAIN;
+        let snap = raw_noise * self.snap_env.next();
+        // Snap — только верх: узкая вспышка атаки вместо белого треска.
+        let (_, _, snap_bright) = self.snap_hp.process(snap, SNAP_HP_HZ, NOISE_Q, sample_rate);
+        let snap = snap_bright * SNAP_GAIN;
         let center = if self.clap {
             CLAP_NOISE_CENTER_HZ
         } else {

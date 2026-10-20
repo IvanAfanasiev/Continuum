@@ -1105,8 +1105,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LiveVisual dco_decode_live_visual(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 18)
-      throw Exception('unexpected arr length: expect 18 but see ${arr.length}');
+    if (arr.length != 19)
+      throw Exception('unexpected arr length: expect 19 but see ${arr.length}');
     return LiveVisual(
       barPhase: dco_decode_f_32(arr[0]),
       energy: dco_decode_f_32(arr[1]),
@@ -1121,11 +1121,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       phraseLen: dco_decode_u_8(arr[10]),
       phrasePos: dco_decode_u_8(arr[11]),
       phrasePhase: dco_decode_f_32(arr[12]),
-      pkick: dco_decode_u_32(arr[13]),
-      psnare: dco_decode_u_32(arr[14]),
-      pbass: dco_decode_u_32(arr[15]),
-      ptheme: dco_decode_u_32(arr[16]),
-      pplayed: dco_decode_u_32(arr[17]),
+      windowPhase: dco_decode_f_32(arr[13]),
+      pkick: dco_decode_u_64(arr[14]),
+      psnare: dco_decode_u_64(arr[15]),
+      pbass: dco_decode_u_64(arr[16]),
+      ptheme: dco_decode_u_64(arr[17]),
+      pplayed: dco_decode_u_32(arr[18]),
     );
   }
 
@@ -1345,10 +1346,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_phraseLen = sse_decode_u_8(deserializer);
     var var_phrasePos = sse_decode_u_8(deserializer);
     var var_phrasePhase = sse_decode_f_32(deserializer);
-    var var_pkick = sse_decode_u_32(deserializer);
-    var var_psnare = sse_decode_u_32(deserializer);
-    var var_pbass = sse_decode_u_32(deserializer);
-    var var_ptheme = sse_decode_u_32(deserializer);
+    var var_windowPhase = sse_decode_f_32(deserializer);
+    var var_pkick = sse_decode_u_64(deserializer);
+    var var_psnare = sse_decode_u_64(deserializer);
+    var var_pbass = sse_decode_u_64(deserializer);
+    var var_ptheme = sse_decode_u_64(deserializer);
     var var_pplayed = sse_decode_u_32(deserializer);
     return LiveVisual(
       barPhase: var_barPhase,
@@ -1364,6 +1366,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       phraseLen: var_phraseLen,
       phrasePos: var_phrasePos,
       phrasePhase: var_phrasePhase,
+      windowPhase: var_windowPhase,
       pkick: var_pkick,
       psnare: var_psnare,
       pbass: var_pbass,
@@ -1593,10 +1596,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_8(self.phraseLen, serializer);
     sse_encode_u_8(self.phrasePos, serializer);
     sse_encode_f_32(self.phrasePhase, serializer);
-    sse_encode_u_32(self.pkick, serializer);
-    sse_encode_u_32(self.psnare, serializer);
-    sse_encode_u_32(self.pbass, serializer);
-    sse_encode_u_32(self.ptheme, serializer);
+    sse_encode_f_32(self.windowPhase, serializer);
+    sse_encode_u_64(self.pkick, serializer);
+    sse_encode_u_64(self.psnare, serializer);
+    sse_encode_u_64(self.pbass, serializer);
+    sse_encode_u_64(self.ptheme, serializer);
     sse_encode_u_32(self.pplayed, serializer);
   }
 

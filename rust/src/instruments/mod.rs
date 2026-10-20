@@ -7,6 +7,7 @@ pub mod kick;
 pub mod kick808;
 pub mod pad;
 pub mod pluck;
+pub mod rain;
 pub mod shaker;
 pub mod snare;
 pub mod vinyl;
@@ -17,6 +18,7 @@ pub use guitar::GuitarVoice;
 pub use hat::HiHat;
 pub use kick::Kick;
 pub use kick808::Kick808;
+pub use rain::Rain;
 pub use shaker::Shaker;
 pub use snare::SnareDrum;
 pub use vinyl::Vinyl;
@@ -140,6 +142,7 @@ pub enum Slot {
     Vinyl = 10,
     Vocal = 11,
     Guitar = 14,
+    Rain = 15,
     Shaker = 17,
     /// Соло-гитара (перебор/длинные линии): тот же DSP-ядро, что рифф,
     /// другой характер (сустейн, верх, лёгкий драйв) и свои направляющие.
@@ -148,7 +151,7 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -161,6 +164,7 @@ impl Slot {
         Slot::Vinyl,
         Slot::Vocal,
         Slot::Guitar,
+        Slot::Rain,
         Slot::Shaker,
         Slot::GuitarLead,
     ];
@@ -187,6 +191,7 @@ impl Slot {
             Slot::Vinyl => "vinyl",
             Slot::Vocal => "vocal",
             Slot::Guitar => "guitar",
+            Slot::Rain => "rain",
             Slot::Shaker => "shaker",
             Slot::GuitarLead => "guitar lead",
         }
@@ -205,6 +210,7 @@ impl Slot {
             Slot::Vinyl => InstrumentRole::Texture,
             Slot::Vocal => InstrumentRole::Vocal,
             Slot::Guitar | Slot::GuitarLead => InstrumentRole::Lead,
+            Slot::Rain => InstrumentRole::Texture,
         }
     }
 
@@ -217,7 +223,7 @@ impl Slot {
             Slot::Pad | Slot::Keys => Group::Chords,
             Slot::Pluck | Slot::Guitar | Slot::GuitarLead => Group::Lead,
             Slot::Vocal => Group::Vocal,
-            Slot::Vinyl => Group::Texture,
+            Slot::Vinyl | Slot::Rain => Group::Texture,
         }
     }
 
@@ -238,6 +244,7 @@ impl Slot {
             Slot::Vinyl => 0.25,
             Slot::Vocal => 0.6,
             Slot::Guitar => 0.6,
+            Slot::Rain => 0.2,
             Slot::Shaker => 0.55,
             Slot::GuitarLead => 0.6,
         }
@@ -771,6 +778,7 @@ mod tests {
             (Vinyl, 10),
             (Vocal, 11),
             (Guitar, 14),
+            (Rain, 15),
             (Shaker, 17),
             (GuitarLead, 20),
         ];

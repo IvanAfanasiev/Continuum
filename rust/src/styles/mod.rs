@@ -318,31 +318,8 @@ pub trait Style: Send + Sync {
     /// Вайтлист инструментов стиля: кто включен при выборе стиля,
     /// остальные глушатся в ноль. Громкости — канонические, у слотов
     /// ([`Slot::base_volume`]); пресет не хардкодит цифры.
+    /// Состав меняет слушатель в миксе; сид на него не влияет.
     fn ensemble(&self) -> &'static [Slot];
-    /// Флекс-пул: кандидаты на гостевые места в миксе, выбор — сидом.
-    /// Ядро жанра (вайтлист) стабильно, специи меняются: каждый сид —
-    /// свой состав. Пусто = весь состав фиксирован.
-    fn flex_pool(&self) -> &'static [Slot] {
-        &[]
-    }
-    /// Веса предпочтений пула (параллельно flex_pool): частые гости
-    /// и редкие специи. Розыгрыш взвешенный (см. pick_flex_slots):
-    /// тенденции вместо равномерной ротации. Дефолт — равные.
-    /// Лишние хвосты игнорируются, недостающие считаются 1.0.
-    fn flex_weights(&self) -> &'static [f32] {
-        &[]
-    }
-    /// Бюджет гостей (мин..=макс): одни сиды аскетичны, другие богаче.
-    /// Число разыгрывается сидом внутри бюджета. Дефолт — ровно
-    /// flex_count (старое поведение).
-    fn flex_range(&self) -> (usize, usize) {
-        let n = self.flex_count();
-        (n, n)
-    }
-    /// Сколько гостевых мест разыгрывается (0 = выключено).
-    fn flex_count(&self) -> usize {
-        0
-    }
     /// Направляющие по слотам в порядке [`Slot::ALL`].
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT];
     /// Комната реверба: доля мокрого (0 = сухо, как хит клуба на массиве).
@@ -2498,7 +2475,7 @@ mod tests {
         let style = make_style("lofi").expect("known style");
         for seed in [11u64, 12, 42, 777, 424242] {
             let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+            crate::playback::apply_style_mix(&*style, &mut mixer);
             let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
             let n = mixer.active_ids(&mut buf);
             let active = buf[..n].to_vec();
@@ -2653,7 +2630,7 @@ mod tests {
         let style = make_style("rock").expect("rock");
         let seed = 5u64;
         let mut mixer = crate::mixer::MixerState::new();
-        crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+        crate::playback::apply_style_mix(&*style, &mut mixer);
         let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
         let n = mixer.active_ids(&mut buf);
         let active = buf[..n].to_vec();
@@ -2736,7 +2713,7 @@ mod tests {
             let style = make_style(name).expect("style");
             for seed in [11u64, 42, 777] {
                 let mut mixer = crate::mixer::MixerState::new();
-                crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+                crate::playback::apply_style_mix(&*style, &mut mixer);
                 let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
                 let n = mixer.active_ids(&mut buf);
                 let active = buf[..n].to_vec();
@@ -2990,7 +2967,7 @@ mod tests {
         fn signature(style_name: &str, seed: u64) -> (PitchSig, RhythmSig) {
             let style = make_style(style_name).expect("style");
             let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+            crate::playback::apply_style_mix(&*style, &mut mixer);
             let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
             let n = mixer.active_ids(&mut buf);
             let active = buf[..n].to_vec();
@@ -3206,7 +3183,7 @@ mod tests {
             let mut pats = std::collections::HashSet::new();
             for seed in 0..12u64 {
                 let mut mixer = crate::mixer::MixerState::new();
-                crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+                crate::playback::apply_style_mix(&*style, &mut mixer);
                 let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
                 let n = mixer.active_ids(&mut buf);
                 let active = buf[..n].to_vec();
