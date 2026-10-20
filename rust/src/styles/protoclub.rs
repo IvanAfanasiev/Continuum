@@ -69,6 +69,22 @@ impl Style for ProtoclubStyle {
         &SCALE
     }
 
+    /// Гости по сиду: ядро прото — голое (ударные, бас, плэк), но
+    /// кислотная формула, стабы или шейкер — уже другой прото. Кто из
+    /// них звучит, решает сид.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[Slot::Formula, Slot::Keys, Slot::Shaker]
+    }
+
+    fn flex_count(&self) -> usize {
+        1
+    }
+
+    /// Гость не обязателен: примерно половина сидов — сухое ядро.
+    fn flex_range(&self) -> (usize, usize) {
+        (0, 1)
+    }
+
     fn reverb_wet(&self) -> f32 {
         0.1
     }

@@ -83,6 +83,22 @@ impl Style for PhonkStyle {
         &SCALE
     }
 
+    /// Гости по сиду: у phonk ядро жёсткое, но «вокал-чоп» и лазер —
+    /// его подпись. Кто из них звучит, решает сид: один сид — сухой
+    /// дрифт, другой — с вокалом.
+    fn flex_pool(&self) -> &'static [Slot] {
+        &[Slot::Vocal, Slot::Laser, Slot::Festival]
+    }
+
+    fn flex_count(&self) -> usize {
+        1
+    }
+
+    /// Гость не обязателен: примерно половина сидов — без него.
+    fn flex_range(&self) -> (usize, usize) {
+        (0, 1)
+    }
+
     fn reverb_wet(&self) -> f32 {
         0.12
     }

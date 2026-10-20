@@ -70,8 +70,17 @@ pub fn playback_set_intensity(intensity: f32) -> PlaybackStatus {
 }
 
 /// Громкость слота 0..1. Ноль исключает слот из генерации.
+/// Ручная правка помечает список изменённым: смена стиля и сида его
+/// больше не перетирает (сброс — отдельной кнопкой).
 pub fn playback_set_track(instrument_id: u64, volume: f32) -> PlaybackStatus {
     controller().set_track(instrument_id, volume)
+}
+
+/// Сброс списка инструментов на дефолты текущего стиля (вайтлист +
+/// гости сида). Снимает пометку «правил слушатель»: дальше стиль снова
+/// влияет на состав.
+pub fn playback_reset_instruments() -> PlaybackStatus {
+    controller().reset_instruments()
 }
 
 /// Макро-фейдер группы 0..1 («kick», «lead», …): один «Kick» вместо

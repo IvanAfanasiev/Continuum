@@ -242,6 +242,14 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Сброс списка инструментов на дефолты стиля: снимает пометку
+  /// «правил слушатель», и стиль снова влияет на состав.
+  Future<void> resetInstruments() async {
+    status = await playbackResetInstruments();
+    tracks = await playbackTracks();
+    notifyListeners();
+  }
+
   Future<void> setTempo(double bpm) async {
     status = await playbackSetTempoBpm(bpm: bpm);
     notifyListeners();

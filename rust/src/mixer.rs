@@ -14,10 +14,16 @@ use crate::instruments::{Group, Slot};
 /// Смена стиля сбрасывает СЛОТЫ на дефолт нового стиля (вайтлист + гости
 /// сида), но НЕ группы: макро-фейдеры («больше кика», «тише лиды») —
 /// настройка слушателя, она переживает переход между стилями.
+/// Если слушатель правил список инструментов сам (`list_edited`), смена
+/// стиля и сида его не трогает: ручной выбор — приоритет. Сброс — кнопка
+/// «сброс настроек» в миксе.
 #[derive(Clone, Default)]
 pub struct MixerState {
     pub tracks: HashMap<usize, f32>,
     pub groups: HashMap<Group, f32>,
+    /// Список инструментов менял слушатель: дефолты стиля его не
+    /// перетирают, пока не нажат сброс.
+    pub list_edited: bool,
 }
 
 impl MixerState {
@@ -25,12 +31,20 @@ impl MixerState {
         Self {
             tracks: HashMap::new(),
             groups: HashMap::new(),
+            list_edited: false,
         }
     }
 
     /// Громкость слота 0..1. Ноль = слот исключен.
     pub fn set_track(&mut self, id: usize, volume: f32) {
         self.tracks.insert(id, volume.clamp(0.0, 1.0));
+    }
+
+    /// Правка слота слушателем: список помечается изменённым, и смена
+    /// стиля/сида его больше не перетирает (ручной выбор — приоритет).
+    pub fn set_track_by_user(&mut self, id: usize, volume: f32) {
+        self.set_track(id, volume);
+        self.list_edited = true;
     }
 
     /// Макро-фейдер группы 0..1 (выше дефолта не поднять —

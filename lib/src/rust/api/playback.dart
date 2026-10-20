@@ -50,6 +50,8 @@ Future<PlaybackStatus> playbackSetIntensity({required double intensity}) =>
     );
 
 /// Громкость слота 0..1. Ноль исключает слот из генерации.
+/// Ручная правка помечает список изменённым: смена стиля и сида его
+/// больше не перетирает (сброс — отдельной кнопкой).
 Future<PlaybackStatus> playbackSetTrack({
   required BigInt instrumentId,
   required double volume,
@@ -57,6 +59,12 @@ Future<PlaybackStatus> playbackSetTrack({
   instrumentId: instrumentId,
   volume: volume,
 );
+
+/// Сброс списка инструментов на дефолты текущего стиля (вайтлист +
+/// гости сида). Снимает пометку «правил слушатель»: дальше стиль снова
+/// влияет на состав.
+Future<PlaybackStatus> playbackResetInstruments() =>
+    RustLib.instance.api.crateApiPlaybackPlaybackResetInstruments();
 
 /// Макро-фейдер группы 0..1 («kick», «lead», …): один «Kick» вместо
 /// «панч vs 808» — конкретный вариант под капотом выбирает стиль.

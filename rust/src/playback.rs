@@ -89,6 +89,9 @@ pub struct PlaybackStatus {
     /// Версия звукового движка (см. ENGINE_VERSION): объясняет,
     /// почему любимый сид звучит иначе после апдейта.
     pub engine_version: u32,
+    /// Список инструментов правил слушатель: стиль и сид его не трогают,
+    /// в миксе горит кнопка сброса.
+    pub instrument_list_edited: bool,
 }
 
 impl Default for PlaybackStatus {
@@ -103,6 +106,7 @@ impl Default for PlaybackStatus {
             intensity: 1.0,
             engine_error: None,
             engine_version: crate::core::ENGINE_VERSION,
+            instrument_list_edited: false,
         }
     }
 }
@@ -299,7 +303,13 @@ fn spawn_guarded(
 /// Общий для контроллера и CLI.
 /// Слоты вне набора НЕ запрещены: пользователь может поднять любой
 /// вручную, смена стиля или сида просто снова расставит дефолты.
+/// Но только если пользователь не правил список сам: ручной выбор
+/// переживает смену стиля и сида (сброс — отдельная кнопка в миксе).
 pub fn apply_style_mix(style: &dyn Style, mixer: &mut MixerState, seed: u64) {
+    if mixer.list_edited {
+        // Слушатель собрал свой состав: чужие дефолты его не трогают.
+        return;
+    }
     let ensemble = style.ensemble();
     let flex = pick_flex_slots(style, seed);
     for slot in Slot::ALL {
@@ -581,6 +591,7 @@ impl RunningSession {
             .map(|g| g.name().to_string())
             .unwrap_or_else(|e| e.into_inner().name().to_string());
         let seed = snapshot(&self.seed);
+        let list_edited = self.with_mixer(|mixer| mixer.list_edited);
         PlaybackStatus {
             running: true,
             paused: self.paused.load(Ordering::Relaxed),
@@ -595,6 +606,7 @@ impl RunningSession {
                 .map(|g| g.clone())
                 .unwrap_or_else(|e| e.into_inner().clone()),
             engine_version: crate::core::ENGINE_VERSION,
+            instrument_list_edited: list_edited,
         }
     }
 
@@ -819,8 +831,30 @@ impl PlaybackController {
             Some(s) => {
                 let id = instrument_id as usize;
                 if ENSEMBLE_IDS.contains(&id) {
-                    s.update_mix(|mixer| mixer.set_track(id, volume));
+                    s.update_mix(|mixer| mixer.set_track_by_user(id, volume));
                 }
+                s.status()
+            }
+            None => PlaybackStatus::default(),
+        }
+    }
+
+    /// Сброс списка инструментов на дефолты текущего стиля (кнопка
+    /// «сброс» в миксе): вайтлист стиля + гости сида. Ручной выбор
+    /// слушателя снимается, и стиль снова может влиять на состав.
+    pub fn reset_instruments(&self) -> PlaybackStatus {
+        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(s) => {
+                let seed_now = snapshot(&s.seed);
+                let style = match s.style.read() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let mut mixer = s.mixer.write().unwrap_or_else(|e| e.into_inner());
+                mixer.list_edited = false;
+                apply_style_mix(&**style, &mut mixer, seed_now);
+                drop(mixer);
                 s.status()
             }
             None => PlaybackStatus::default(),
@@ -1655,6 +1689,64 @@ mod tests {
             hot > cold,
             "intensity does not drive density: {cold} vs {hot}"
         );
+        let _ = c.stop();
+    }
+
+    #[test]
+    fn user_list_survives_style_change_until_reset() {
+        // Правило слушателя: правка списка инструментов — приоритет.
+        // Смена стиля (и сида) ручной список не трогает, пока не нажат
+        // сброс: сброс возвращает дефолты стиля и снимает пометку.
+        let c = PlaybackController::new();
+        c.start("club", 11, false);
+        let pluck_id = crate::instruments::Slot::Pluck.id() as u64;
+        let st = c.set_track(pluck_id, 0.0);
+        assert!(st.instrument_list_edited, "правка не помечена");
+        // Смена стиля: список остаётся слушательским.
+        c.set_style("rock");
+        let tracks = c.tracks();
+        let pluck = tracks
+            .iter()
+            .find(|t| t.id == pluck_id)
+            .expect("плук в списке");
+        assert_eq!(pluck.volume, 0.0, "ручной список перетёрт стилем");
+        // Смена сида — тоже (гости сида не навязываются поверх ручного).
+        c.set_seed(999);
+        let tracks = c.tracks();
+        let pluck = tracks
+            .iter()
+            .find(|t| t.id == pluck_id)
+            .expect("плук в списке");
+        assert_eq!(pluck.volume, 0.0, "ручной список перетёрт сидом");
+        // Сброс: дефолты стиля и пометка снята.
+        let st = c.reset_instruments();
+        assert!(!st.instrument_list_edited, "пометка не снята сбросом");
+        let tracks = c.tracks();
+        let guitar = tracks
+            .iter()
+            .find(|t| t.name == "guitar")
+            .expect("гитара в списке");
+        assert!(guitar.volume > 0.0, "сброс не вернул состав стиля");
+        let _ = c.stop();
+    }
+
+    #[test]
+    fn style_change_rewrites_the_list_when_untouched() {
+        // Список не трогали: стиль и сид им управляют, как и раньше.
+        let c = PlaybackController::new();
+        c.start("club", 11, false);
+        c.set_style("rock");
+        let tracks = c.tracks();
+        let guitar = tracks
+            .iter()
+            .find(|t| t.name == "guitar")
+            .expect("гитара в списке");
+        assert!(guitar.volume > 0.0, "гитара рока не попала в состав");
+        let pluck = tracks
+            .iter()
+            .find(|t| t.name == "pluck")
+            .expect("плук в списке");
+        assert_eq!(pluck.volume, 0.0, "плук клуба остался в роке");
         let _ = c.stop();
     }
 

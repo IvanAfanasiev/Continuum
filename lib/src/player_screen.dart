@@ -978,8 +978,25 @@ class _MixPanelBody extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Микс',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              const Expanded(
+                child: Text('Микс',
+                    style:
+                        TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+              ),
+              // Кнопка сброса горит, только когда список правил слушатель:
+              // до этого стилю и сиду можно менять состав, после — нельзя.
+              IconButton(
+                onPressed: (c.status?.instrumentListEdited ?? false)
+                    ? c.resetInstruments
+                    : null,
+                icon: const Icon(Icons.restart_alt),
+                tooltip: 'Сбросить список инструментов к стилю',
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           _VolumeRow(
             icon: Icons.speed,

@@ -14,15 +14,14 @@ class EngineStats {
   final BigInt pushed;
   final BigInt consumed;
 
-  /// Ноты, потерянные из-за полной очереди: генератор обгоняет движок.
-  /// Ненулевое значение = ритм дырявит (пропадают доли).
+  /// Ноты, потерянные из-за полной очереди: генератор обгоняет
+  /// движок. Ненулевой счетчик = ритм дырявит (пропадают доли).
   final BigInt dropped;
 
   /// Ноты, прозвучавшие позже своей доли: ритм спотыкается.
-  final BigInt late;
+  final BigInt late_;
 
-  /// Пере-якорения сетки: генератор отставал, расписание переехало
-  /// на текущий кадр (слышно как сбой ритма).
+  /// Пере-якорения сетки: генератор отставал, расписание переехало.
   final BigInt reanchors;
   final BigInt queued;
 
@@ -44,7 +43,7 @@ class EngineStats {
     required this.pushed,
     required this.consumed,
     required this.dropped,
-    required this.late,
+    required this.late_,
     required this.reanchors,
     required this.queued,
     required this.audioConfig,
@@ -58,7 +57,7 @@ class EngineStats {
       pushed.hashCode ^
       consumed.hashCode ^
       dropped.hashCode ^
-      late.hashCode ^
+      late_.hashCode ^
       reanchors.hashCode ^
       queued.hashCode ^
       audioConfig.hashCode ^
@@ -74,7 +73,7 @@ class EngineStats {
           pushed == other.pushed &&
           consumed == other.consumed &&
           dropped == other.dropped &&
-          late == other.late &&
+          late_ == other.late_ &&
           reanchors == other.reanchors &&
           queued == other.queued &&
           audioConfig == other.audioConfig &&
@@ -121,8 +120,8 @@ class LiveVisual {
   final int bassHits;
   final int themeHits;
 
-  /// План фразы (бит = доля фразы): точки стоят до звучания,
-  /// рука делает оборот за фразу.
+  /// Ноты фразы (бит = доля фразы): настоящие ноты, рука делает
+  /// оборот за фразу.
   final int phraseLen;
   final int phrasePos;
 
@@ -133,7 +132,7 @@ class LiveVisual {
   final int pbass;
   final int ptheme;
 
-  /// Сыграно в текущей фразе (бит = доля фразы).
+  /// Доли фразы, где что-то звучало (бит = доля фразы).
   final int pplayed;
 
   const LiveVisual({
@@ -224,6 +223,10 @@ class PlaybackStatus {
   /// почему любимый сид звучит иначе после апдейта.
   final int engineVersion;
 
+  /// Список инструментов правил слушатель: стиль и сид его не трогают,
+  /// в миксе горит кнопка сброса.
+  final bool instrumentListEdited;
+
   const PlaybackStatus({
     required this.running,
     required this.paused,
@@ -234,6 +237,7 @@ class PlaybackStatus {
     required this.intensity,
     this.engineError,
     required this.engineVersion,
+    required this.instrumentListEdited,
   });
 
   @override
@@ -246,7 +250,8 @@ class PlaybackStatus {
       tempoBpm.hashCode ^
       intensity.hashCode ^
       engineError.hashCode ^
-      engineVersion.hashCode;
+      engineVersion.hashCode ^
+      instrumentListEdited.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -261,7 +266,8 @@ class PlaybackStatus {
           tempoBpm == other.tempoBpm &&
           intensity == other.intensity &&
           engineError == other.engineError &&
-          engineVersion == other.engineVersion;
+          engineVersion == other.engineVersion &&
+          instrumentListEdited == other.instrumentListEdited;
 }
 
 /// Стиль каталога для UI: имя и полка (`club`/`rock`/`chill`).
