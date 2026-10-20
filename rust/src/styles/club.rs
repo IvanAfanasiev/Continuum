@@ -211,7 +211,7 @@ impl Style for ClubStyle {
             poles: Some(SNARE_POLES),
             // Ролл в дроп: последний такт билда — 16-е с нарастанием.
             build_roll: true,
-            ..RoleGuide::kit(CLAP_W, 38, 0.95)
+            ..RoleGuide::kit(CLAP_W, 60, 0.95)
         };
         let hat = RoleGuide {
             energy_response: 1.2,
@@ -674,9 +674,10 @@ mod tests {
     fn all_pitches_are_kit_or_scale() {
         for (_, n) in render(99, 64) {
             // 808-й мелодический (следует за баслайном), остальные
-            // ударные — фиксированный набор.
+            // ударные — фиксированный набор. Клэп помечен высотой 60:
+            // по ней снейр играет клэпом, а не барабаном.
             if [KICK_ID, SNARE_ID, HAT_ID].contains(&n.instrument_id) {
-                assert!([36, 38, 42].contains(&n.midi_pitch));
+                assert!([36, 38, 42, 60].contains(&n.midi_pitch));
             } else {
                 assert!((28..=90).contains(&n.midi_pitch));
             }

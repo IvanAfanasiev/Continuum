@@ -75,6 +75,19 @@ fn analyze(path: &str) {
         }
         start += hop;
     }
+    // ВЧ-пик: однополюсный фильтр 2 кГц — транзиент виден отдельно от
+    // энергии (клик длится миллисекунды, в спектре энергии его нет).
+    let mut hp_state = 0.0f32;
+    let mut hp_prev = 0.0f32;
+    let a = (-2.0 * std::f32::consts::PI * 2000.0 / sr as f32).exp();
+    let mut hp_peak = 0.0f32;
+    for v in &s16 {
+        let x = *v as f32 / 32768.0;
+        let y = a * (hp_state + x - hp_prev);
+        hp_state = y;
+        hp_prev = x;
+        hp_peak = hp_peak.max(y.abs());
+    }
     // RMS по активной части (где есть сигнал): тишина не должна съедать
     // средний уровень инструмента.
     let total: f64 = energies.iter().sum::<f64>().max(1e-9);
@@ -84,7 +97,7 @@ fn analyze(path: &str) {
         .map(|((lo, _), e)| format!("{lo:.0}Hz:{:.0}%", 100.0 * e / total))
         .collect();
     println!(
-        "{:<28} peak={:5.1}dB rms={:5.1}dB crest={:4.1}dB | {}",
+        "{:<28} peak={:5.1}dB rms={:5.1}dB crest={:4.1}dB hp2k={:5.1}dB | {}",
         std::path::Path::new(path)
             .file_stem()
             .unwrap()
@@ -92,6 +105,7 @@ fn analyze(path: &str) {
         20.0 * (peak / 32768.0).max(1e-6).log10(),
         20.0 * (rms / 32768.0).max(1e-6).log10(),
         20.0 * (peak / rms.max(1e-6)).log10(),
+        20.0 * hp_peak.max(1e-6).log10(),
         pct.join(" ")
     );
 }

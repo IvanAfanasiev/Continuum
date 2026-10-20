@@ -6,12 +6,21 @@ use super::{
 /// Электро-снейр в духе 808: тональное тело + шум через резонансную
 /// полосу SVF (вместо грубой HP+LP связки — панч точнее, шипения меньше)
 /// + «snap» в первую миллисекунду.
+///
+/// Два характера по высоте ноты: низкая (MIDI ниже `CLAP_PITCH`) —
+/// барабан с корпусом, высокая — клэп 909 (корпуса почти нет, шум
+/// ярче и короче). Раньше высота игнорировалась, и клубный «клэп»
+/// звучал низким барабаном: 67% энергии ниже 120 Гц.
 const SNARE_LEN_SECS: f32 = 0.22;
+/// Порог «это клэп, а не барабан» (MIDI).
+const CLAP_PITCH: u8 = 55;
 const BODY_START_HZ: f32 = 190.0;
 const BODY_END_HZ: f32 = 120.0;
 const BODY_SWEEP: f32 = 30.0;
 const BODY_DECAY: f32 = 38.0;
 const NOISE_CENTER_HZ: f32 = 2200.0;
+/// Центр шума клэпа: выше и ярче, чем у барабана.
+const CLAP_NOISE_CENTER_HZ: f32 = 3000.0;
 const NOISE_Q: f32 = 0.9;
 const NOISE_DECAY: f32 = 22.0;
 const NOISE_GAIN: f32 = 1.0;
@@ -34,6 +43,8 @@ struct SnareVoice {
     body_env: ExpDecay,
     snap_env: ExpDecay,
     hiss_env: ExpDecay,
+    /// Клэп (высокая нота) или барабан: корпус и центр шума разные.
+    clap: bool,
 }
 
 impl Voice for SnareVoice {
@@ -51,6 +62,9 @@ impl Voice for SnareVoice {
         self.snap_env = ExpDecay::start(SNAP_DECAY, self.sample_rate);
         self.hiss_env = ExpDecay::start(NOISE_DECAY, self.sample_rate);
         self.bp.reset();
+        // Клэп или барабан: решает высота ноты (стиль задает характер
+        // инструмента, а не только тембр).
+        self.clap = note.midi_pitch >= CLAP_PITCH;
         self.noise = Noise::new(note_seed(note, 0x5A4E));
     }
 
@@ -64,13 +78,18 @@ impl Voice for SnareVoice {
         let freq = BODY_END_HZ + (BODY_START_HZ - BODY_END_HZ) * self.sweep_env.next();
         self.phase = (self.phase + freq / sample_rate) % 1.0;
         let body = sin01(self.phase) + 0.3 * sin01(self.phase * 2.0);
-        let body = body * self.body_env.next() * 0.7;
+        // У клэпа корпуса почти нет: хлопок — это шум, а не бочка.
+        let body_gain = if self.clap { 0.12 } else { 0.7 };
+        let body = body * self.body_env.next() * body_gain;
 
         let raw_noise = self.noise.sample();
         let snap = raw_noise * self.snap_env.next() * SNAP_GAIN;
-        let (_, hiss, _) = self
-            .bp
-            .process(raw_noise, NOISE_CENTER_HZ, NOISE_Q, sample_rate);
+        let center = if self.clap {
+            CLAP_NOISE_CENTER_HZ
+        } else {
+            NOISE_CENTER_HZ
+        };
+        let (_, hiss, _) = self.bp.process(raw_noise, center, NOISE_Q, sample_rate);
         let hiss = hiss * self.hiss_env.next() * NOISE_GAIN;
 
         let attack_raw = (self.t / ATTACK_SECS).min(1.0);
