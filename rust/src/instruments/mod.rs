@@ -1,31 +1,22 @@
 pub mod bass;
 pub mod dsp;
-pub mod festival;
-pub mod flute;
-pub mod formula;
-pub mod fuzz;
 pub mod guitar;
 pub mod hat;
 pub mod keys;
 pub mod kick;
 pub mod kick808;
-pub mod laser;
 pub mod pad;
 pub mod pluck;
-pub mod rain;
 pub mod shaker;
 pub mod snare;
 pub mod vinyl;
 pub mod vocal;
-pub mod wavetable;
 
 pub use bass::BassGuitar;
-pub use fuzz::FuzzVoice;
 pub use guitar::GuitarVoice;
 pub use hat::HiHat;
 pub use kick::Kick;
 pub use kick808::Kick808;
-pub use rain::Rain;
 pub use shaker::Shaker;
 pub use snare::SnareDrum;
 pub use vinyl::Vinyl;
@@ -146,17 +137,10 @@ pub enum Slot {
     Pluck = 6,
     Keys = 7,
     Kick808 = 8,
-    Laser = 9,
     Vinyl = 10,
     Vocal = 11,
-    Flute = 12,
-    Festival = 13,
     Guitar = 14,
-    Rain = 15,
-    Fuzz = 16,
     Shaker = 17,
-    Formula = 18,
-    Wavetable = 19,
     /// Соло-гитара (перебор/длинные линии): тот же DSP-ядро, что рифф,
     /// другой характер (сустейн, верх, лёгкий драйв) и свои направляющие.
     /// Добавлен позже остальных — номер следующий свободный.
@@ -164,7 +148,7 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const COUNT: usize = 20;
+    pub const COUNT: usize = 13;
     pub const ALL: [Slot; Slot::COUNT] = [
         Slot::Bass,
         Slot::Kick,
@@ -174,17 +158,10 @@ impl Slot {
         Slot::Pluck,
         Slot::Keys,
         Slot::Kick808,
-        Slot::Laser,
         Slot::Vinyl,
         Slot::Vocal,
-        Slot::Flute,
-        Slot::Festival,
         Slot::Guitar,
-        Slot::Rain,
-        Slot::Fuzz,
         Slot::Shaker,
-        Slot::Formula,
-        Slot::Wavetable,
         Slot::GuitarLead,
     ];
 
@@ -207,17 +184,10 @@ impl Slot {
             Slot::Pluck => "pluck",
             Slot::Keys => "keys",
             Slot::Kick808 => "kick808",
-            Slot::Laser => "laser",
             Slot::Vinyl => "vinyl",
             Slot::Vocal => "vocal",
-            Slot::Flute => "flute",
-            Slot::Festival => "festival",
             Slot::Guitar => "guitar",
-            Slot::Rain => "rain",
-            Slot::Fuzz => "fuzz",
             Slot::Shaker => "shaker",
-            Slot::Formula => "formula",
-            Slot::Wavetable => "wavetable",
             Slot::GuitarLead => "guitar lead",
         }
     }
@@ -232,14 +202,9 @@ impl Slot {
             Slot::Pluck => InstrumentRole::Lead,
             Slot::Keys => InstrumentRole::Chords,
             Slot::Kick808 => InstrumentRole::Kick,
-            Slot::Laser => InstrumentRole::Lead,
             Slot::Vinyl => InstrumentRole::Texture,
             Slot::Vocal => InstrumentRole::Vocal,
             Slot::Guitar | Slot::GuitarLead => InstrumentRole::Lead,
-            Slot::Rain => InstrumentRole::Texture,
-            Slot::Flute | Slot::Festival | Slot::Fuzz | Slot::Formula | Slot::Wavetable => {
-                InstrumentRole::Lead
-            }
         }
     }
 
@@ -250,23 +215,16 @@ impl Slot {
             Slot::Snare => Group::Snare,
             Slot::Hat | Slot::Shaker => Group::Hat,
             Slot::Pad | Slot::Keys => Group::Chords,
-            Slot::Pluck | Slot::Laser => Group::Lead,
+            Slot::Pluck | Slot::Guitar | Slot::GuitarLead => Group::Lead,
             Slot::Vocal => Group::Vocal,
-            Slot::Vinyl | Slot::Rain => Group::Texture,
-            Slot::Flute
-            | Slot::Festival
-            | Slot::Guitar
-            | Slot::Fuzz
-            | Slot::Formula
-            | Slot::Wavetable
-            | Slot::GuitarLead => Group::Lead,
+            Slot::Vinyl => Group::Texture,
         }
     }
 
     /// Каноническая громкость инструмента: единый источник уровней.
     /// Стиль решает только ВКЛ/ВЫКЛ (вайтлист), цифры живут здесь.
-    /// Фоновые шумы (винил/поле/дождь) намеренно тихие — вдвое ниже
-    /// музыкальных текстур, иначе забивают микс.
+    /// Фоновые шумы (винил) намеренно тихие — вдвое ниже музыкальных
+    /// текстур, иначе забивают микс.
     pub fn base_volume(self) -> f32 {
         match self {
             Slot::Bass => 0.9,
@@ -277,17 +235,10 @@ impl Slot {
             Slot::Pluck => 0.55,
             Slot::Keys => 0.65,
             Slot::Kick808 => 1.0,
-            Slot::Laser => 0.65,
             Slot::Vinyl => 0.25,
             Slot::Vocal => 0.6,
-            Slot::Flute => 0.5,
-            Slot::Festival => 0.55,
             Slot::Guitar => 0.6,
-            Slot::Rain => 0.2,
-            Slot::Fuzz => 0.7,
             Slot::Shaker => 0.55,
-            Slot::Formula => 0.55,
-            Slot::Wavetable => 0.55,
             Slot::GuitarLead => 0.6,
         }
     }
@@ -390,15 +341,10 @@ pub trait Voice: Send {
     }
 }
 
-use festival::FestivalVoice;
-use flute::FluteVoice;
-use formula::FormulaVoice;
 use keys::KeysVoice;
-use laser::LaserVoice;
 use pad::PadVoice;
 use pluck::PluckVoice;
 use vocal::VocalVoice;
-use wavetable::WavetableVoice;
 
 /// Любой голос полифонического пула. Enum вместо generic-параметра:
 /// конкретный тип в каждом варианте, динамическая диспетчеризация
@@ -408,14 +354,8 @@ pub(crate) enum AnyVoice {
     Pad(PadVoice),
     Pluck(PluckVoice),
     Keys(KeysVoice),
-    Laser(LaserVoice),
     Vocal(VocalVoice),
-    Flute(FluteVoice),
-    Festival(FestivalVoice),
     Guitar(GuitarVoice),
-    Fuzz(FuzzVoice),
-    Formula(FormulaVoice),
-    Wavetable(WavetableVoice),
 }
 
 impl Voice for AnyVoice {
@@ -424,14 +364,8 @@ impl Voice for AnyVoice {
             AnyVoice::Pad(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Pluck(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Keys(v) => v.set_sample_rate(sample_rate),
-            AnyVoice::Laser(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Vocal(v) => v.set_sample_rate(sample_rate),
-            AnyVoice::Flute(v) => v.set_sample_rate(sample_rate),
-            AnyVoice::Festival(v) => v.set_sample_rate(sample_rate),
             AnyVoice::Guitar(v) => v.set_sample_rate(sample_rate),
-            AnyVoice::Fuzz(v) => v.set_sample_rate(sample_rate),
-            AnyVoice::Formula(v) => v.set_sample_rate(sample_rate),
-            AnyVoice::Wavetable(v) => v.set_sample_rate(sample_rate),
         }
     }
 
@@ -440,14 +374,8 @@ impl Voice for AnyVoice {
             AnyVoice::Pad(v) => v.trigger(note),
             AnyVoice::Pluck(v) => v.trigger(note),
             AnyVoice::Keys(v) => v.trigger(note),
-            AnyVoice::Laser(v) => v.trigger(note),
             AnyVoice::Vocal(v) => v.trigger(note),
-            AnyVoice::Flute(v) => v.trigger(note),
-            AnyVoice::Festival(v) => v.trigger(note),
             AnyVoice::Guitar(v) => v.trigger(note),
-            AnyVoice::Fuzz(v) => v.trigger(note),
-            AnyVoice::Formula(v) => v.trigger(note),
-            AnyVoice::Wavetable(v) => v.trigger(note),
         }
     }
 
@@ -456,14 +384,8 @@ impl Voice for AnyVoice {
             AnyVoice::Pad(v) => v.next_sample(),
             AnyVoice::Pluck(v) => v.next_sample(),
             AnyVoice::Keys(v) => v.next_sample(),
-            AnyVoice::Laser(v) => v.next_sample(),
             AnyVoice::Vocal(v) => v.next_sample(),
-            AnyVoice::Flute(v) => v.next_sample(),
-            AnyVoice::Festival(v) => v.next_sample(),
             AnyVoice::Guitar(v) => v.next_sample(),
-            AnyVoice::Fuzz(v) => v.next_sample(),
-            AnyVoice::Formula(v) => v.next_sample(),
-            AnyVoice::Wavetable(v) => v.next_sample(),
         }
     }
 
@@ -472,14 +394,8 @@ impl Voice for AnyVoice {
             AnyVoice::Pad(v) => v.is_active(),
             AnyVoice::Pluck(v) => v.is_active(),
             AnyVoice::Keys(v) => v.is_active(),
-            AnyVoice::Laser(v) => v.is_active(),
             AnyVoice::Vocal(v) => v.is_active(),
-            AnyVoice::Flute(v) => v.is_active(),
-            AnyVoice::Festival(v) => v.is_active(),
             AnyVoice::Guitar(v) => v.is_active(),
-            AnyVoice::Fuzz(v) => v.is_active(),
-            AnyVoice::Formula(v) => v.is_active(),
-            AnyVoice::Wavetable(v) => v.is_active(),
         }
     }
 
@@ -488,14 +404,8 @@ impl Voice for AnyVoice {
             AnyVoice::Pad(v) => v.reset(),
             AnyVoice::Pluck(v) => v.reset(),
             AnyVoice::Keys(v) => v.reset(),
-            AnyVoice::Laser(v) => v.reset(),
             AnyVoice::Vocal(v) => v.reset(),
-            AnyVoice::Flute(v) => v.reset(),
-            AnyVoice::Festival(v) => v.reset(),
             AnyVoice::Guitar(v) => v.reset(),
-            AnyVoice::Fuzz(v) => v.reset(),
-            AnyVoice::Formula(v) => v.reset(),
-            AnyVoice::Wavetable(v) => v.reset(),
         }
     }
 }
@@ -681,42 +591,12 @@ impl VoicePool {
         )
     }
 
-    pub fn lasers(id: usize, count: usize) -> Self {
-        Self::with_voices(
-            id,
-            InstrumentRole::Lead,
-            (0..count)
-                .map(|_| AnyVoice::Laser(LaserVoice::default()))
-                .collect(),
-        )
-    }
-
     pub fn vocals(id: usize, count: usize) -> Self {
         Self::with_voices(
             id,
             InstrumentRole::Vocal,
             (0..count)
                 .map(|_| AnyVoice::Vocal(VocalVoice::default()))
-                .collect(),
-        )
-    }
-
-    pub fn flutes(id: usize, count: usize) -> Self {
-        Self::with_voices(
-            id,
-            InstrumentRole::Lead,
-            (0..count)
-                .map(|_| AnyVoice::Flute(FluteVoice::default()))
-                .collect(),
-        )
-    }
-
-    pub fn festivals(id: usize, count: usize) -> Self {
-        Self::with_voices(
-            id,
-            InstrumentRole::Lead,
-            (0..count)
-                .map(|_| AnyVoice::Festival(FestivalVoice::default()))
                 .collect(),
         )
     }
@@ -744,38 +624,8 @@ impl VoicePool {
         )
     }
 
-    pub fn fuzzes(id: usize, count: usize) -> Self {
-        Self::with_voices(
-            id,
-            InstrumentRole::Lead,
-            (0..count)
-                .map(|_| AnyVoice::Fuzz(FuzzVoice::default()))
-                .collect(),
-        )
-    }
-
     /// Формульный лид: функция времени вместо осциллятора.
-    pub fn formulas(id: usize, count: usize) -> Self {
-        Self::with_voices(
-            id,
-            InstrumentRole::Lead,
-            (0..count)
-                .map(|_| AnyVoice::Formula(FormulaVoice::default()))
-                .collect(),
-        )
-    }
-
     /// Вейвтейбл-лид: круговая волна из таблицы вместо осциллятора.
-    pub fn wavetables(id: usize, count: usize) -> Self {
-        Self::with_voices(
-            id,
-            InstrumentRole::Lead,
-            (0..count)
-                .map(|_| AnyVoice::Wavetable(WavetableVoice::default()))
-                .collect(),
-        )
-    }
-
     fn steal_or_free(&mut self) -> (usize, bool) {
         self.clock += 1;
         for (i, voice) in self.voices.iter().enumerate() {
@@ -918,17 +768,10 @@ mod tests {
             (Pluck, 6),
             (Keys, 7),
             (Kick808, 8),
-            (Laser, 9),
             (Vinyl, 10),
             (Vocal, 11),
-            (Flute, 12),
-            (Festival, 13),
             (Guitar, 14),
-            (Rain, 15),
-            (Fuzz, 16),
             (Shaker, 17),
-            (Formula, 18),
-            (Wavetable, 19),
             (GuitarLead, 20),
         ];
         assert_eq!(frozen.len(), Slot::COUNT);

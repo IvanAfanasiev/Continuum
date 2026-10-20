@@ -4,17 +4,24 @@ use super::{
 };
 use crate::core::midi_to_freq;
 
-/// Хор: унисон-октава-квинта чистого строя через одну гласную «ah»
-/// с медленным переходом в «oh» внутри ноты. Долгая атака, долгое
-/// кольцо, вибрато — около-хоровое пение вместо лидовых чопов.
-/// Дыхание — едва слышный воздух. Узнаваемость дает сильный дилэй
-/// на мастере (сенд роли Vocal).
-const VIBRATO_HZ: f32 = 5.2;
-const VIBRATO_DEPTH: f32 = 0.006;
-/// Стек хора: корень, квинта 3/2, октава. Чистый строй держит
-/// аккорд без биений — много голосов, один организм.
-const CHOIR_PARTIALS: [(f32, f32); 3] = [(1.0, 0.5), (1.5, 0.3), (2.0, 0.25)];
-/// Гласная плывет ah → oh за ноту: хор живой, а не сэмплерный.
+/// Оперный голос: сольный певческий тембр (не хор) с богатым
+/// спектром, поздним широким вибрато и портаменто между нотами.
+/// Гласная «ah» медленно плывёт в «oh» внутри ноты. Дыхание — едва
+/// слышный воздух. Узнаваемость дает сильный дилэй на мастере
+/// (сенд роли Vocal).
+///
+/// Вибрато оперное: шире и медленнее хорового и приходит не сразу —
+/// сначала голос стоит прямо, вибрато разливается к концу фразы.
+const VIBRATO_HZ: f32 = 5.6;
+const VIBRATO_DEPTH: f32 = 0.013;
+/// Сколько секунд проходит до полного размаха вибрато.
+const VIBRATO_RAMP_SECS: f32 = 0.45;
+/// Спектр сольного голоса: основной тон плюс естественные обертоны.
+/// Хора тут нет (несколько голосов с квинтой) — один певец.
+const SOLO_PARTIALS: [(f32, f32); 3] = [(1.0, 0.55), (2.0, 0.22), (3.0, 0.1)];
+/// Портаменто: голос идёт к новой высоте, а не начинает заново.
+const PORTAMENTO_SECS: f32 = 0.09;
+/// Гласная плывет ah → oh за ноту: голос живой, а не сэмплерный.
 const AH: (f32, f32) = (730.0, 1090.0);
 const OH: (f32, f32) = (500.0, 860.0);
 /// Формантный резонанс: гласная читается, но не свистит.
@@ -47,6 +54,8 @@ pub struct VocalVoice {
     breath_bp: Svf,
     noise: Noise,
     frequency: f32,
+    /// Куда голос идет портаменто (текущая высота — frequency).
+    target_frequency: f32,
     gain: f32,
     t: f32,
     ring_secs: f32,
@@ -65,6 +74,7 @@ impl Voice for VocalVoice {
 
     fn trigger(&mut self, note: &NoteEvent) {
         self.frequency = midi_to_freq(note.midi_pitch);
+        self.target_frequency = self.frequency;
         let ring = (note.duration_secs * RING_STRETCH).clamp(0.05, MAX_RING_SECS);
         self.ring_secs = ring;
         self.samples_left = (ring * self.sample_rate) as usize;
@@ -74,8 +84,8 @@ impl Voice for VocalVoice {
         self.form1.reset();
         self.form2.reset();
         self.breath_bp.reset();
-        // Гласная одна на всех («ah» → «oh» внутри ноты): хор поет
-        // хором, а не слогами по нотам. Шум детерминирован нотой.
+        // Гласная одна на всех («ah» → «oh» внутри ноты): певец держит
+        // тембр, а не меняет слоги по нотам. Шум детерминирован нотой.
         self.f1_hz = AH.0;
         self.f2_hz = AH.1;
         self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
@@ -97,16 +107,21 @@ impl Voice for VocalVoice {
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sample_rate) % 1.0;
-        let wobble = 1.0 + VIBRATO_DEPTH * sin01(self.vib_phase);
+        // Вибрато разливается к концу фразы: сначала голос стоит прямо.
+        let vib_ramp = (self.t / VIBRATO_RAMP_SECS).min(1.0);
+        let wobble = 1.0 + VIBRATO_DEPTH * vib_ramp * sin01(self.vib_phase);
+        // Портаменто: голос идет к цели, а не прыгает на новую высоту.
+        let glide_k = (-1.0 / (sample_rate * PORTAMENTO_SECS)).exp();
+        self.frequency += (self.target_frequency - self.frequency) * (1.0 - glide_k);
         // Scoop: голос въезжает снизу (−4% за 30 мс), как живой onset.
         let scoop = 1.0 - 0.04 * self.scoop_env.next();
         let freq = self.frequency * wobble * scoop;
 
         self.phase = (self.phase + freq / sample_rate) % 4096.0;
-        // Стек хора вместо пил: три синуса чистого строя.
+        // Спектр сольного голоса: основной тон и обертоны, без хора.
         // Только синусы — алиасинга нет по построению.
         let mut raw = 0.0;
-        for (ratio, amp) in CHOIR_PARTIALS {
+        for (ratio, amp) in SOLO_PARTIALS {
             raw += sin01(self.phase * ratio) * amp;
         }
 
@@ -129,6 +144,20 @@ impl Voice for VocalVoice {
 
     fn is_active(&self) -> bool {
         self.samples_left > 0
+    }
+
+    fn has_legato(&self) -> bool {
+        true
+    }
+
+    fn legato(&mut self, note: &NoteEvent) {
+        // Портаменто: голос поет следующую ноту, не начиная заново —
+        // оперная фраза едет голосом, а не отдельными слогами.
+        self.target_frequency = midi_to_freq(note.midi_pitch);
+        let ring = (note.duration_secs * RING_STRETCH).clamp(0.05, MAX_RING_SECS);
+        self.ring_secs = ring;
+        self.samples_left = self.samples_left.max((ring * self.sample_rate) as usize);
+        self.gain = self.gain.max(note.velocity);
     }
 
     fn reset(&mut self) {
@@ -183,7 +212,7 @@ mod tests {
         // Мягкий вход: первые 30 мс заметно тише середины ноты.
         assert!(
             rms(0, 1323) < rms(8820, 22050) * 0.5,
-            "choir barks instead of swelling"
+            "voice barks instead of swelling"
         );
         // Строй: середина ноты — ля (220 Гц ± толерантность).
         let late = peak_near(&out[22050..44100], sr, 200.0, 240.0);
@@ -216,9 +245,9 @@ mod tests {
     }
 
     #[test]
-    fn choir_sings_one_vowel_with_fifth_and_octave() {
-        // Хор, а не чопы: гласная одна на всех нотах («ah» на старте),
-        // а спектр держит квинту и октаву чистого строя.
+    fn solo_voice_sings_one_vowel() {
+        // Голос, а не чопы: гласная одна на всех нотах («ah» на старте),
+        // спектр сольный (основной тон и обертоны).
         let sr = 44_100.0;
         for pitch in 60..72u8 {
             let mut v = VocalVoice::default();
@@ -226,7 +255,8 @@ mod tests {
             v.trigger(&NoteEvent::new(11, pitch, 0.9, 1.0));
             assert_eq!((v.f1_hz, v.f2_hz), (AH.0, AH.1));
         }
-        // Спектр ноты A3: пики на 220, 330 (квинта), 440 (октава).
+        // Спектр ноты A3: пики на 220 (основной), 440 (октава), 660.
+        // Сольный голос: хоровой квинты 3/2 в спектре нет.
         let mut v = VocalVoice::default();
         v.set_sample_rate(sr);
         v.trigger(&NoteEvent::new(11, 57, 0.9, 1.5));
@@ -246,7 +276,10 @@ mod tests {
         };
         let root = mag_at(220.0);
         assert!(root > 1e-4, "no fundamental: {root}");
-        assert!(mag_at(330.0) > root * 0.05, "no fifth in choir stack");
-        assert!(mag_at(440.0) > root * 0.05, "no octave in choir stack");
+        assert!(mag_at(440.0) > root * 0.05, "no octave in solo stack");
+        assert!(
+            mag_at(330.0) < root * 0.05,
+            "хоровая квинта в сольном голосе"
+        );
     }
 }

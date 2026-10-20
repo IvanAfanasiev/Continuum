@@ -34,9 +34,6 @@ const SUB_PH: &[f32] = &[
 const VOCAL_PH: &[f32] = &[
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-const LEAD_PH: &[f32] = &[
-    0.8, 0.0, 0.4, 0.0, 0.5, 0.0, 0.4, 0.0, 0.5, 0.0, 0.4, 0.0, 0.5, 0.0, 0.4, 0.3,
-];
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
@@ -98,8 +95,8 @@ impl Style for PhonkStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Ядро без колокола: кик, 808, саб, снейр, хэты, шейкер-песок,
-        // тёмные клавиши и формульная тень дропа.
+        // Ядро без колокола: кик, 808, саб, снейр, хэты, шейкер-песок
+        // и тёмные клавиши.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -108,7 +105,6 @@ impl Style for PhonkStyle {
             Slot::Keys,
             Slot::Kick808,
             Slot::Shaker,
-            Slot::Formula,
         ]
     }
 
@@ -201,17 +197,6 @@ impl Style for PhonkStyle {
             bass_top: 41,
             ..RoleGuide::pitched(SUB_PH, 0, -1, 0, 1.0, 0.95)
         };
-        let laser = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
-        };
         let vinyl = RoleGuide {
             duration_mult: 200.0,
             vel_base: 0.2,
@@ -231,28 +216,6 @@ impl Style for PhonkStyle {
             },
             ..RoleGuide::pitched(VOCAL_PH, 2, 2, 3, 3.0, 0.45)
         };
-        let flute = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.5,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
-        };
-        let festival = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
-        };
         let guitar = RoleGuide {
             energy_response: 1.0,
             duration_mult: 1.5,
@@ -264,22 +227,6 @@ impl Style for PhonkStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
         };
-        let rain = RoleGuide {
-            duration_mult: 150.0,
-            vel_base: 0.2,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.2)
-        };
-        let fuzz = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
-        };
         let shaker = RoleGuide {
             energy_response: 1.2,
             duration_mult: 0.4,
@@ -287,34 +234,6 @@ impl Style for PhonkStyle {
             vel_energy: 0.2,
             vel_jitter: 0.08,
             ..RoleGuide::kit(SHK_PH, 60, 0.55)
-        };
-        // Формульная тень: мотив терцией выше клавиш, дроп-отклик.
-        let formula = RoleGuide {
-            energy_response: 2.0,
-            duration_mult: 0.9,
-            vel_base: 0.45,
-            vel_energy: 0.3,
-            vel_jitter: 0.07,
-            voice: Voicing::Scale {
-                degree: 2,
-                octave: 2,
-                jitter: 1,
-            },
-            follow_motif: true,
-            phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_PH, 2, 2, 1, 0.9, 0.45)
-        };
-        // Вейвтейбл вне автомикса: ручная краска для фронта.
-        let wavetable = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
         };
         // Соло-гитара вне автомикса phonk: ручная краска для фронта.
         let guitar_lead = RoleGuide {
@@ -337,17 +256,10 @@ impl Style for PhonkStyle {
             pluck,
             keys,
             kick808,
-            laser,
             vinyl,
             vocal,
-            flute,
-            festival,
             guitar,
-            rain,
-            fuzz,
             shaker,
-            formula,
-            wavetable,
             guitar_lead,
         ]
     }
@@ -357,7 +269,6 @@ impl Style for PhonkStyle {
 mod tests {
     use super::super::{render_style, StepContext};
     use super::*;
-    use crate::playback::FORMULA_ID;
 
     fn render(seed: u64, steps: usize) -> Vec<(usize, crate::instruments::NoteEvent)> {
         let style = PhonkStyle::new();
@@ -405,37 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn formula_shadows_keys_a_third_up() {
-        // Формульная тень — гетерофония: тот же мотив терцией выше клавиш.
-        let style = PhonkStyle::new();
-        let guides = style.slot_guides();
-        let at = |slot: Slot| {
-            Slot::ALL
-                .iter()
-                .position(|s| *s == slot)
-                .map(|i| &guides[i])
-                .unwrap()
-        };
-        let (keys, formula) = (at(Slot::Keys), at(Slot::Formula));
-        let deg = |g: &RoleGuide| match g.voice {
-            Voicing::Scale {
-                degree,
-                octave,
-                jitter,
-            } => (degree, octave, jitter),
-            _ => (0, 0, 0),
-        };
-        let (kd, _, _) = deg(keys);
-        let (fd, _, _) = deg(formula);
-        assert!(formula.follow_motif, "formula must follow the motif");
-        assert_eq!(fd, kd + 2, "formula must sit a third above keys");
-        assert!(
-            style.ensemble().contains(&Slot::Formula),
-            "formula must be in phonk mix"
-        );
-    }
-
-    #[test]
     fn kick808_stays_sub() {
         // 808 — бас, а не лид: регистровый кап рефа (F2).
         let style = PhonkStyle::new();
@@ -449,15 +329,5 @@ mod tests {
         // Реф: снейр только на 3 (шаг 8), на 2-м шаге тишина.
         assert_eq!(SNARE_PH[8], 1.0, "snare must crack on 3");
         assert_eq!(SNARE_PH[4], 0.0, "no backbeat on 2: phonk is half-time");
-    }
-
-    #[test]
-    fn formula_sounds_in_phonk_drop() {
-        let notes = render(11, 512);
-        let hits = notes
-            .iter()
-            .filter(|(_, n)| n.instrument_id == FORMULA_ID)
-            .count();
-        assert!(hits >= 8, "formula silent in phonk: {hits}");
     }
 }

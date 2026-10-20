@@ -21,8 +21,8 @@ use crate::composer::{Composer, LiveTempo};
 use crate::core::{normalize_tempo, snapshot, DEFAULT_SEED, NOTE_QUEUE_CAPACITY};
 use crate::engine::{f32_identity, AudioEngine, MasterFx, Pump, SharedFx};
 use crate::instruments::{
-    BassGuitar, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Rain, Shaker, Slot, SnareDrum,
-    Vinyl, VoicePool,
+    BassGuitar, Group, HiHat, Instrument, Kick, Kick808, NoteEvent, Shaker, Slot, SnareDrum, Vinyl,
+    VoicePool,
 };
 use crate::mixer::MixerState;
 use crate::styles::{self, Style};
@@ -35,17 +35,10 @@ pub const HAT_ID: usize = 5;
 pub const PLUCK_ID: usize = 6;
 pub const KEYS_ID: usize = 7;
 pub const KICK808_ID: usize = 8;
-pub const LASER_ID: usize = 9;
 pub const VINYL_ID: usize = 10;
 pub const VOCAL_ID: usize = 11;
-pub const FLUTE_ID: usize = 12;
-pub const FESTIVAL_ID: usize = 13;
 pub const GUITAR_ID: usize = 14;
-pub const RAIN_ID: usize = 15;
-pub const FUZZ_ID: usize = 16;
 pub const SHAKER_ID: usize = 17;
-pub const FORMULA_ID: usize = 18;
-pub const WAVETABLE_ID: usize = 19;
 pub const GUITAR_LEAD_ID: usize = 20;
 
 /// Все id ансамбля — для валидации `set_track` из Flutter.
@@ -58,17 +51,10 @@ pub const ENSEMBLE_IDS: [usize; Slot::COUNT] = [
     PLUCK_ID,
     KEYS_ID,
     KICK808_ID,
-    LASER_ID,
     VINYL_ID,
     VOCAL_ID,
-    FLUTE_ID,
-    FESTIVAL_ID,
     GUITAR_ID,
-    RAIN_ID,
-    FUZZ_ID,
     SHAKER_ID,
-    FORMULA_ID,
-    WAVETABLE_ID,
     GUITAR_LEAD_ID,
 ];
 
@@ -196,7 +182,8 @@ pub struct StyleMeta {
     pub group: String,
 }
 
-pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
+/// Набор инструментов движка: по слоту — свой голос.
+pub fn build_instruments() -> Vec<Box<dyn Instrument>> {
     Slot::ALL
         .iter()
         .map(|slot| -> Box<dyn Instrument> {
@@ -209,17 +196,10 @@ pub(crate) fn build_instruments() -> Vec<Box<dyn Instrument>> {
                 Slot::Pluck => Box::new(VoicePool::plucks(slot.id(), 6)),
                 Slot::Keys => Box::new(VoicePool::keys(slot.id(), 8)),
                 Slot::Kick808 => Box::new(Kick808::new(slot.id())),
-                Slot::Laser => Box::new(VoicePool::lasers(slot.id(), 5)),
                 Slot::Vinyl => Box::new(Vinyl::new(slot.id())),
                 Slot::Vocal => Box::new(VoicePool::vocals(slot.id(), 4)),
-                Slot::Flute => Box::new(VoicePool::flutes(slot.id(), 4)),
-                Slot::Festival => Box::new(VoicePool::festivals(slot.id(), 6)),
                 Slot::Guitar => Box::new(VoicePool::guitars(slot.id(), 6)),
-                Slot::Rain => Box::new(Rain::new(slot.id())),
-                Slot::Fuzz => Box::new(VoicePool::fuzzes(slot.id(), 4)),
                 Slot::Shaker => Box::new(Shaker::new(slot.id())),
-                Slot::Formula => Box::new(VoicePool::formulas(slot.id(), 4)),
-                Slot::Wavetable => Box::new(VoicePool::wavetables(slot.id(), 4)),
                 Slot::GuitarLead => Box::new(VoicePool::guitar_leads(slot.id(), 4)),
             }
         })
@@ -1451,26 +1431,23 @@ mod tests {
         assert!(vol(SNARE_ID) > 0.0);
         assert!(vol(HAT_ID) > 0.0);
         assert_eq!(vol(KICK808_ID), 0.0);
-        assert_eq!(vol(LASER_ID), 0.0);
         assert!(vol(PLUCK_ID) > 0.0);
         assert!(vol(KEYS_ID) > 0.0);
         assert!(vol(SHAKER_ID) > 0.0);
         assert_eq!(vol(VINYL_ID), 0.0);
-        // Гость из пула (бюджет 0–1): хор либо есть, либо нет.
-        // Кислота в автомикс не ходит (только вручную).
+        // Гостей у club больше нет: состав задан стилем и миксом.
         let guests: Vec<u64> = tracks
             .iter()
             .filter(|t| {
                 t.volume > 0.0
                     && ![
                         BASS_ID, KICK_ID, SNARE_ID, HAT_ID, PLUCK_ID, KEYS_ID, SHAKER_ID,
-                        FORMULA_ID,
                     ]
                     .contains(&(t.id as usize))
             })
             .map(|t| t.id)
             .collect();
-        assert!(guests.len() <= 1, "guests: {guests:?}");
+        assert!(guests.is_empty(), "guests: {guests:?}");
         for id in &guests {
             let slot = Slot::from_id(*id as usize).expect("known slot");
             assert!([Slot::Vocal].contains(&slot), "stranger guest: {slot:?}");
@@ -2130,8 +2107,8 @@ mod tests {
     #[test]
     fn style_ensembles_match_character() {
         // Характер дефолтных наборов из референсов пользователя:
-        // club — битмейкер (бочка, снейр, хэты, саб, винил) + гости;
-        // lofi — винил, Rhodes, флейта, гитара и дождь, без лазера и 808.
+        // club — битмейкер (бочка, снейр, хэты, саб) + Rhodes и шейкер;
+        // lofi — винил, Rhodes, гитара, без 808.
         let ensemble_of = |style: &str| styles::make_style(style).unwrap().ensemble().to_vec();
         use Slot::*;
 
@@ -2139,26 +2116,18 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Pluck, Keys, Shaker] {
             assert!(club.contains(&s), "club: {s:?} missing");
         }
-        for s in [
-            Pad, Laser, Vocal, Flute, Guitar, Rain, Festival, Fuzz, Kick808, Vinyl, Wavetable,
-            Formula,
-        ] {
+        for s in [Pad, Vocal, Guitar, Kick808, Vinyl, GuitarLead] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
         }
-        // Формула — гость по сиду, а не резидент (см. flex_pool).
-        let club_flex = styles::make_style("club").unwrap().flex_pool().to_vec();
-        assert!(club_flex.contains(&Formula), "club: Formula guest lost");
+        // Гостей у club больше нет: состав задаёт стиль и микс.
 
         let lofi = ensemble_of("lofi");
-        for s in [Bass, Kick, Pad, Snare, Hat, Keys, Vinyl, Flute, Guitar] {
+        for s in [Bass, Kick, Pad, Snare, Hat, Keys, Vinyl, Guitar] {
             assert!(lofi.contains(&s), "lofi: {s:?} missing");
         }
         // Плак вне дефолта: поверх Rhodes и гитары дает кашу —
-        // включается вручную. Дождь тоже ручной (винил один держит
-        // подложку). Остальные чужие — тоже вне набора.
-        for s in [
-            Pluck, Kick808, Laser, Vocal, Festival, Formula, Rain, Wavetable,
-        ] {
+        // включается вручную. Остальные чужие — тоже вне набора.
+        for s in [Pluck, Kick808, Vocal, GuitarLead] {
             assert!(!lofi.contains(&s), "lofi: {s:?} should be off");
         }
 
@@ -2176,22 +2145,17 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Guitar, GuitarLead] {
             assert!(rock.contains(&s), "rock: {s:?} missing");
         }
-        for s in [
-            Pad, Keys, Laser, Vocal, Vinyl, Rain, Flute, Festival, Kick808, Pluck, Formula,
-            Wavetable, Fuzz,
-        ] {
+        for s in [Pad, Keys, Vocal, Vinyl, Kick808, Pluck] {
             assert!(!rock.contains(&s), "rock: {s:?} should be off");
         }
 
-        // Phonk без колокола: кик, 808, саб, снейр, хэты, шейкер,
-        // тёмные клавиши и формульная тень. Хор — редкий гость.
+        // Phonk без колокола: кик, 808, саб, снейр, хэты, шейкер
+        // и тёмные клавиши.
         let phonk = ensemble_of("phonk");
-        for s in [Bass, Kick, Snare, Hat, Keys, Kick808, Shaker, Formula] {
+        for s in [Bass, Kick, Snare, Hat, Keys, Kick808, Shaker] {
             assert!(phonk.contains(&s), "phonk: {s:?} missing");
         }
-        for s in [
-            Pad, Pluck, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz, Wavetable,
-        ] {
+        for s in [Pad, Pluck, Vocal, Vinyl, Guitar, GuitarLead] {
             assert!(!phonk.contains(&s), "phonk: {s:?} should be off");
         }
 
@@ -2200,10 +2164,7 @@ mod tests {
         for s in [Bass, Kick, Snare, Hat, Pluck] {
             assert!(proto.contains(&s), "proto: {s:?} missing");
         }
-        for s in [
-            Pad, Keys, Laser, Vocal, Vinyl, Flute, Guitar, Rain, Festival, Fuzz, Kick808, Shaker,
-            Formula, Wavetable,
-        ] {
+        for s in [Pad, Keys, Vocal, Vinyl, Guitar, GuitarLead, Kick808, Shaker] {
             assert!(!proto.contains(&s), "proto: {s:?} should be off");
         }
     }
@@ -2211,10 +2172,9 @@ mod tests {
     #[test]
     fn flex_lottery_follows_weights() {
         // Взвешенная лотерея: детерминирована сидом, бюджет держится.
-        // Пул club — одна формула: сиды чередуют «гость есть / нет».
-        let style = styles::make_style("club").expect("club");
-        let mut empty = 0;
-        let mut formula = 0;
+        // Пул lofi — вокал: гость приходит из пула, лишнего не бывает.
+        let style = styles::make_style("lofi").expect("lofi");
+        let mut guests_seen = 0;
         for seed in 0..64u64 {
             let picked = pick_flex_slots(&*style, seed);
             assert_eq!(picked, pick_flex_slots(&*style, seed), "not deterministic");
@@ -2223,17 +2183,11 @@ mod tests {
             for s in &picked {
                 assert!(style.flex_pool().contains(s), "stranger guest: {s:?}");
             }
-            if picked.is_empty() {
-                empty += 1;
-            } else {
-                formula += 1;
+            if !picked.is_empty() {
+                guests_seen += 1;
             }
         }
-        // Оба исхода выпадают: гость — специя, а не константа.
-        assert!(
-            empty > 0 && formula > 0,
-            "lottery stuck: empty={empty} formula={formula}"
-        );
+        assert!(guests_seen > 0, "lottery never picked a guest");
     }
 
     #[test]
@@ -2258,12 +2212,12 @@ mod tests {
     }
 
     #[test]
-    fn flex_guests_depend_on_seed() {
-        // Гости меняются от сида (но всегда из пула), ядро стабильно.
+    fn flex_guests_stay_in_the_style_pool() {
+        // Гость приходит из пула стиля и только из него: чужих слотов
+        // в составе быть не может.
         use std::collections::HashSet;
-        let style = styles::make_style("club").expect("club");
+        let style = styles::make_style("lofi").expect("lofi");
         let core: HashSet<Slot> = style.ensemble().iter().copied().collect();
-        let mut variants = HashSet::new();
         for seed in 0..16u64 {
             let mut mixer = MixerState::new();
             apply_style_mix(&*style, &mut mixer, seed);
@@ -2291,8 +2245,6 @@ mod tests {
                 "seed {seed}: {} guests outside {min}..={max}",
                 guests.len()
             );
-            variants.insert(guests);
         }
-        assert!(variants.len() > 1, "guests never vary");
     }
 }

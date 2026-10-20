@@ -1575,12 +1575,11 @@ mod tests {
         // Мини-микс всего ансамбля через тот же RenderState, что и live:
         // конечность + вменяемый уровень.
         use crate::instruments::{
-            BassGuitar, HiHat, Kick, Kick808, NoteEvent, Rain, SnareDrum, Vinyl, VoicePool,
+            BassGuitar, HiHat, Kick, Kick808, NoteEvent, SnareDrum, Vinyl, VoicePool,
         };
         use crate::playback::{
-            BASS_ID, FESTIVAL_ID, FLUTE_ID, FORMULA_ID, FUZZ_ID, GUITAR_ID, HAT_ID, KEYS_ID,
-            KICK808_ID, KICK_ID, LASER_ID, PAD_ID, PLUCK_ID, RAIN_ID, SNARE_ID, VINYL_ID, VOCAL_ID,
-            WAVETABLE_ID,
+            BASS_ID, GUITAR_ID, HAT_ID, KEYS_ID, KICK808_ID, KICK_ID, PAD_ID, PLUCK_ID, SHAKER_ID,
+            SNARE_ID, VINYL_ID, VOCAL_ID,
         };
         let sr = 44_100.0;
         let insts: Vec<Box<dyn Instrument>> = vec![
@@ -1592,16 +1591,10 @@ mod tests {
             Box::new(VoicePool::plucks(PLUCK_ID, 6)),
             Box::new(VoicePool::keys(KEYS_ID, 8)),
             Box::new(Kick808::new(KICK808_ID)),
-            Box::new(VoicePool::lasers(LASER_ID, 5)),
             Box::new(Vinyl::new(VINYL_ID)),
             Box::new(VoicePool::vocals(VOCAL_ID, 4)),
-            Box::new(VoicePool::flutes(FLUTE_ID, 4)),
-            Box::new(VoicePool::festivals(FESTIVAL_ID, 6)),
             Box::new(VoicePool::guitars(GUITAR_ID, 6)),
-            Box::new(Rain::new(RAIN_ID)),
-            Box::new(VoicePool::fuzzes(FUZZ_ID, 4)),
-            Box::new(VoicePool::formulas(FORMULA_ID, 4)),
-            Box::new(VoicePool::wavetables(WAVETABLE_ID, 4)),
+            Box::new(crate::instruments::Shaker::new(SHAKER_ID)),
         ];
         let mut state = RenderState::new(insts, sr);
         let volumes: Vec<(usize, f32)> = crate::playback::ENSEMBLE_IDS
@@ -1617,16 +1610,10 @@ mod tests {
             (PLUCK_ID, 72, 0.7, 0.3),
             (KEYS_ID, 60, 0.6, 1.0),
             (KICK808_ID, 36, 1.0, 0.1),
-            (LASER_ID, 76, 0.7, 0.3),
             (VINYL_ID, 60, 0.5, 2.0),
             (VOCAL_ID, 69, 0.7, 0.4),
-            (FLUTE_ID, 72, 0.7, 1.0),
-            (FESTIVAL_ID, 79, 0.7, 0.3),
             (GUITAR_ID, 64, 0.7, 1.0),
-            (RAIN_ID, 60, 0.5, 2.0),
-            (FUZZ_ID, 45, 0.8, 0.4),
-            (FORMULA_ID, 62, 0.7, 0.3),
-            (WAVETABLE_ID, 64, 0.7, 0.3),
+            (SHAKER_ID, 60, 0.5, 0.05),
         ];
         for (id, pitch, vel, dur) in notes {
             state.push_note(&NoteEvent::new(id, pitch, vel, dur));

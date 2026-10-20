@@ -178,8 +178,6 @@ fn main() {
         ("kick808", Slot::Kick808),
         ("vocal", Slot::Vocal),
         ("guitar", Slot::Guitar),
-        ("laser", Slot::Laser),
-        ("flute", Slot::Flute),
         ("vinyl", Slot::Vinyl),
     ];
     println!("--- соло-рендер {style} ---");

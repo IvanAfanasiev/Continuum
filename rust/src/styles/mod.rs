@@ -647,12 +647,10 @@ fn pole_step_weight(
 const CHORD_ATTEN: [f32; 4] = [1.0, 0.75, 0.65, 0.6];
 
 /// Prior участия акцентных слотов в визитах секций (остальные — всегда).
-/// Лазеры, гимны и чопы — эффекты: их отсутствие в части стыков
-/// и есть разнообразие сидов, а не поломка.
+/// Вокал — эффект: его отсутствие в части стыков и есть разнообразие
+/// сидов, а не поломка.
 fn accent_prior(instrument_id: usize) -> f32 {
     match Slot::from_id(instrument_id) {
-        Some(Slot::Laser) => 0.7,
-        Some(Slot::Festival) => 0.75,
         Some(Slot::Vocal) => 0.75,
         _ => 1.0,
     }
@@ -1059,7 +1057,7 @@ fn play_guide(
                         as usize
                 };
                 // Сдвиг голоса — счетная линия: гайд задает свою ступень
-                // (формульный лид — терцией выше плака), тема задает
+                // (соло-гитара — терцией выше риффа), тема задает
                 // контур. Раньше сдвиг гайда терялся, и все носители
                 // пели в унисон: вместо двух голосов — один.
                 let contour = motif_step + voice_degree;
@@ -1413,23 +1411,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn seed_varies_the_guest_set() {
-        // Гости по сиду — только у club: там формульный лид то приходит,
-        // то нет. Остальные стили держат постоянный состав: сиды
-        // различаются риффом и грувом, а не набором.
-        let style = make_style("club").expect("known style");
-        let mut sets = std::collections::HashSet::new();
-        for seed in 0..24u64 {
-            let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer, seed);
-            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-            let n = mixer.active_ids(&mut buf);
-            sets.insert(buf[..n].to_vec());
-        }
-        assert!(sets.len() > 1, "club: сиды не меняют состав");
     }
 
     #[test]
@@ -2076,7 +2057,7 @@ mod tests {
             song.is_last_measure = true;
             song.stage = stage;
             let mut rng = rand::SeedableRng::seed_from_u64(5);
-            // id 9 = Laser (prior 0.7), индекс слота 8 (см. Slot::ALL).
+            // id 11 = Vocal (prior 0.75), индекс слота 9 (см. Slot::ALL).
             if !play_guide(
                 &guide,
                 &[48],
@@ -2085,8 +2066,8 @@ mod tests {
                 0,
                 8,
                 0.1,
+                11,
                 9,
-                8,
                 1.0,
                 false,
                 false,
@@ -2098,7 +2079,7 @@ mod tests {
                 hits += 1;
             }
         }
-        assert!(hits > 0 && hits < 17, "laser sections: {hits}/17");
+        assert!(hits > 0 && hits < 17, "vocal sections: {hits}/17");
     }
 
     #[test]
@@ -2668,7 +2649,6 @@ mod tests {
     #[test]
     fn rock_guitar_cuts_through_mix() {
         // Рифф слышно: гитара дает не меньше 24 нот за 24 такта дефолта.
-        // Было: в 40 раз тише баса (замолчена фаззом, октавой и уровнем).
         use crate::instruments::Slot;
         let style = make_style("rock").expect("rock");
         let seed = 5u64;
@@ -2967,8 +2947,7 @@ mod tests {
     #[test]
     fn role_plans_are_shared_by_performers() {
         // План роли — один срез на всех исполнителей (ptr-равенство,
-        // не совпадение значений): lofi плак+гитара делят бой,
-        // rock фазз+гитара делят рифф и его полюса.
+        // не совпадение значений): club плак+гитара делят бой.
         use crate::instruments::Slot;
         let lofi = make_style("lofi").expect("lofi");
         let guides = lofi.slot_guides();
@@ -2992,13 +2971,11 @@ mod tests {
                 .map(|i| &guides[i])
                 .unwrap()
         };
-        assert!(std::ptr::eq(
-            at(Slot::Fuzz).weights.as_ptr(),
+        // Рифф и соло-гитара в роке — разные партии: соло играет свой
+        // план (свой ритм), а не дубль риффа.
+        assert!(!std::ptr::eq(
+            at(Slot::GuitarLead).weights.as_ptr(),
             at(Slot::Guitar).weights.as_ptr()
-        ));
-        assert!(std::ptr::eq(
-            at(Slot::Fuzz).poles.unwrap().as_ptr(),
-            at(Slot::Guitar).poles.unwrap().as_ptr()
         ));
     }
 

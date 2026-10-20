@@ -168,17 +168,6 @@ impl Style for ProtoclubStyle {
             vel_base: 0.5,
             ..RoleGuide::kit(BED_W, 36, 0.5)
         };
-        let laser = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
-        };
         let vinyl = RoleGuide {
             duration_mult: 200.0,
             vel_base: 0.2,
@@ -197,28 +186,6 @@ impl Style for ProtoclubStyle {
             },
             ..RoleGuide::pitched(BED_W, 2, 2, 2, 3.0, 0.45)
         };
-        let flute = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.5,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
-        };
-        let festival = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
-        };
         let guitar = RoleGuide {
             energy_response: 1.0,
             duration_mult: 1.5,
@@ -230,22 +197,6 @@ impl Style for ProtoclubStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
         };
-        let rain = RoleGuide {
-            duration_mult: 150.0,
-            vel_base: 0.2,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.2)
-        };
-        let fuzz = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
-        };
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
@@ -253,29 +204,7 @@ impl Style for ProtoclubStyle {
             vel_jitter: 0.06,
             ..RoleGuide::kit(BED_W, 60, 0.3)
         };
-        let formula = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 1,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 1, 1.0, 0.3)
-        };
         // Вейвтейбл вне автомикса: ручная краска для фронта.
-        let wavetable = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
-        };
         // Соло-гитара вне автомикса: ручная краска для фронта.
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
@@ -297,17 +226,10 @@ impl Style for ProtoclubStyle {
             pluck,
             keys,
             kick808,
-            laser,
             vinyl,
             vocal,
-            flute,
-            festival,
             guitar,
-            rain,
-            fuzz,
             shaker,
-            formula,
-            wavetable,
             guitar_lead,
         ]
     }

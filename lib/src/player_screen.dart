@@ -107,17 +107,10 @@ const _slotMeta = {
   'pluck': 'Щипок',
   'keys': 'Клавиши',
   'kick808': '808',
-  'laser': 'Лазер',
   'vinyl': 'Винил',
   'vocal': 'Вокал',
-  'flute': 'Флейта',
-  'festival': 'Фестиваль',
   'guitar': 'Гитара',
-  'rain': 'Дождь',
-  'fuzz': 'Фазз',
   'shaker': 'Шейкер',
-  'formula': 'Формула',
-  'wavetable': 'Вейвтейбл',
 };
 
 String _styleTitle(String style) {

@@ -27,9 +27,6 @@ const PAD_W: &[f32] = &[
     // а не редкий гость. Без дрона lofi разваливается на точки.
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-const PLUCK_W: &[f32] = &[
-    1.0, 0.0, 0.28, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0, 0.0, 0.0, 0.28, 0.0, 0.0, 0.28, 0.0,
-];
 const KEYS_W: &[f32] = &[
     // Rhodes-компинг: даунбит-якорь + стабы внутри такта.
     // Два хита на такт давали «раз в 3 секунды с обрывом» —
@@ -39,10 +36,7 @@ const KEYS_W: &[f32] = &[
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-// Длинная флейта поверх Rhodes: редкие ноты с дыханием.
-const FLUTE_W: &[f32] = &[
-    0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0,
-];
+// Длинная гитара поверх Rhodes: редкие ноты с дыханием.
 // База боя — ровные восьмые (ref: Coming Home); даунстроуки на долях —
 // якоря (бой слышно всегда), апстроуки заполняют.
 const GUITAR_STRUM8_W: &[f32] = &[
@@ -153,12 +147,10 @@ impl Style for LofiStyle {
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Классика: барабаны + бас + Rhodes + гитара + флейта + винил.
-        // Дождь убран из дефолта (винил один держит подложку —
-        // два беда мылят низ), включается вручную. Нарезок-плака нет:
+        // Классика: барабаны + бас + Rhodes + гитара + винил.
+        // Вокал-чопы приходят гостем (см. flex). Нарезок-плака нет:
         // поверх Rhodes и гитары они дают кашу — включить можно вручную,
-        // дефолт чистый. Лазера, 808, вокала и фестиваля нет слышно
-        // даже рядом.
+        // дефолт чистый.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -167,7 +159,6 @@ impl Style for LofiStyle {
             Slot::Hat,
             Slot::Keys,
             Slot::Vinyl,
-            Slot::Flute,
             Slot::Guitar,
         ]
     }
@@ -281,19 +272,8 @@ impl Style for LofiStyle {
             vel_base: 0.8,
             ..RoleGuide::kit(SUB_DROP_W, 36, 0.8)
         };
-        let laser = RoleGuide {
-            energy_response: 1.2,
-            duration_mult: 1.2,
-            vel_base: 0.4,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 3,
-            },
-            ..RoleGuide::pitched(PLUCK_W, 0, 2, 3, 1.2, 0.4)
-        };
-        // Пыль тише музыки: стем-аудит показал винил и дождь
-        // brightest после тёмных клавиш — убавляем подложки, не музыку.
+        // Пыль тише музыки: стем-аудит показал винил самым ярким
+        // после тёмных клавиш — убавляем подложку, не музыку.
         let vinyl = RoleGuide {
             duration_mult: 300.0,
             vel_base: 0.15,
@@ -311,33 +291,7 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(KEYS_W, 2, 1, 2, 1.5, 0.45)
         };
-        // Флейта поверх Rhodes: мотив сида длинными нотами с дыханием.
-        let flute = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 6.0,
-            vel_base: 0.45,
-            vel_jitter: 0.08,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 0,
-            },
-            follow_motif: true,
-            phrase_rest: 0.2,
-            ..RoleGuide::pitched(FLUTE_W, 0, 1, 0, 6.0, 0.45)
-        };
-        let festival = RoleGuide {
-            energy_response: 1.2,
-            duration_mult: 1.2,
-            vel_base: 0.4,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 3,
-            },
-            ..RoleGuide::pitched(PLUCK_W, 0, 2, 3, 1.2, 0.4)
-        };
-        // Гитара: легкий бой неполными аккордами по мотиву сида.
+        // Гитара поверх Rhodes: мотив сида длинными нотами с дыханием.
         // База — ровные восьмые (бой слышно), апстроуки заполняют.
         // Ведущий голос lofi — чуть громче саба.
         // Громкость выше порога открытых струн (0.6): в теме звонко,
@@ -360,26 +314,6 @@ impl Style for LofiStyle {
             arp: true,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 1.8, 0.85)
         };
-        // Дождь: ровная пелена во все фразы. Тише винила и музыки.
-        let rain = RoleGuide {
-            duration_mult: 150.0,
-            vel_base: 0.18,
-            vel_jitter: 0.05,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.18)
-        };
-        // Чужой крэш: тихий, только на стыках секций.
-        // Фазз вне рок-полки: тихий редкий рифф для ручки фронта.
-        let fuzz = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.5,
-            vel_base: 0.35,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.35)
-        };
         // Шейкер вне club: пыльные оффбиты для ручки фронта.
         let shaker = RoleGuide {
             energy_response: 1.0,
@@ -387,30 +321,6 @@ impl Style for LofiStyle {
             vel_base: 0.25,
             vel_jitter: 0.06,
             ..RoleGuide::kit(SHAKER_LOFI_W, 60, 0.25)
-        };
-        // Формула вне club: редкая математическая специя для ручки фронта.
-        let formula = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
-        };
-        // Вейвтейбл вне автомикса: ручная краска для фронта.
-        let wavetable = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
         };
         // Соло-гитара вне автомикса: тихий перебор для ручки фронта.
         // Дефолт lofi не тронут (там своя гитара-фингерпикинг).
@@ -434,17 +344,10 @@ impl Style for LofiStyle {
             pluck,
             keys,
             kick808,
-            laser,
             vinyl,
             vocal,
-            flute,
-            festival,
             guitar,
-            rain,
-            fuzz,
             shaker,
-            formula,
-            wavetable,
             guitar_lead,
         ]
     }

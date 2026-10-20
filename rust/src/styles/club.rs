@@ -131,8 +131,7 @@ impl Style for ClubStyle {
     fn ensemble(&self) -> &'static [Slot] {
         // Deep house: биты, ударные, бас, сквозной плак темы,
         // Rhodes-стабы, шейкер. Без синтезаторных верхов и шумовых
-        // подложек. Формула — гость по сиду (см. flex), а не резидент:
-        // её математическая злость не каждому сиду к лицу.
+        // подложек. Состав меняет слушатель в миксе, не стиль.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -144,15 +143,14 @@ impl Style for ClubStyle {
         ]
     }
 
-    /// Гость deep house: формульный лид дропа — по сиду (есть/нет).
-    /// Ядро жанра стабильно, специя одна. Хора больше нет:
-    /// вокальная группа выведена из набора.
+    /// Гостей нет: ядро deep house стабильно, а набор инструментов
+    /// задаёт слушатель (в миксе).
     fn flex_pool(&self) -> &'static [Slot] {
-        &[Slot::Formula]
+        &[]
     }
 
     fn flex_weights(&self) -> &'static [f32] {
-        &[1.0]
+        &[]
     }
 
     fn flex_range(&self) -> (usize, usize) {
@@ -280,24 +278,9 @@ impl Style for ClubStyle {
             bass_top: 43,
             ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, 1.0, 0.95)
         };
-        let laser = RoleGuide {
-            energy_response: 2.0,
-            duration_mult: 1.0,
-            vel_base: 0.5,
-            vel_energy: 0.3,
-            vel_jitter: 0.07,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 0,
-            },
-            follow_motif: true,
-            phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 1.0, 0.5)
-        };
-        // Хор deep house: редкие долгие «ah→oh» в эхе, сидят сзади.
-        // Только для ручного включения и редкого гостя: в битмейкере
-        // вокала нет. Текут через секции, а не мигают (отклик сглажен).
+        // Оперный голос: редкие долгие «ah→oh» в эхе, сидит сзади.
+        // Только для ручного включения: в битмейкере вокала нет.
+        // Текут через секции, а не мигают (отклик сглажен).
         let vocal = RoleGuide {
             energy_response: 1.2,
             duration_mult: 3.0,
@@ -319,33 +302,8 @@ impl Style for ClubStyle {
             vel_jitter: 0.05,
             ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.4)
         };
-        let flute = RoleGuide {
-            energy_response: 1.2,
-            duration_mult: 4.0,
-            vel_base: 0.45,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 3,
-            },
-            ..RoleGuide::pitched(LEAD_W, 0, 1, 3, 4.0, 0.45)
-        };
-        let festival = RoleGuide {
-            energy_response: 2.2,
-            duration_mult: 0.8,
-            vel_base: 0.5,
-            vel_energy: 0.3,
-            vel_jitter: 0.07,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 0,
-            },
-            follow_motif: true,
-            phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 0.8, 0.5)
-        };
         // Чужие мелодические/текстуры: разреженные направляющие.
+        // Гитара в club — ручной гость (ритм-гитара вместо плака).
         let guitar = RoleGuide {
             energy_response: 1.2,
             duration_mult: 1.5,
@@ -357,23 +315,6 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(LEAD_W, 0, 1, 3, 1.5, 0.4)
         };
-        let rain = RoleGuide {
-            duration_mult: 150.0,
-            vel_base: 0.35,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
-        };
-        // Фазз вне рок-полки: тихий редкий рифф для ручки фронта.
-        let fuzz = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.5,
-            vel_base: 0.35,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.35)
-        };
         // Шейкер deep house: песок 16-х поверх хэта, акцент на оффбитах.
         let shaker = RoleGuide {
             energy_response: 1.0,
@@ -382,40 +323,6 @@ impl Style for ClubStyle {
             vel_energy: 0.15,
             vel_jitter: 0.08,
             ..RoleGuide::kit(SHAKER_W, 60, 0.5)
-        };
-        // Формульный лид дропа: та же мотивная скелет-линия, что у плака,
-        // но терцией выше (ступень 2) — гетерофония вместо унисона.
-        // Отклик 2.2 держит куплеты разреженными, дроп — плотным.
-        // Джиттер узкий (1): формула и так меняет краску классом питча,
-        // широкие прыжки с переключением режимов дают кашу.
-        let formula = RoleGuide {
-            energy_response: 2.2,
-            duration_mult: 1.6,
-            vel_base: 0.5,
-            vel_energy: 0.3,
-            vel_jitter: 0.07,
-            // Чистая терция без джиттера: консонанс всегда,
-            // секунды от независимых блужданий исключены.
-            voice: Voicing::Scale {
-                degree: 2,
-                octave: 2,
-                jitter: 0,
-            },
-            follow_motif: true,
-            phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 2, 2, 0, 1.6, 0.5)
-        };
-        // Вейвтейбл вне автомикса: ручная краска для фронта.
-        let wavetable = RoleGuide {
-            energy_response: 1.0,
-            duration_mult: 1.0,
-            vel_base: 0.3,
-            voice: Voicing::Scale {
-                degree: 0,
-                octave: 2,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(BED_W, 0, 2, 2, 1.0, 0.3)
         };
         // Соло-гитара вне автомикса club: ручная краска для фронта.
         let guitar_lead = RoleGuide {
@@ -438,17 +345,10 @@ impl Style for ClubStyle {
             pluck,
             keys,
             kick808,
-            laser,
             vinyl,
             vocal,
-            flute,
-            festival,
             guitar,
-            rain,
-            fuzz,
             shaker,
-            formula,
-            wavetable,
             guitar_lead,
         ]
     }
@@ -493,143 +393,6 @@ mod tests {
             );
         }
         out
-    }
-
-    #[test]
-    fn formula_shadows_pluck_a_third_up() {
-        // Формула — гетерофония, а не унисон: тот же мотив (follow_motif),
-        // но терцией выше плака (ступень 2 против 0), иначе два лида
-        // на одном скелете слипаются в кашу.
-        use crate::instruments::Slot;
-        let style = ClubStyle::new();
-        let guides = style.slot_guides();
-        let at = |slot: Slot| {
-            Slot::ALL
-                .iter()
-                .position(|s| *s == slot)
-                .map(|i| &guides[i])
-                .unwrap()
-        };
-        let (pluck, formula) = (at(Slot::Pluck), at(Slot::Formula));
-        let deg = |g: &RoleGuide| match g.voice {
-            Voicing::Scale {
-                degree,
-                octave,
-                jitter,
-            } => (degree, octave, jitter),
-            _ => (0, 0, 0),
-        };
-        let (pd, po, _) = deg(pluck);
-        let (fd, fo, _) = deg(formula);
-        assert!(formula.follow_motif, "formula must follow the motif");
-        assert_eq!(
-            (fo, fd),
-            (po, pd + 2),
-            "formula must sit a third above pluck"
-        );
-        assert!(
-            style.flex_pool().contains(&Slot::Formula),
-            "formula must be a club guest"
-        );
-        assert!(
-            !style.ensemble().contains(&Slot::Formula),
-            "formula must not be a club resident"
-        );
-    }
-
-    #[test]
-    fn formula_sounds_in_club_drop() {
-        // Формула в ансамбле — обязана давать ноты (молчащий слот
-        // в миксе — мертвый груз и обман ползунка).
-        use crate::playback::FORMULA_ID;
-        let notes = render(11, 512);
-        let hits = notes
-            .iter()
-            .filter(|(_, n)| n.instrument_id == FORMULA_ID)
-            .count();
-        assert!(hits >= 8, "formula silent in club: {hits}");
-    }
-
-    #[test]
-    fn theme_layers_nest_on_shared_beat() {
-        // Общий план + иерархия: в разделах, где ведет формула, плак —
-        // строго ее подмножество (те же шаги, не своя композиция).
-        // В своих разделах плак ведет сам — там гарантий нет.
-        // Лидерство ротируется по визитам: за 1024 шага ведут минимум двое.
-        use crate::playback::{FORMULA_ID, PLUCK_ID};
-        use std::collections::{HashMap, HashSet};
-        let mut checked_total = 0;
-        for seed in [5u64, 11, 24] {
-            let style = ClubStyle::new();
-            let guides = style.slot_guides();
-            let active: Vec<usize> = crate::instruments::Slot::ALL
-                .iter()
-                .map(|s| s.id())
-                .collect();
-            let carriers: Vec<usize> = crate::instruments::Slot::ALL
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| guides[*i].follow_motif && !guides[*i].is_silent())
-                .map(|(_, s)| s.id())
-                .collect();
-            assert!(carriers.len() > 1, "seed {seed}: nobody to lead");
-            let seed_hash = crate::arranger::splitmix64(seed ^ 0x51ED);
-            let mut rng = rand::SeedableRng::seed_from_u64(seed);
-            let mut arranger = crate::arranger::Arranger::new(seed);
-            let mut song = arranger.advance_measure();
-            let mut pluck: HashMap<usize, HashSet<usize>> = HashMap::new();
-            let mut formula: HashMap<usize, HashSet<usize>> = HashMap::new();
-            for step in 0..1024 {
-                let spm = style.steps_per_measure();
-                let sim = step % spm;
-                if sim == 0 && step > 0 {
-                    song = arranger.advance_measure();
-                }
-                let mut sctx = StepContext {
-                    step,
-                    step_in_measure: sim,
-                    base_step_secs: style.base_step_secs(),
-                    active_tracks: &active,
-                    song: &song,
-                    rng: &mut rng,
-                    intensity: 1.0,
-                };
-                for n in render_style(&style, &mut sctx) {
-                    let table = if n.instrument_id == PLUCK_ID {
-                        &mut pluck
-                    } else if n.instrument_id == FORMULA_ID {
-                        &mut formula
-                    } else {
-                        continue;
-                    };
-                    table.entry(song.stage).or_default().insert(step);
-                }
-            }
-            let mut leaders = HashSet::new();
-            let mut checked = 0;
-            for (stage, psteps) in &pluck {
-                let leader = super::super::theme_leader(&carriers, seed_hash, *stage).unwrap();
-                leaders.insert(leader);
-                if leader == FORMULA_ID {
-                    // Отдыхающую формулу (пустой раздел) пропускаем:
-                    // подмножество проверяется там, где оба звучат.
-                    let fsteps = formula.get(stage).cloned().unwrap_or_default();
-                    if fsteps.is_empty() {
-                        continue;
-                    }
-                    assert!(
-                        psteps.is_subset(&fsteps),
-                        "seed {seed} stage {stage}: pluck strays off the lead"
-                    );
-                    checked += psteps.len();
-                }
-            }
-            assert!(leaders.len() > 1, "seed {seed}: no rotation");
-            // Проверенные шаги копятся по сидам: пересечение лидерства
-            // с нотами — тоже бросок, на одном сиде его может не выпасть.
-            checked_total += checked;
-        }
-        assert!(checked_total >= 10, "no formula-led phrases sampled");
     }
 
     #[test]
