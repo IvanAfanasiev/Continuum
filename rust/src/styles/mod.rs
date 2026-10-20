@@ -1417,21 +1417,19 @@ mod tests {
 
     #[test]
     fn seed_varies_the_guest_set() {
-        // Каждый сид немного меняет состав: гость приходит и уходит,
-        // ядро стиля стоит. Рок — исключение: у него фиксированная
-        // группа (сиды различаются риффом, а не составом).
-        for name in ["club", "lofi", "phonk", "proto"] {
-            let style = make_style(name).expect("known style");
-            let mut sets = std::collections::HashSet::new();
-            for seed in 0..24u64 {
-                let mut mixer = crate::mixer::MixerState::new();
-                crate::playback::apply_style_mix(&*style, &mut mixer, seed);
-                let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-                let n = mixer.active_ids(&mut buf);
-                sets.insert(buf[..n].to_vec());
-            }
-            assert!(sets.len() > 1, "{name}: сиды не меняют состав");
+        // Гости по сиду — только у club: там формульный лид то приходит,
+        // то нет. Остальные стили держат постоянный состав: сиды
+        // различаются риффом и грувом, а не набором.
+        let style = make_style("club").expect("known style");
+        let mut sets = std::collections::HashSet::new();
+        for seed in 0..24u64 {
+            let mut mixer = crate::mixer::MixerState::new();
+            crate::playback::apply_style_mix(&*style, &mut mixer, seed);
+            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+            let n = mixer.active_ids(&mut buf);
+            sets.insert(buf[..n].to_vec());
         }
+        assert!(sets.len() > 1, "club: сиды не меняют состав");
     }
 
     #[test]
