@@ -314,27 +314,9 @@ impl Composer {
         // состав (гости/вайтлист), и старый срез активных треков не
         // должен попасть в первый шаг новой формы.
         let mut active_tracks = [0usize; MAX_ACTIVE_TRACKS];
-        // Назначения партий (инструмент играет чужую партию) — из того же
-        // миксера: 255 = своя партия.
-        let mut line_of = [255u8; crate::instruments::Slot::COUNT];
         let active_count = match self.mixer.read() {
-            Ok(state) => {
-                for (id, src) in state.lines.iter() {
-                    if *id < line_of.len() && *src < line_of.len() {
-                        line_of[*id] = *src as u8;
-                    }
-                }
-                state.active_ids(&mut active_tracks)
-            }
-            Err(poisoned) => {
-                let state = poisoned.into_inner();
-                for (id, src) in state.lines.iter() {
-                    if *id < line_of.len() && *src < line_of.len() {
-                        line_of[*id] = *src as u8;
-                    }
-                }
-                state.active_ids(&mut active_tracks)
-            }
+            Ok(state) => state.active_ids(&mut active_tracks),
+            Err(poisoned) => poisoned.into_inner().active_ids(&mut active_tracks),
         };
         // active_ids уже сортирует — порядок детерминирован.
         // Треки с громкостью 0 сюда не попадают: выключенные слоты
@@ -417,7 +399,6 @@ impl Composer {
             song: &self.song,
             rng: &mut self.rng,
             intensity,
-            line_of: &line_of,
         };
         let mut notes = render_style(&**guard, &mut sctx);
 
@@ -442,7 +423,6 @@ impl Composer {
                     song: &shadow.song,
                     rng: &mut self.shadow_rng,
                     intensity,
-                    line_of: &line_of,
                 };
                 for mut n in render_style(&**guard, &mut shctx) {
                     let melodic = matches!(

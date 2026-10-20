@@ -301,13 +301,6 @@ class TrackInfo {
   final double volume;
   final double baseVolume;
 
-  /// Есть ли у слота партия в текущем стиле (её можно отдать другому
-  /// инструменту).
-  final bool hasLine;
-
-  /// Чью партию слот играет сейчас: свой id или id источника.
-  final BigInt lineId;
-
   const TrackInfo({
     required this.id,
     required this.name,
@@ -315,8 +308,6 @@ class TrackInfo {
     required this.group,
     required this.volume,
     required this.baseVolume,
-    required this.hasLine,
-    required this.lineId,
   });
 
   @override
@@ -326,9 +317,7 @@ class TrackInfo {
       role.hashCode ^
       group.hashCode ^
       volume.hashCode ^
-      baseVolume.hashCode ^
-      hasLine.hashCode ^
-      lineId.hashCode;
+      baseVolume.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -340,7 +329,5 @@ class TrackInfo {
           role == other.role &&
           group == other.group &&
           volume == other.volume &&
-          baseVolume == other.baseVolume &&
-          hasLine == other.hasLine &&
-          lineId == other.lineId;
+          baseVolume == other.baseVolume;
 }

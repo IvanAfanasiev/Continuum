@@ -1037,66 +1037,23 @@ class _MixPanelBody extends StatelessWidget {
               ),
             ),
             for (final t in entry.$2)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _VolumeRow(
-                    icon: _groupMeta[t.group]?.$1 ?? Icons.music_note,
-                    tooltip: (_slotMeta[t.name] ?? t.name) +
-                        (t.volume <= 0.0 ? ' — выкл' : ''),
-                    // Шкала — % от базы стиля, потолок 100%:
-                    // выше базы слот не поднять.
-                    value: t.baseVolume > 0
-                        ? (t.volume / t.baseVolume).clamp(0.0, 1.0)
-                        : 0.0,
-                    max: 1.0,
-                    percent: true,
-                    dimmed: t.volume <= 0.0,
-                    onCommit: (v) => c.setTrackVolume(t.id, v * t.baseVolume),
-                  ),
-                  _LinePicker(track: t, controller: c),
-                ],
+              _VolumeRow(
+                icon: _groupMeta[t.group]?.$1 ?? Icons.music_note,
+                tooltip: (_slotMeta[t.name] ?? t.name) +
+                    (t.volume <= 0.0 ? ' — выкл' : ''),
+                // Шкала — % от базы стиля, потолок 100%:
+                // выше базы слот не поднять.
+                value: t.baseVolume > 0
+                    ? (t.volume / t.baseVolume).clamp(0.0, 1.0)
+                    : 0.0,
+                max: 1.0,
+                percent: true,
+                dimmed: t.volume <= 0.0,
+                onCommit: (v) => c.setTrackVolume(t.id, v * t.baseVolume),
               ),
             ],
           ],
         ],
-      ),
-    );
-  }
-}
-
-/// Выбор партии для инструмента: «в rock пианино вместо электрогитары».
-/// Инструмент играет чужую партию — тот же рисунок и та же высота, но
-/// своим тембром. Назначение общее для стилей и переживает смену стиля.
-class _LinePicker extends StatelessWidget {
-  const _LinePicker({required this.track, required this.controller});
-
-  final TrackInfo track;
-  final PlayerController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final sources = controller.tracks
-        .where((t) => t.hasLine && t.id != track.id)
-        .toList();
-    final current = track.lineId == track.id ? null : track.lineId;
-    final items = <DropdownMenuItem<BigInt?>>[
-      const DropdownMenuItem<BigInt?>(value: null, child: Text('партия: своя')),
-      for (final s in sources)
-        DropdownMenuItem<BigInt?>(
-          value: s.id,
-          child: Text('партия: ${_slotMeta[s.name] ?? s.name}'),
-        ),
-    ];
-    return Padding(
-      padding: const EdgeInsets.only(left: 32, bottom: 4),
-      child: DropdownButton<BigInt?>(
-        value: items.any((i) => i.value == current) ? current : null,
-        items: items,
-        isDense: true,
-        underline: const SizedBox.shrink(),
-        style: Theme.of(context).textTheme.bodySmall,
-        onChanged: (v) => controller.setLine(track.id, v),
       ),
     );
   }

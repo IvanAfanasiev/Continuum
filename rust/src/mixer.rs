@@ -24,13 +24,6 @@ pub struct MixerState {
     /// Список инструментов менял слушатель: дефолты стиля его не
     /// перетирают, пока не нажат сброс.
     pub list_edited: bool,
-    /// Назначения «инструмент играет партию»: слот → слот-источник.
-    /// Ключ — id играющего слота, значение — id слота, чью партию он
-    /// исполняет. Нет записи = слот играет свою партию.
-    ///
-    /// Назначение общее для стилей: в rock пианино может играть рифф,
-    /// в club — club-овскую линию. Смена стиля назначение не сбрасывает.
-    pub lines: HashMap<usize, usize>,
 }
 
 impl MixerState {
@@ -39,7 +32,6 @@ impl MixerState {
             tracks: HashMap::new(),
             groups: HashMap::new(),
             list_edited: false,
-            lines: HashMap::new(),
         }
     }
 
@@ -53,24 +45,6 @@ impl MixerState {
     pub fn set_track_by_user(&mut self, id: usize, volume: f32) {
         self.set_track(id, volume);
         self.list_edited = true;
-    }
-
-    /// Назначить слоту чужую партию (id источника). `None` — слот
-    /// играет свою партию.
-    pub fn set_line(&mut self, id: usize, line: Option<usize>) {
-        match line {
-            Some(src) if src != id => {
-                self.lines.insert(id, src);
-            }
-            _ => {
-                self.lines.remove(&id);
-            }
-        }
-    }
-
-    /// Чью партию играет слот: свою или назначенную.
-    pub fn line_for(&self, id: usize) -> usize {
-        self.lines.get(&id).copied().unwrap_or(id)
     }
 
     /// Макро-фейдер группы 0..1 (выше дефолта не поднять —

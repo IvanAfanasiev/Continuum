@@ -180,11 +180,6 @@ pub struct TrackInfo {
     pub group: String,
     pub volume: f32,
     pub base_volume: f32,
-    /// Есть ли у слота партия в текущем стиле (её можно отдать другому
-    /// инструменту).
-    pub has_line: bool,
-    /// Чью партию слот играет сейчас: свой id или id источника.
-    pub line_id: u64,
 }
 
 /// Один макро-фейдер для UI: имя группы и ее множитель.
@@ -616,28 +611,16 @@ impl RunningSession {
     }
 
     fn tracks(&self) -> Vec<TrackInfo> {
-        // Партии слотов в текущем стиле: слот с направляющей может быть
-        // источником для другого инструмента.
-        let guides = {
-            let style = match self.style.read() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            style.slot_guides()
-        };
         self.with_mixer(|mixer| {
             Slot::ALL
                 .iter()
-                .enumerate()
-                .map(|(i, slot)| TrackInfo {
+                .map(|slot| TrackInfo {
                     id: slot.id() as u64,
                     name: slot.name().to_string(),
                     role: slot.role().name().to_string(),
                     group: slot.group().name().to_string(),
                     volume: mixer.volume_for(slot.id()),
                     base_volume: slot.base_volume(),
-                    has_line: !guides[i].is_silent(),
-                    line_id: mixer.line_for(slot.id()) as u64,
                 })
                 .collect()
         })
@@ -870,54 +853,8 @@ impl PlaybackController {
                 };
                 let mut mixer = s.mixer.write().unwrap_or_else(|e| e.into_inner());
                 mixer.list_edited = false;
-                // Сброс — вернуть все как в стиле: и состав, и назначения
-                // партий (назначение тоже ручной выбор).
-                mixer.lines.clear();
                 apply_style_mix(&**style, &mut mixer, seed_now);
                 drop(mixer);
-                s.status()
-            }
-            None => PlaybackStatus::default(),
-        }
-    }
-
-    /// Назначить инструменту чужую партию: «в rock пианино вместо
-    /// гитары». Источник — id слота, чью партию играет этот инструмент
-    /// (`None` — своя партия). Источником может быть любой слот с
-    /// партией в текущем стиле; назначение общее для стилей и переживает
-    /// смену стиля.
-    pub fn set_line(&self, instrument_id: u64, line_id: Option<u64>) -> PlaybackStatus {
-        let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_ref() {
-            Some(s) => {
-                let slot = Slot::from_id(instrument_id as usize);
-                if let Some(slot) = slot {
-                    // Источник должен иметь партию в этом стиле: иначе
-                    // инструмент окажется немым.
-                    let ok = match line_id {
-                        None => true,
-                        Some(src_id) => {
-                            let style = match s.style.read() {
-                                Ok(g) => g,
-                                Err(poisoned) => poisoned.into_inner(),
-                            };
-                            let guides = style.slot_guides();
-                            match Slot::from_id(src_id as usize) {
-                                Some(src) => Slot::ALL
-                                    .iter()
-                                    .position(|x| x.id() == src.id())
-                                    .map(|i| !guides[i].is_silent())
-                                    .unwrap_or(false),
-                                None => false,
-                            }
-                        }
-                    };
-                    if ok {
-                        s.update_mix(|mixer| {
-                            mixer.set_line(slot.id(), line_id.map(|v| v as usize))
-                        });
-                    }
-                }
                 s.status()
             }
             None => PlaybackStatus::default(),
@@ -1814,32 +1751,6 @@ mod tests {
     }
 
     #[test]
-    fn line_assignment_survives_style_change() {
-        // «В rock пианино вместо электрогитары»: назначение партии —
-        // ручной выбор, он переживает смену стиля. Сброс настроек
-        // назначение снимает.
-        let c = PlaybackController::new();
-        c.start("rock", 11, false);
-        let keys_id = crate::instruments::Slot::Keys.id() as u64;
-        let guitar_id = crate::instruments::Slot::Guitar.id() as u64;
-        c.set_line(keys_id, Some(guitar_id));
-        let tracks = c.tracks();
-        let keys = tracks.iter().find(|t| t.id == keys_id).expect("клавиши");
-        assert_eq!(keys.line_id, guitar_id, "назначение не применилось");
-        // Смена стиля назначение не трогает.
-        c.set_style("club");
-        let tracks = c.tracks();
-        let keys = tracks.iter().find(|t| t.id == keys_id).expect("клавиши");
-        assert_eq!(keys.line_id, guitar_id, "назначение перетерто стилем");
-        // Сброс настроек возвращает свою партию.
-        c.reset_instruments();
-        let tracks = c.tracks();
-        let keys = tracks.iter().find(|t| t.id == keys_id).expect("клавиши");
-        assert_eq!(keys.line_id, keys_id, "сброс не снял назначение");
-        let _ = c.stop();
-    }
-
-    #[test]
     fn live_visual_tracks_song() {
         // Снимок для визуалайзера: живая сессия отдает фазу такта,
         // энергию и маски звучавших долей (общую и кика);
@@ -1950,7 +1861,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     out.push((step, note.instrument_id, note.midi_pitch));
@@ -2005,7 +1915,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     if note.instrument_id == KICK_ID && sim == 14 {
@@ -2053,7 +1962,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     if note.instrument_id == BASS_ID {

@@ -343,7 +343,6 @@ mod tests {
                 song: &song,
                 rng: &mut rng,
                 intensity: 1.0,
-                line_of: &[],
             };
             out.extend(
                 render_style(&style, &mut sctx)

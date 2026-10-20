@@ -70,11 +70,6 @@ pub struct StepContext<'a> {
     /// Ручка intensity фронта (дефолт 1.0): множитель энергии.
     /// Выше — плотнее и ярче, ниже — разреженнее и тише.
     pub intensity: f32,
-    /// Назначения партий: индекс слота → индекс слота-источника
-    /// (255 = своя партия). Инструмент может играть чужую партию:
-    /// «в rock пианино вместо гитары» — тот же рисунок и та же высота,
-    /// но тембр инструмента. Пустой срез = назначений нет.
-    pub line_of: &'a [u8],
 }
 
 /// Как озвучить срабатывание направляющей.
@@ -404,36 +399,24 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
     let guides = style.slot_guides();
     let scale = style.scale();
     let energy = (style.shape_energy(sctx.song.energy) * sctx.intensity).clamp(0.0, 1.5);
-    // Назначение партий: слот может исполнять чужую партию (инструмент
-    // заменяет другой). Тогда берём направляющую источника, но тембр
-    // и громкость остаются играющего слота.
-    let src_of = |i: usize| -> usize {
-        match sctx.line_of.get(i) {
-            Some(&src) if (src as usize) != 255 && (src as usize) < guides.len() => src as usize,
-            _ => i,
-        }
-    };
-    // Роль слота по назначенной партии: маска слоев аранжа и карта
-    // дележа плотности должны смотреть на партию, а не на инструмент.
-    let role_of = |i: usize| Slot::ALL[src_of(i)].role();
-    let group_of = |i: usize| Slot::ALL[src_of(i)].group();
     // Сколько реально звучащих носителей у каждой роли — карта дележа
     // плотности. Молчащие гайды (нулевые веса и полюса) не считаются:
     // иначе живые исполнители делят плотность с пустотой.
     let mut role_n = [0usize; 8];
     for (i, s) in Slot::ALL.iter().enumerate() {
-        if sctx.active_tracks.contains(&s.id()) && !guides[src_of(i)].is_silent() {
-            role_n[role_of(i).index()] += 1;
+        if sctx.active_tracks.contains(&s.id()) && !guides[i].is_silent() {
+            role_n[s.role().index()] += 1;
         }
     }
     let is_active = |s: Slot| sctx.active_tracks.contains(&s.id());
     // Тема жива, пока жив хоть один ее носитель.
-    let has_carrier = Slot::ALL.iter().enumerate().any(|(i, s)| {
-        is_active(*s) && guides[src_of(i)].follow_motif && !guides[src_of(i)].is_silent()
-    });
+    let has_carrier = Slot::ALL
+        .iter()
+        .enumerate()
+        .any(|(i, s)| is_active(*s) && guides[i].follow_motif && !guides[i].is_silent());
     // Гармония жива, пока жив хоть один аккордовый слот.
     let has_chords = Slot::ALL.iter().enumerate().any(|(i, s)| {
-        is_active(*s) && role_of(i) == InstrumentRole::Chords && !guides[src_of(i)].is_silent()
+        is_active(*s) && Slot::ALL[i].role() == InstrumentRole::Chords && !guides[i].is_silent()
     });
     // Резервный носитель: первый питчевый мелодический по рангу роли.
     // Ударные тему петь не могут — только Scale-голоса.
@@ -445,9 +428,9 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             .enumerate()
             .filter(|(i, s)| {
                 is_active(**s)
-                    && !guides[src_of(*i)].is_silent()
-                    && matches!(guides[src_of(*i)].voice, Voicing::Scale { .. })
-                    && carrier_rank(role_of(*i)).is_some()
+                    && !guides[*i].is_silent()
+                    && matches!(guides[*i].voice, Voicing::Scale { .. })
+                    && carrier_rank(s.role()).is_some()
             })
             .min_by_key(|(_, s)| (carrier_rank(s.role()).unwrap_or(99), s.id()))
             .map(|(_, s)| s.id())
@@ -459,9 +442,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
     let mut carriers: Vec<usize> = Slot::ALL
         .iter()
         .enumerate()
-        .filter(|(i, s)| {
-            is_active(**s) && guides[src_of(*i)].follow_motif && !guides[src_of(*i)].is_silent()
-        })
+        .filter(|(i, s)| is_active(**s) && guides[*i].follow_motif && !guides[*i].is_silent())
         .map(|(_, s)| s.id())
         .collect();
     if carriers.is_empty() {
@@ -475,9 +456,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
     let active_melodic: Vec<usize> = Slot::ALL
         .iter()
         .enumerate()
-        .filter(|(i, s)| {
-            is_active(**s) && !guides[src_of(*i)].is_silent() && is_melodic_role(role_of(*i))
-        })
+        .filter(|(i, s)| is_active(**s) && !guides[*i].is_silent() && is_melodic_role(s.role()))
         .map(|(_, s)| s.id())
         .collect();
     // Фаза 1: кики. Фундамент — первым, чтобы DSP-дак бочки был готов
@@ -492,14 +471,14 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         // Аранж по слоям: план куска пишет, кто играет в этой секции.
         // Молчащая группа — не «тише», а молчит: точки на колесе и звук
         // совпадают, потому что решение одно и то же.
-        if sctx.song.layers & (1 << group_of(i).index()) == 0 {
+        if sctx.song.layers & (1 << slot.group().index()) == 0 {
             continue;
         }
-        let guide = &guides[src_of(i)];
+        let guide = &guides[i];
         if guide.is_silent() {
             continue;
         }
-        let n = role_n[role_of(i).index()].max(1) as f32;
+        let n = role_n[slot.role().index()].max(1) as f32;
         let slot_notes = play_guide(
             guide,
             scale,
@@ -528,20 +507,20 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             continue;
         }
         // Аранж по слоям: план куска пишет, кто играет в этой секции.
-        if sctx.song.layers & (1 << group_of(i).index()) == 0 {
+        if sctx.song.layers & (1 << slot.group().index()) == 0 {
             continue;
         }
-        let guide = &guides[src_of(i)];
+        let guide = &guides[i];
         if guide.is_silent() {
             continue;
         }
         // Морфинга нет: полюс выбирает фраза, плотность — энергия.
         // Рисунок внутри секции стабилен, между фразами пересдается.
-        let n = role_n[role_of(i).index()].max(1) as f32;
+        let n = role_n[slot.role().index()].max(1) as f32;
         // Сгущение в диады — только мелодическим питчевым при пустых
         // аккордовых. Остальные играют как написано.
         let thicken = !has_chords
-            && matches!(role_of(i), InstrumentRole::Lead | InstrumentRole::Vocal)
+            && matches!(slot.role(), InstrumentRole::Lead | InstrumentRole::Vocal)
             && matches!(guide.voice, Voicing::Scale { .. });
         notes.extend(play_guide(
             guide,
@@ -1437,60 +1416,6 @@ mod tests {
     }
 
     #[test]
-    fn assigned_line_plays_the_source_pattern() {
-        // «В rock пианино вместо электрогитары»: назначенный слот
-        // играет партию источника — те же доли, тот же рисунок, но
-        // своим тембром.
-        use crate::instruments::Slot;
-        let style = make_style("rock").expect("known style");
-        let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();
-        let ki = Slot::ALL.iter().position(|s| *s == Slot::Keys).unwrap();
-
-        fn steps_of(style: &dyn Style, slot: Slot, line_of: &[u8], seed: u64) -> Vec<usize> {
-            let mut rng = rand::SeedableRng::seed_from_u64(seed);
-            let mut arranger = crate::arranger::Arranger::new(seed);
-            let mut song = arranger.advance_measure();
-            let active = [slot.id()];
-            let mut out = Vec::new();
-            for step in 0..64 {
-                let spm = style.steps_per_measure();
-                let sim = step % spm;
-                if sim == 0 && step > 0 {
-                    song = arranger.advance_measure();
-                }
-                let mut sctx = StepContext {
-                    step,
-                    step_in_measure: sim,
-                    base_step_secs: style.base_step_secs(),
-                    active_tracks: &active,
-                    song: &song,
-                    rng: &mut rng,
-                    intensity: 1.0,
-                    line_of,
-                };
-                for n in render_style(style, &mut sctx) {
-                    assert_eq!(n.instrument_id, slot.id());
-                    out.push(step);
-                }
-            }
-            out
-        }
-
-        let no_line = vec![255u8; Slot::COUNT];
-        let guitar_steps = steps_of(&*style, Slot::Guitar, &no_line, 424242);
-        assert!(!guitar_steps.is_empty(), "гитара молчит в стиле");
-        // Клавиши без назначения в роке поют свою партию (у нее нет
-        // риффа), а с назначением — рифф гитары.
-        let mut with_line = no_line.clone();
-        with_line[ki] = gi as u8;
-        let keys_steps = steps_of(&*style, Slot::Keys, &with_line, 424242);
-        assert_eq!(
-            keys_steps, guitar_steps,
-            "назначенная партия должна совпасть с партией источника"
-        );
-    }
-
-    #[test]
     fn seed_varies_the_guest_set() {
         // Гости по сиду — только у club: там формульный лид то приходит,
         // то нет. Остальные стили держат постоянный состав: сиды
@@ -1543,7 +1468,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     let role = Slot::from_id(note.instrument_id).map(|s| s.role());
@@ -2206,7 +2130,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     let role = Slot::from_id(note.instrument_id).map(|s| s.role());
@@ -2253,7 +2176,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     let role = Slot::from_id(note.instrument_id).map(|s| s.role());
@@ -2502,7 +2424,6 @@ mod tests {
                 song: &song_m,
                 rng: &mut rng,
                 intensity: 1.0,
-                line_of: &[],
             };
             for (sim, expected) in full_line.iter() {
                 sctx.step = *sim;
@@ -2548,7 +2469,6 @@ mod tests {
                     // Погромче: тихий плак проверяем на озвучку, не на гейты
                     // (они от intensity не зависят — сравнение честное).
                     intensity: 2.0,
-                    line_of: &[],
                 };
                 for sim in 0..16 {
                     sctx.step = sim;
@@ -2615,7 +2535,6 @@ mod tests {
                         song: &song,
                         rng: &mut rng,
                         intensity: 1.0,
-                        line_of: &[],
                     };
                     for sim in 0..16 {
                         sctx.step = sim;
@@ -2771,7 +2690,6 @@ mod tests {
                 song: &song,
                 rng: &mut rng,
                 intensity: 1.0,
-                line_of: &[],
             };
             for sim in 0..16 {
                 sctx.step = sim;
@@ -2859,7 +2777,6 @@ mod tests {
                         song: &song,
                         rng: &mut rng,
                         intensity: 1.0,
-                        line_of: &[],
                     };
                     for sim in 0..16 {
                         sctx.step = sim;
@@ -2992,7 +2909,6 @@ mod tests {
                 song: &song,
                 rng: &mut rng,
                 intensity: 1.0,
-                line_of: &[],
             };
             for sim in 0..16 {
                 sctx.step = sim;
@@ -3120,7 +3036,6 @@ mod tests {
                     song: &song,
                     rng: &mut rng,
                     intensity: 1.0,
-                    line_of: &[],
                 };
                 for note in render_style(&*style, &mut sctx) {
                     pitches.insert((note.instrument_id, step % 64, note.midi_pitch % 12));
@@ -3331,7 +3246,6 @@ mod tests {
                         song: &song,
                         rng: &mut rng,
                         intensity: 1.0,
-                        line_of: &[],
                     };
                     for sim in 0..16 {
                         sctx.step = sim;
