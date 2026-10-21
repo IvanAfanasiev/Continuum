@@ -91,6 +91,17 @@ pub(crate) struct RenderState {
 }
 
 impl RenderState {
+    /// Полный сброс голосов и хвоста комнаты: смена сида или стиля.
+    /// Старая генерация не должна доигрывать поверх новой.
+    pub(crate) fn reset_voices(&mut self) {
+        for inst in self.instruments.iter_mut() {
+            inst.reset();
+        }
+        self.space.reset();
+        self.kick_env = 0.0;
+        self.limiter.reset();
+    }
+
     pub(crate) fn new(mut instruments: Vec<Box<dyn Instrument>>, sample_rate: f32) -> Self {
         let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 {
             sample_rate
@@ -296,6 +307,9 @@ pub(crate) struct Pump {
     counters: EngineCounters,
     logged_first: bool,
     filter_open: Arc<RwLock<f32>>,
+    /// Флаг «сбросить голоса»: смена сида или стиля обрывает старую
+    /// генерацию (хвосты и реверб) — так просит слушатель.
+    voice_reset: Arc<AtomicBool>,
     /// Отложенные ноты (due-кадр, порядок, нота), по возрастанию due.
     /// Насос стреляет нотой точно в ее медиакадр, а не когда разобрал
     /// очередь: таймингом владеет бэкенд, фронт — только байты.
@@ -347,6 +361,7 @@ impl Pump {
         sample_rate: f32,
         counters: EngineCounters,
         filter_open: Arc<RwLock<f32>>,
+        voice_reset: Arc<AtomicBool>,
     ) -> Self {
         // Старт gain от фактической паузы: пересоздание потока в паузе
         // не должно выстреливать 10 мс громкого звука.
@@ -369,6 +384,7 @@ impl Pump {
             counters,
             logged_first: false,
             filter_open,
+            voice_reset,
             pending: Vec::with_capacity(256),
             pending_seq: 0,
             marks_used: false,
@@ -707,6 +723,11 @@ impl Pump {
             return;
         }
         self.begin_block();
+        // Смена сида или стиля: старая генерация обрывается — голоса и
+        // хвост комнаты гаснут, а не доигрывают поверх новой.
+        if self.voice_reset.swap(false, Ordering::Relaxed) {
+            self.state.reset_voices();
+        }
         for frame in data.chunks_mut(channels) {
             let (l, r) = self.next_frame();
             if channels == 1 {
@@ -842,6 +863,9 @@ pub struct AudioEngine {
     counters: EngineCounters,
     audio_config: Arc<RwLock<String>>,
     filter_open: Arc<RwLock<f32>>,
+    /// Флаг «сбросить голоса»: смена сида или стиля обрывает старую
+    /// генерацию (хвосты и реверб) — так просит слушатель.
+    voice_reset: Arc<AtomicBool>,
 }
 
 impl AudioEngine {
@@ -858,6 +882,7 @@ impl AudioEngine {
         counters: EngineCounters,
         audio_config: Arc<RwLock<String>>,
         filter_open: Arc<RwLock<f32>>,
+        voice_reset: Arc<AtomicBool>,
     ) -> Self {
         Self {
             queue,
@@ -871,6 +896,7 @@ impl AudioEngine {
             counters,
             audio_config,
             filter_open,
+            voice_reset,
         }
     }
 
@@ -897,6 +923,7 @@ impl AudioEngine {
             44_100.0,
             counters.clone(),
             self.filter_open,
+            self.voice_reset,
         )));
         // Флаг обрыва: ставит колбэк ошибок cpal (отключили наушники —
         // Oboe рвет поток). Сторожок ниже ловит и немые затыки.
@@ -1102,6 +1129,7 @@ pub fn run_audio_engine(
         EngineCounters::default(),
         Arc::new(RwLock::new(String::new())),
         Arc::new(RwLock::new(0.4)),
+        Arc::new(AtomicBool::new(false)),
     )
     .run()
 }
@@ -1220,6 +1248,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 600 * 2];
         pump.fill(&mut block, 2, f32_identity);
@@ -1256,6 +1285,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 600 * 2];
         pump.fill(&mut block, 2, f32_identity);
@@ -1315,6 +1345,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 600 * 2];
         pump.fill(&mut block, 2, f32_identity);
@@ -1350,6 +1381,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 4410 * 2];
         // Старая шкала: 300 шагов, ноты на части шагов.
@@ -1435,6 +1467,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 600 * 2];
         pump.fill(&mut block, 2, f32_identity);
@@ -1466,6 +1499,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 4410 * 2]; // один шаг 100 мс
         let push = |step: u64| {
@@ -1517,6 +1551,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 4410 * 2];
         let mut n = NoteEvent::new(6, 60, 0.8, 0.2);
@@ -1564,6 +1599,7 @@ mod tests {
             44_100.0,
             EngineCounters::default(),
             Arc::new(RwLock::new(0.4)),
+            Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 600 * 2];
         pump.fill(&mut block, 2, f32_identity);

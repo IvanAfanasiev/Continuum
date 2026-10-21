@@ -88,6 +88,17 @@ fn analyze(path: &str) {
         hp_prev = x;
         hp_peak = hp_peak.max(y.abs());
     }
+    // Ширина микса: разница каналов против суммы. 0 = моно (плоско),
+    // ближе к 1 = каналы почти разделены.
+    let mut side = 0.0f64;
+    let mut mid = 0.0f64;
+    for c in s16.chunks(2) {
+        let l = c[0] as f32 / 32768.0;
+        let r = c[1] as f32 / 32768.0;
+        side += ((l - r) * 0.5).powi(2) as f64;
+        mid += ((l + r) * 0.5).powi(2) as f64;
+    }
+    let width = (side / mid.max(1e-12)).sqrt();
     // RMS по активной части (где есть сигнал): тишина не должна съедать
     // средний уровень инструмента.
     let total: f64 = energies.iter().sum::<f64>().max(1e-9);
@@ -97,7 +108,7 @@ fn analyze(path: &str) {
         .map(|((lo, _), e)| format!("{lo:.0}Hz:{:.0}%", 100.0 * e / total))
         .collect();
     println!(
-        "{:<28} peak={:5.1}dB rms={:5.1}dB crest={:4.1}dB hp2k={:5.1}dB | {}",
+        "{:<28} peak={:5.1}dB rms={:5.1}dB crest={:4.1}dB hp2k={:5.1}dB width={:4.2} | {}",
         std::path::Path::new(path)
             .file_stem()
             .unwrap()
@@ -106,6 +117,7 @@ fn analyze(path: &str) {
         20.0 * (rms / 32768.0).max(1e-6).log10(),
         20.0 * (peak / rms.max(1e-6)).log10(),
         20.0 * hp_peak.max(1e-6).log10(),
+        width,
         pct.join(" ")
     );
 }
@@ -120,6 +132,17 @@ fn jumps(path: &str) {
         .chunks(2)
         .map(|c| (c[0] as f32 + c[1] as f32) * 0.5 / 32768.0)
         .collect();
+    // Ширина микса: разница каналов против суммы. 0 = моно (плоско),
+    // ближе к 1 = каналы почти разделены.
+    let mut side = 0.0f64;
+    let mut mid = 0.0f64;
+    for c in s16.chunks(2) {
+        let l = c[0] as f32 / 32768.0;
+        let r = c[1] as f32 / 32768.0;
+        side += ((l - r) * 0.5).powi(2) as f64;
+        mid += ((l + r) * 0.5).powi(2) as f64;
+    }
+    let width = (side / mid.max(1e-12)).sqrt();
     let n = mono.len();
     if n < 16 {
         return;
@@ -137,7 +160,8 @@ fn jumps(path: &str) {
         }
     }
     println!(
-        "    разрыв: макс={:.4} @ {:.3}с,с разрывом>0.01: {} ({} ppm)",
+        "    ширина={:.3} (0 = моно) | разрыв: макс={:.4} @ {:.3}с, с разрывом>0.01: {} ({} ppm)",
+        width,
         worst.0,
         worst.1 as f32 / sr as f32,
         over,

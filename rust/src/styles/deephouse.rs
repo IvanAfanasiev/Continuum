@@ -197,6 +197,7 @@ impl Style for DeepHouseStyle {
         let bass = RoleGuide {
             energy_response: 2.0,
             duration_mult: 2.0,
+            duration_var: 0.35,
             vel_base: 0.78,
             vel_energy: 0.25,
             vel_jitter: 0.05,
@@ -224,6 +225,7 @@ impl Style for DeepHouseStyle {
         // фон, а не голос. Наверху подложки мёртвый верх переполняется.
         let pad = RoleGuide {
             duration_mult: 10.0,
+            duration_var: 0.5,
             vel_base: 0.45,
             vel_jitter: 0.0,
             ..RoleGuide::pitched(PAD_W, 0, -1, 0, 10.0, 0.45)
@@ -259,6 +261,7 @@ impl Style for DeepHouseStyle {
         let pluck = RoleGuide {
             energy_response: 1.4,
             duration_mult: 2.2,
+            duration_var: 0.2,
             vel_base: 0.4,
             vel_energy: 0.28,
             vel_jitter: 0.05,
@@ -277,6 +280,7 @@ impl Style for DeepHouseStyle {
         let keys = RoleGuide {
             energy_response: 1.1,
             duration_mult: 1.2,
+            duration_var: 0.35,
             vel_base: 0.42,
             vel_jitter: 0.08,
             voice: Voicing::Scale {

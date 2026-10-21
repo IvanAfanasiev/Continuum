@@ -24,8 +24,6 @@ const CLAP_NOISE_CENTER_HZ: f32 = 3000.0;
 const NOISE_Q: f32 = 0.9;
 const NOISE_DECAY: f32 = 22.0;
 const NOISE_GAIN: f32 = 1.0;
-/// Шум клэпа громче: ударов несколько, каждый тише одиночного.
-const CLAP_NOISE_GAIN: f32 = 1.9;
 const SNAP_DECAY: f32 = 300.0;
 /// Snap — короткая яркая вспышка атаки. Раньше это был СЫРОЙ белый
 /// шум: полоса от 0 Гц, и на каждом ударе микротреск. Теперь только
@@ -102,21 +100,7 @@ impl Voice for SnareVoice {
             NOISE_CENTER_HZ
         };
         let (_, hiss, _) = self.bp.process(raw_noise, center, NOISE_Q, sample_rate);
-        // У клэпа шума больше: он разбит на всплески, и каждый из них
-        // тише одиночного удара — иначе хлопок не добирает уровня.
-        let noise_gain = if self.clap {
-            CLAP_NOISE_GAIN
-        } else {
-            NOISE_GAIN
-        };
-        let hiss = hiss * self.hiss_env.next() * noise_gain;
-        // Клэп 909: ладонь бьёт по рамке — три-четыре коротких всплеска
-        // шума подряд, потом общий хвост. Один всплеск звучит как «тик»,
-        // а не как хлопок; всплески идут затухающими (силы ладони на
-        // конец).
-        let burst = if self.clap { clap_bursts(self.t) } else { 1.0 };
-        let hiss = hiss * burst;
-        let snap = snap * burst;
+        let hiss = hiss * self.hiss_env.next() * NOISE_GAIN;
 
         let attack_raw = (self.t / ATTACK_SECS).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
@@ -135,24 +119,6 @@ impl Voice for SnareVoice {
     fn is_active(&self) -> bool {
         self.samples_left > 0
     }
-}
-
-/// Клэп 909: ладонь бьёт по рамке — короткие всплески шума подряд с
-/// интервалом около 8 мс, потом общий хвост. Всплески затухают: силы
-/// ладони к концу не хватает.
-fn clap_bursts(t: f32) -> f32 {
-    const GAP: f32 = 0.008;
-    const COUNT: f32 = 3.0;
-    let pos = t / GAP;
-    if pos >= COUNT {
-        // Дальше — хвост, его ведет огибающая шума.
-        return 0.0;
-    }
-    let idx = pos.floor();
-    let frac = pos - idx;
-    // Каждый всплеск: быстрый спад.
-    let e = (1.0 - frac).powi(3);
-    e * (1.0 - 0.22 * idx)
 }
 
 /// Публичный инструмент: моно-голос с кроссфейдом хвоста.

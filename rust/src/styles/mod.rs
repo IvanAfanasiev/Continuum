@@ -127,6 +127,11 @@ pub struct RoleGuide {
     /// Во сколько раз длиннее (от duration_mult).
     pub long_mult: f32,
     pub duration_mult: f32,
+    /// Разброс длины ноты от ноты к ноте (0..1). Без него все ноты
+    /// инструмента одной длины: генерация звучит механически, одинаково
+    /// в каждом стиле и сиде. 0 = фиксированная длина (ритмичные
+    /// слои), 0.5 = свободные (пэды, бас, EP).
+    pub duration_var: f32,
     pub vel_base: f32,
     pub vel_energy: f32,
     pub vel_jitter: f32,
@@ -195,6 +200,7 @@ impl RoleGuide {
         long_offbeats: false,
         long_mult: 1.0,
         duration_mult: 1.0,
+        duration_var: 0.0,
         vel_base: 0.0,
         vel_energy: 0.0,
         vel_jitter: 0.0,
@@ -237,6 +243,7 @@ impl RoleGuide {
             long_offbeats: false,
             long_mult: 1.0,
             duration_mult: 1.0,
+            duration_var: 0.0,
             vel_base: vel,
             vel_energy: 0.0,
             vel_jitter: 0.05,
@@ -275,6 +282,7 @@ impl RoleGuide {
             long_offbeats: false,
             long_mult: 1.0,
             duration_mult,
+            duration_var: 0.0,
             vel_base: vel,
             vel_energy: 0.0,
             vel_jitter: 0.05,
@@ -1006,7 +1014,11 @@ fn play_guide(
         * guide.duration_mult
         * duration_shape(song.seed_hash, slot_idx)
         * theme_phrase
-        * if long { guide.long_mult } else { 1.0 };
+        * if long { guide.long_mult } else { 1.0 }
+        // Разброс длины от ноты к ноте: без него все ноты инструмента
+        // одной длины — генерация механическая и одинаковая во всех
+        // стилях и сидах.
+        * (1.0 + guide.duration_var * rng.gen_range(-1.0..1.0));
 
     // Ударные: одиночная нота фиксированного питча, коротким путем.
     if let Voicing::Kit(pitch) = guide.voice {

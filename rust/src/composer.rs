@@ -139,6 +139,8 @@ pub struct Composer {
     dropped: Arc<AtomicU64>,
     /// Живой снимок для визуалайзера (делится с сессией).
     visual: Arc<RwLock<VisualSnap>>,
+    /// Флаг «оборвать старые голоса»: ставится при смене сида или стиля.
+    voice_reset: Arc<AtomicBool>,
     // Состояние генерации (бывшие локальные переменные run):
     rng: StdRng,
     arranger: Arranger,
@@ -193,6 +195,7 @@ impl Composer {
             Arc::new(AtomicU64::new(0)),
             Arc::new(AtomicU64::new(0)),
             Arc::new(RwLock::new(VisualSnap::default())),
+            Arc::new(AtomicBool::new(false)),
         )
     }
 
@@ -212,6 +215,7 @@ impl Composer {
         pushed: Arc<AtomicU64>,
         dropped: Arc<AtomicU64>,
         visual: Arc<RwLock<VisualSnap>>,
+        voice_reset: Arc<AtomicBool>,
     ) -> Self {
         let current_seed = snapshot(&seed);
         let (score, style_name, bpm, transition, layers) = match style.read() {
@@ -254,6 +258,7 @@ impl Composer {
             pushed,
             dropped,
             visual,
+            voice_reset,
             rng: StdRng::seed_from_u64(current_seed),
             arranger,
             song,
@@ -275,6 +280,10 @@ impl Composer {
     }
 
     fn reset_form(&mut self, seed: u64) {
+        // Старая генерация обрывается: голоса и хвост комнаты гаснут,
+        // а не доигрывают поверх новой (слушатель сам сменил сид/стиль —
+        // резкий обрыв уместен).
+        self.voice_reset.store(true, Ordering::Relaxed);
         // Партитура — от текущего стиля: спокойные идут коротким кругом.
         let (score, bpm, transition, layers) = match self.style.read() {
             Ok(g) => (

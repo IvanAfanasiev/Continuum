@@ -339,6 +339,9 @@ struct RunningSession {
     audio_config: Arc<RwLock<String>>,
     /// Живой снимок для визуалайзера (пишет композер каждый шаг).
     visual: Arc<RwLock<crate::composer::VisualSnap>>,
+    /// Флаг обрыва старой генерации (смена сида/стиля): общий для
+    /// композитора и движка.
+    voice_reset: Arc<AtomicBool>,
 }
 
 impl RunningSession {
@@ -363,6 +366,9 @@ impl RunningSession {
         let counters = EngineCounters::default();
         let audio_config: Arc<RwLock<String>> = Arc::new(RwLock::new(String::new()));
         let visual = Arc::new(RwLock::new(crate::composer::VisualSnap::default()));
+        // Флаг обрыва старой генерации: смена сида или стиля гасит
+        // голоса и хвост комнаты (резкий обрыв уместен).
+        let voice_reset = Arc::new(AtomicBool::new(false));
 
         let instruments = build_instruments();
         {
@@ -386,6 +392,7 @@ impl RunningSession {
             Arc::clone(&counters.pushed),
             Arc::clone(&counters.dropped),
             Arc::clone(&visual),
+            Arc::clone(&voice_reset),
         );
         let composer_handle = spawn_guarded("composer", &engine_error, || composer.run());
 
@@ -404,6 +411,7 @@ impl RunningSession {
                 counters.clone(),
                 Arc::clone(&audio_config),
                 Arc::clone(&filter_open),
+                Arc::clone(&voice_reset),
             );
             let sink = Arc::clone(&engine_error);
             spawn_guarded("engine", &engine_error, move || {
@@ -432,6 +440,7 @@ impl RunningSession {
             counters,
             audio_config,
             visual,
+            voice_reset,
         }
     }
 
@@ -603,6 +612,7 @@ impl PlaybackController {
                     session.counters.clone(),
                     Arc::clone(&session.audio_config),
                     Arc::clone(&session.filter_open),
+                    Arc::clone(&session.voice_reset),
                 );
                 let sink = Arc::clone(&session.engine_error);
                 session.engine_handle =
@@ -859,6 +869,7 @@ impl PlaybackController {
             live_bpm: Arc<RwLock<f32>>,
             filter_open: Arc<RwLock<f32>>,
             counters: EngineCounters,
+            voice_reset: Arc<AtomicBool>,
         }
         let parts: Option<Parts> = {
             let guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
@@ -871,6 +882,7 @@ impl PlaybackController {
                 live_bpm: Arc::clone(&s.live_bpm),
                 filter_open: Arc::clone(&s.filter_open),
                 counters: s.counters.clone(),
+                voice_reset: Arc::clone(&s.voice_reset),
             })
         };
         let Some(p) = parts else {
@@ -896,6 +908,7 @@ impl PlaybackController {
                     sr,
                     p.counters,
                     p.filter_open,
+                    p.voice_reset.clone(),
                 ));
                 pump_guard.as_mut().expect("pump just created")
             }

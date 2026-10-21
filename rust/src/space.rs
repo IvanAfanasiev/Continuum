@@ -12,7 +12,7 @@ const AP_TUNINGS_L: [f32; 2] = [556.0, 441.0];
 const AP_TUNINGS_R: [f32; 2] = [579.0, 464.0];
 const AP_FEEDBACK: f32 = 0.5;
 /// Send highpass: все ниже 400 Гц в реверб не идет.
-const SEND_HP_HZ: f32 = 400.0;
+const SEND_HP_HZ: f32 = 650.0;
 /// Пол анти-денормала: линии реверба живут вечно и без этого сползают
 /// в субнормальный диапазон, где арифметика x86 в десятки раз медленнее
 /// (редкие всплески нагрузки = хрип/прерывания). 1e-18 — обычный float,
@@ -108,8 +108,10 @@ impl SpaceBus {
     pub fn set_room(&mut self, wet: f32, size: f32) {
         let size = size.clamp(0.0, 1.0);
         self.wet = wet.clamp(0.0, 0.8);
-        self.feedback = 0.70 + 0.22 * size;
-        self.damp = 0.35 + 0.25 * size;
+        // Комната плотнее и темнее: длинный светлый хвост читался как
+        // «пустая комната» — инструменты тонули в эхе.
+        self.feedback = 0.62 + 0.20 * size;
+        self.damp = 0.45 + 0.25 * size;
     }
 
     fn send_hp(&mut self, x: f32, left: bool) -> f32 {
@@ -133,7 +135,12 @@ impl SpaceBus {
     }
 
     /// Полный сброс линий (защита от залипшего NaN — реверб с обратной
-    /// связью иначе звенел бы им вечно).
+    /// связью иначе звенел бы им вечно). Также глушит хвост комнаты
+    /// при смене сида или стиля: старая генерация не доигрывает.
+    pub fn reset(&mut self) {
+        self.reset_all();
+    }
+
     fn reset_all(&mut self) {
         for comb in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
             comb.buf.fill(0.0);

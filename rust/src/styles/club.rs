@@ -245,7 +245,8 @@ impl Style for ClubStyle {
         let pluck = RoleGuide {
             energy_response: 1.5,
             duration_mult: 1.6,
-            vel_base: 0.45,
+            duration_var: 0.2,
+            vel_base: 0.55,
             vel_energy: 0.3,
             vel_jitter: 0.07,
             // Унисон темы: носители поют те же ступени (джиттер 0) —
@@ -266,7 +267,8 @@ impl Style for ClubStyle {
             // через секции вместо «то нет, то стена».
             energy_response: 1.2,
             duration_mult: 1.5,
-            vel_base: 0.55,
+            duration_var: 0.35,
+            vel_base: 0.62,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
                 degree: 2,
