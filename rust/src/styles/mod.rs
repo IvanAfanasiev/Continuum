@@ -1455,6 +1455,50 @@ mod tests {
     }
 
     #[test]
+    fn deep_house_ep_arp_steps_through_the_chord() {
+        // Подпись электро: EP играет не трезвучием, а арпеджио — ступени
+        // аккорда по очереди. За такт — восемь нот (каждая восьмая) и
+        // несколько разных высот: значит, цикл идет, а не повторяется
+        // одна ступень.
+        use crate::instruments::Slot;
+        let style = make_style("deep").expect("deep house");
+        let mut mixer = crate::mixer::MixerState::new();
+        crate::playback::apply_style_mix(&*style, &mut mixer);
+        let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
+        let n = mixer.active_ids(&mut buf);
+        let active = buf[..n].to_vec();
+        let mut rng = rand::SeedableRng::seed_from_u64(424242);
+        let mut arranger = crate::arranger::Arranger::new(424242);
+        let song = arranger.advance_measure();
+        let mut pitches: Vec<u8> = Vec::new();
+        for step in 0..16 {
+            let mut sctx = StepContext {
+                step,
+                step_in_measure: step,
+                base_step_secs: style.base_step_secs(),
+                active_tracks: &active,
+                song: &song,
+                rng: &mut rng,
+                intensity: 1.0,
+            };
+            for note in render_style(&*style, &mut sctx) {
+                if note.instrument_id == Slot::Keys.id() {
+                    pitches.push(note.midi_pitch);
+                }
+            }
+        }
+        assert!(pitches.len() >= 6, "EP молчит: {} нот", pitches.len());
+        let mut distinct = pitches.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert!(
+            distinct.len() >= 3,
+            "арпеджио не идет по аккорду: {:?}",
+            distinct
+        );
+    }
+
+    #[test]
     fn deep_house_keeps_its_promise() {
         // Deep house по брифу: ровный бит 120-125 BPM, глубокий бас,
         // плавная повторяющаяся мелодия, тёплый объём, мягкий вокал,
@@ -1474,7 +1518,7 @@ mod tests {
             &guides[i]
         };
         // Бас глубокий и мягкий: почти чистый синус, низкий потолок.
-        assert!(at(crate::instruments::Slot::Bass).sub_bias >= 0.8);
+        assert!(at(crate::instruments::Slot::Bass).sub_bias >= 0.7);
         assert!(at(crate::instruments::Slot::Bass).bass_top <= 43);
         // Мелодия плавная: джиттер 0 (цельная линия) и длинные ноты.
         let pluck = at(crate::instruments::Slot::Pluck);
@@ -1482,9 +1526,10 @@ mod tests {
         assert!(pluck.duration_mult >= 2.0, "мелодия должна быть плавной");
         // Вокал мягкий: тише основного состава.
         assert!(at(crate::instruments::Slot::Vocal).vel_base <= 0.45);
-        // Объём: реверберации больше, чем в клубе, верх теплее.
-        assert!(style.reverb_wet() > 0.12, "нет объёма");
-        assert!(style.treble_cutoff() <= 12000.0, "верх слишком цифровой");
+        // Объём: хвост есть, но микс сухой (в плейлисте объем даёт линия,
+        // а не wash).
+        assert!(style.reverb_wet() >= 0.1, "нет объёма");
+        assert!(style.treble_cutoff() <= 14000.0, "верх слишком цифровой");
         // Развитие постепенное: тема и разгон длиннее базовой формы.
         let cycle = style.arrangement().cycle;
         let main = cycle
