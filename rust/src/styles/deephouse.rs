@@ -182,7 +182,6 @@ impl Style for DeepHouseStyle {
             Slot::Kick,
             Slot::Pad,
             Slot::Snare,
-            Slot::Hat,
             Slot::Pluck,
             Slot::Keys,
             Slot::Shaker,

@@ -15,7 +15,7 @@ const FREQ_START_HZ: f32 = 170.0;
 const FREQ_END_HZ: f32 = 44.0;
 const SWEEP_RATE: f32 = 160.0;
 const AMP_DECAY: f32 = 7.5;
-const CLICK_DECAY: f32 = 380.0;
+const CLICK_DECAY: f32 = 300.0;
 /// Щелчок погромче (был 0.6): на мелких динамиках фундамент
 /// не слышно, бит везёт именно битер. Хвост короткий — грязи нет.
 const CLICK_GAIN: f32 = 0.7;

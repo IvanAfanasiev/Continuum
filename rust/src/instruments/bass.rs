@@ -15,6 +15,10 @@ use crate::core::midi_to_freq;
 /// «клавишный» дребезг прошлой версии.
 const SUB_GAIN: f32 = 0.9;
 const OCTAVE_GAIN: f32 = 0.5;
+/// Вторая гармоника баса: держит низ на телефоне, где чистый синус
+/// пропадает. Не зависит от саб-перекоса стиля — это «железный» слой,
+/// а не окраска.
+const SECOND_HARMONIC_GAIN: f32 = 0.26;
 const PRESENCE_GAIN: f32 = 0.45;
 /// Драйв волны. Было 1.5 + 2.5·velocity (до 3.75): такая перегрузка
 /// давала почти квадратный тембр — грубый «хрип» на самом низу.
@@ -155,6 +159,11 @@ impl Voice for BassVoice {
         // Четная октава строго в фазе с фундаментом (та же фаза ×2):
         // тепло без биений — гармоники совпадают, а не спорят.
         let octave = sin01(self.phase * 2.0) * OCTAVE_GAIN;
+        // Вторая гармоника — отдельный слой, НЕ зависит от саб-перекоса
+        // стиля. Чистый синус на телефоне не слышен: низ уходит, и бас
+        // пропадает совсем. 808 так и устроен — основной тон плюс
+        // вторая гармоника; она и держит бас на телефоне.
+        let second = sin01(self.phase * 2.0 + 0.15) * SECOND_HARMONIC_GAIN;
 
         let sub = wave * SUB_GAIN;
         // Та же волна через драйв: гармоники идеально когерентны
@@ -186,7 +195,7 @@ impl Voice for BassVoice {
             * PICK_GAIN
             * (1.0 - 0.5 * self.sub_bias)
             * pa;
-        (sub + (presence * PRESENCE_GAIN + octave * OCTAVE_GAIN) * keep + pick)
+        (sub + second + (presence * PRESENCE_GAIN + octave * OCTAVE_GAIN) * keep + pick)
             * self.gain
             * amp
             * attack
@@ -354,8 +363,9 @@ mod tests {
 
     #[test]
     fn sub_bias_pushes_bass_toward_pure_sine() {
-        // Перекос 1.0 давит презенс-цепь: 2-я гармоника падает ниже
-        // музыкального порога, фундамент цел, все конечно.
+        // Перекос 1.0 гасит презенс-цепь (гармоники драйва): вторая
+        // гармоника слабеет. Но базовая вторая гармоника остается — на
+        // телефоне чистый синус пропадает совсем, и баса не слышно.
         fn second_ratio(bias: f32) -> (f32, f32) {
             let sr = 44_100.0;
             let mut bass = BassGuitar::new(1);
@@ -371,8 +381,12 @@ mod tests {
         let (fund1, second1) = second_ratio(1.0);
         assert!(second0 > fund0 * 0.15, "baseline warmth lost");
         assert!(
-            second1 < fund1 * 0.12,
-            "sub not pure: 2nd={second1} fund={fund1}"
+            second1 < second0 * 0.7,
+            "презенс не загас: {second0} -> {second1}"
+        );
+        assert!(
+            second1 > fund1 * 0.12,
+            "бас стал чистым синусом: 2nd={second1} fund={fund1}"
         );
         assert!(
             fund1 > fund0 * 0.5,

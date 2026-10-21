@@ -122,25 +122,15 @@ impl Voice for KeysVoice {
         self.tine_phase = (self.tine_phase + (self.frequency * TINE_RATIO) / sample_rate) % 1.0;
         let tine = sin01(self.tine_phase) * self.tine_env.next() * self.tine_gain;
 
-        // Молоточек (первые 8 мс): войлок + дерево + шум. Мозг читает
-        // атаку как «акустика», дальше ветка молчит (один бранч).
-        // Уровни — как живой удар: тихо, но заметно (ср. v1 piano).
-        let hammer = if self.t < 0.008 {
-            let env = 1.0 - self.t / 0.008;
-            let felt = sin01(self.t * 1180.0) * 0.004;
-            let wood = sin01(self.t * 92.0) * 0.012;
-            (self.noise.sample() * 0.006 + felt + wood) * env * env
-        } else {
-            0.0
-        };
+        // Акустического молоточка (войлок, дерево) тут нет: это
+        // электропиано, а не рояль. Атаку задаёт FM-корпус и «tine» —
+        // электронные призвуки, а не звук материала.
 
         self.trem_phase = (self.trem_phase + TREMOLO_HZ / sample_rate) % 1.0;
         let tremolo = 1.0 + TREMOLO_DEPTH * sin01(self.trem_phase);
 
         self.t += 1.0 / sample_rate;
-        // Молоточек — до атаки тела (как щипок плака): мягкий вход
-        // Rhodes душит транзиент, если тот внутри его огибающей.
-        let raw = (body * 0.75 + tine) * attack + hammer;
+        let raw = (body * 0.75 + tine) * attack;
         let raw = raw * self.gain * amp * fade * tremolo;
         // High-pass 180 Гц: низ под Rhodes вырезан, место басу и бочке.
         let (_, _, hipped) = self.hp.process(raw, HP_HZ, 0.7, sample_rate);

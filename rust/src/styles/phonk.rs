@@ -177,8 +177,8 @@ impl Style for PhonkStyle {
         };
         let hat = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 0.4,
-            vel_base: 0.7,
+            duration_mult: 0.35,
+            vel_base: 0.42,
             vel_energy: 0.3,
             vel_jitter: 0.08,
             ..RoleGuide::kit(HAT_PH, 42, 0.7)

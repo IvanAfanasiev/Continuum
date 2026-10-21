@@ -1365,7 +1365,9 @@ mod tests {
         assert!(vol(BASS_ID) > 0.0);
         assert!(vol(KICK_ID) > 0.0);
         assert!(vol(SNARE_ID) > 0.0);
-        assert!(vol(HAT_ID) > 0.0);
+        // Хэта в club нет: ритм держит шейкер (звонкий «треугольник» на
+        // верху убивал характер).
+        assert_eq!(vol(HAT_ID), 0.0);
         assert_eq!(vol(KICK808_ID), 0.0);
         assert!(vol(PLUCK_ID) > 0.0);
         assert!(vol(KEYS_ID) > 0.0);
@@ -2052,10 +2054,11 @@ mod tests {
         use Slot::*;
 
         let club = ensemble_of("club");
-        for s in [Bass, Kick, Snare, Hat, Pluck, Keys, Shaker] {
+        for s in [Bass, Kick, Snare, Pluck, Keys, Shaker] {
             assert!(club.contains(&s), "club: {s:?} missing");
         }
-        for s in [Pad, Vocal, Guitar, Kick808, Vinyl, GuitarLead] {
+        // Хэта в club нет (звонкий металл убивал характер), как и пэда с вокалом.
+        for s in [Hat, Pad, Vocal, Guitar, Kick808, Vinyl, GuitarLead] {
             assert!(!club.contains(&s), "club: {s:?} should be off");
         }
         // Гостей у club больше нет: состав задаёт стиль и микс.
