@@ -129,20 +129,20 @@ impl Style for DeepHouseStyle {
         }
     }
 
-    /// Аранж deep house: мечтательная подложка (пэд, Rhodes, винил) и
-    /// мягкий бас с первого такта; в передышке уходят барабаны — это
-    /// breakdown, а не отдых.
+    /// Аранж deep house: мечтательная подложка (пэд и Rhodes) и мягкий
+    /// бас с первого такта; в передышке уходят барабаны — это breakdown,
+    /// а не отдых. Текстуры нет: винил убран, «затертость» не нужна.
     fn arrangement_layers(&self) -> crate::piece::Layers {
-        use crate::piece::{L_GROOVE, L_HARMONY, L_TEXTURE, L_THEME, L_VOCAL};
+        use crate::piece::{L_GROOVE, L_HARMONY, L_THEME, L_VOCAL};
         [
-            // Тема: грув, бас, пэд с Rhodes, тема и винил.
-            L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
+            // Тема: грув, бас, пэд с Rhodes и тема.
+            L_GROOVE | L_HARMONY | L_THEME,
             // Разгон: подключается вокал (мягкий, с эхом).
-            L_GROOVE | L_HARMONY | L_THEME | L_VOCAL | L_TEXTURE,
+            L_GROOVE | L_HARMONY | L_THEME | L_VOCAL,
             // Удар: весь состав.
-            L_GROOVE | L_HARMONY | L_THEME | L_VOCAL | L_TEXTURE,
+            L_GROOVE | L_HARMONY | L_THEME | L_VOCAL,
             // Передышка: только подложка — барабаны и бас молчат.
-            L_HARMONY | L_TEXTURE,
+            L_HARMONY,
         ]
     }
 
@@ -175,8 +175,8 @@ impl Style for DeepHouseStyle {
 
     fn ensemble(&self) -> &'static [Slot] {
         // Синтезаторы (щипок, пэд), клавишные (Rhodes), барабанная
-        // машина (бочка, клэп, хэт, шейкер), бас, винил и вокал.
-        // Джаз и соул — в Rhodes и в тёплом пэде.
+        // машина (бочка, клэп, хэт, шейкер), бас и вокал. Винила нет:
+        // генерация должна быть чистой и «современной», без затертости.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -186,7 +186,6 @@ impl Style for DeepHouseStyle {
             Slot::Pluck,
             Slot::Keys,
             Slot::Shaker,
-            Slot::Vinyl,
             Slot::Vocal,
         ]
     }
@@ -222,12 +221,13 @@ impl Style for DeepHouseStyle {
             poles: Some(KICK_POLES),
             ..RoleGuide::kit(FOUR_FLOOR, 36, 0.95)
         };
-        // Пэд: тёплая подушка на весь такт, ноты длинные.
+        // Пэд: глубокая подушка под всем (октава ниже корня), тише — он
+        // фон, а не голос. Наверху подложки мёртвый верх переполняется.
         let pad = RoleGuide {
             duration_mult: 10.0,
-            vel_base: 0.52,
+            vel_base: 0.45,
             vel_jitter: 0.0,
-            ..RoleGuide::pitched(PAD_W, 0, 0, 0, 10.0, 0.52)
+            ..RoleGuide::pitched(PAD_W, 0, -1, 0, 10.0, 0.45)
         };
         // Клэп на 2 и 4, с призвуком. Забивка на стыке фразы — стык
         // слышно как ход, а не как обрыв.
@@ -238,36 +238,39 @@ impl Style for DeepHouseStyle {
             build_roll: true,
             ..RoleGuide::kit(CLAP_W, 60, 0.9)
         };
-        // Хэт: открытые оффбитные 16-е — подпись 909.
+        // Хэт: закрытый, короткий, тише шейкера. Звонкий металл на
+        // верху убивал характер: в микс шл «треугольник» вместо бита.
+        // Ритм держит шейкер — быстрый и сухой.
         let hat = RoleGuide {
             energy_response: 1.2,
             drop_before_climax: true,
             long_offbeats: true,
-            long_mult: 5.0,
-            duration_mult: 0.5,
-            vel_base: 0.66,
-            vel_energy: 0.35,
+            long_mult: 3.0,
+            duration_mult: 0.35,
+            vel_base: 0.4,
+            vel_energy: 0.3,
             vel_jitter: 0.1,
             poles: Some(HAT_POLES),
             section_poles: true,
-            ..RoleGuide::kit(HAT_W, 42, 0.6)
+            ..RoleGuide::kit(HAT_W, 42, 0.4)
         };
         // Тема: плавная, повторяющаяся. Джиттер 0 — линия цельная,
-        // ноты длинные: мелодия льется фразами.
+        // ноты длинные: мелодия льется фразами. Октава ниже: синтезатор
+        // наверху спорил с EP и хэтом — линия должна быть в середине.
         let pluck = RoleGuide {
             energy_response: 1.4,
             duration_mult: 2.2,
-            vel_base: 0.38,
+            vel_base: 0.4,
             vel_energy: 0.28,
             vel_jitter: 0.05,
             voice: Voicing::Scale {
                 degree: 0,
-                octave: 2,
+                octave: 1,
                 jitter: 0,
             },
             follow_motif: true,
             phrase_rest: 0.15,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 2.2, 0.42)
+            ..RoleGuide::pitched(LEAD_W, 0, 1, 0, 2.2, 0.4)
         };
         // Rhodes/DX: подпись электро — арпеджио вместо аккорда. Одна
         // ступень за удар, квинта и септима: звук колокольный, как у
@@ -275,7 +278,7 @@ impl Style for DeepHouseStyle {
         let keys = RoleGuide {
             energy_response: 1.1,
             duration_mult: 1.2,
-            vel_base: 0.55,
+            vel_base: 0.42,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
                 degree: 2,
@@ -284,7 +287,7 @@ impl Style for DeepHouseStyle {
             },
             chord: Some(&[0, 2, 4, 6]),
             arp: true,
-            ..RoleGuide::pitched(EP_ARP_W, 2, 1, 0, 1.2, 0.55)
+            ..RoleGuide::pitched(EP_ARP_W, 2, 1, 0, 1.2, 0.42)
         };
         // 808: гостевой бас для тех, кто хочет скользящий 808 вместо саба.
         let kick808 = RoleGuide {
@@ -342,10 +345,10 @@ impl Style for DeepHouseStyle {
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
-            vel_base: 0.52,
+            vel_base: 0.62,
             vel_energy: 0.15,
             vel_jitter: 0.08,
-            ..RoleGuide::kit(SHAKER_W, 60, 0.52)
+            ..RoleGuide::kit(SHAKER_W, 60, 0.62)
         };
         // Соло-гитара — ручной гость.
         let guitar_lead = RoleGuide {

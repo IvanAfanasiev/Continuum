@@ -175,7 +175,7 @@ impl Style for ClubStyle {
         let bass = RoleGuide {
             energy_response: 2.2,
             duration_mult: 1.8,
-            vel_base: 0.7,
+            vel_base: 0.78,
             vel_energy: 0.25,
             vel_jitter: 0.06,
             voice: Voicing::Scale {
@@ -224,10 +224,12 @@ impl Style for ClubStyle {
             energy_response: 1.2,
             drop_before_climax: true,
             long_offbeats: true,
-            long_mult: 5.0,
-            duration_mult: 0.5,
-            vel_base: 0.65,
-            vel_energy: 0.35,
+            // Короче и тише: звонкий металл на верху давал «треугольник»
+            // вместо бита и забивал весь верх микса. Ритм держит шейкер.
+            long_mult: 3.0,
+            duration_mult: 0.35,
+            vel_base: 0.42,
+            vel_energy: 0.3,
             vel_jitter: 0.1,
             poles: Some(HAT_POLES),
             // Хэт держит сетку полюсов: собственный пульс давал фэйзинг
@@ -248,14 +250,16 @@ impl Style for ClubStyle {
             vel_jitter: 0.07,
             // Унисон темы: носители поют те же ступени (джиттер 0) —
             // цельная мелодия, краски различают тембры, а не высоты.
+            // Октава на единицу ниже: синтезатор на самом верху спорил
+            // с EP и хэтом — линии надо держаться в середине.
             voice: Voicing::Scale {
                 degree: 0,
-                octave: 2,
+                octave: 1,
                 jitter: 0,
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 2, 0, 1.6, 0.45)
+            ..RoleGuide::pitched(LEAD_W, 0, 1, 0, 1.6, 0.45)
         };
         let keys = RoleGuide {
             // Гость-текучка, а не рубильник: ровное присутствие
@@ -334,10 +338,10 @@ impl Style for ClubStyle {
         let shaker = RoleGuide {
             energy_response: 1.0,
             duration_mult: 0.4,
-            vel_base: 0.5,
+            vel_base: 0.62,
             vel_energy: 0.15,
             vel_jitter: 0.08,
-            ..RoleGuide::kit(SHAKER_W, 60, 0.5)
+            ..RoleGuide::kit(SHAKER_W, 60, 0.62)
         };
         // Соло-гитара вне автомикса club: ручная краска для фронта.
         let guitar_lead = RoleGuide {
