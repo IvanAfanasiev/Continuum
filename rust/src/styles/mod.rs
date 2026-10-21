@@ -19,6 +19,7 @@
 //! слоты, а не в дефолт: плотность доказывается замером, не ощущением.
 
 pub mod club;
+pub mod deephouse;
 pub mod lofi;
 pub mod phonk;
 pub mod protoclub;
@@ -1360,12 +1361,14 @@ pub(crate) fn beat_accent(step_in_measure: usize, steps_per_measure: usize) -> f
 /// вместо тихого включения не того стиля.
 pub fn make_style(name: &str) -> Option<Box<dyn Style>> {
     use club::ClubStyle;
+    use deephouse::DeepHouseStyle;
     use lofi::LofiStyle;
     use phonk::PhonkStyle;
     use protoclub::ProtoclubStyle;
     use rock::RockStyle;
     match name.trim().to_lowercase().as_str() {
         "club" => Some(Box::new(ClubStyle::new())),
+        "deep" => Some(Box::new(DeepHouseStyle::new())),
         "lofi" => Some(Box::new(LofiStyle::new())),
         "rock" => Some(Box::new(RockStyle::new())),
         "phonk" => Some(Box::new(PhonkStyle::new())),
@@ -1376,7 +1379,7 @@ pub fn make_style(name: &str) -> Option<Box<dyn Style>> {
 
 /// Все доступные стили: имена для CLI и Flutter.
 pub fn style_names() -> &'static [&'static str] {
-    &["club", "rock", "lofi", "phonk", "proto"]
+    &["club", "deep", "rock", "lofi", "phonk", "proto"]
 }
 
 #[cfg(test)]
@@ -1452,6 +1455,52 @@ mod tests {
     }
 
     #[test]
+    fn deep_house_keeps_its_promise() {
+        // Deep house по брифу: ровный бит 120-125 BPM, глубокий бас,
+        // плавная повторяющаяся мелодия, тёплый объём, мягкий вокал,
+        // постепенное развитие (длинные тема и разгон).
+        let style = make_style("deep").expect("deep house");
+        assert!(
+            (120.0..=125.0).contains(&style.bpm()),
+            "темп вне 120-125: {}",
+            style.bpm()
+        );
+        let guides = style.slot_guides();
+        let at = |slot: crate::instruments::Slot| {
+            let i = crate::instruments::Slot::ALL
+                .iter()
+                .position(|s| *s == slot)
+                .unwrap();
+            &guides[i]
+        };
+        // Бас глубокий и мягкий: почти чистый синус, низкий потолок.
+        assert!(at(crate::instruments::Slot::Bass).sub_bias >= 0.8);
+        assert!(at(crate::instruments::Slot::Bass).bass_top <= 43);
+        // Мелодия плавная: джиттер 0 (цельная линия) и длинные ноты.
+        let pluck = at(crate::instruments::Slot::Pluck);
+        assert!(pluck.follow_motif, "мелодия должна повторяться");
+        assert!(pluck.duration_mult >= 2.0, "мелодия должна быть плавной");
+        // Вокал мягкий: тише основного состава.
+        assert!(at(crate::instruments::Slot::Vocal).vel_base <= 0.45);
+        // Объём: реверберации больше, чем в клубе, верх теплее.
+        assert!(style.reverb_wet() > 0.12, "нет объёма");
+        assert!(style.treble_cutoff() <= 12000.0, "верх слишком цифровой");
+        // Развитие постепенное: тема и разгон длиннее базовой формы.
+        let cycle = style.arrangement().cycle;
+        let main = cycle
+            .iter()
+            .find(|(s, _)| *s == crate::arranger::SongSection::MainMotif)
+            .map(|(_, b)| *b)
+            .unwrap();
+        let build = cycle
+            .iter()
+            .find(|(s, _)| *s == crate::arranger::SongSection::BuildUp)
+            .map(|(_, b)| *b)
+            .unwrap();
+        assert!(main >= 8 && build >= 6, "развитие слишком быстрое");
+    }
+
+    #[test]
     fn every_style_has_its_own_form_and_arrangement() {
         // Стиль должен отличаться построением, а не только тембрами:
         // своя форма (длины секций) и свой аранж (кто играет в секции).
@@ -1488,7 +1537,7 @@ mod tests {
         // доле фразы снейр играет 16-е с нарастанием. Это ноты, которые
         // ведут в следующую фразу, а не кроссфейд.
         use crate::instruments::{InstrumentRole, Slot};
-        for name in ["club", "rock", "phonk", "proto"] {
+        for name in ["club", "deep", "rock", "phonk", "proto"] {
             let style = make_style(name).expect("known style");
             let mut mixer = crate::mixer::MixerState::new();
             crate::playback::apply_style_mix(&*style, &mut mixer);
@@ -3146,7 +3195,7 @@ mod tests {
             }
             (pitches, rhythm)
         }
-        for name in ["club", "rock", "lofi", "phonk", "proto"] {
+        for name in ["club", "deep", "rock", "lofi", "phonk", "proto"] {
             let sigs: Vec<_> = (0..8u64).map(|s| signature(name, s)).collect();
             for i in 0..8 {
                 for j in (i + 1)..8 {

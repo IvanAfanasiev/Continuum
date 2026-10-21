@@ -115,7 +115,14 @@ const _slotMeta = {
 
 String _styleTitle(String style) {
   if (style.isEmpty) return 'Club';
-  return style[0].toUpperCase() + style.substring(1);
+  switch (style) {
+    case 'deep':
+      return 'Deep House';
+    case 'proto':
+      return 'Proto';
+    default:
+      return style[0].toUpperCase() + style.substring(1);
+  }
 }
 
 /// Диагностика тракта для баннера (null — все растет как надо).
