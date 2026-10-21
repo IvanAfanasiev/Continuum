@@ -31,6 +31,30 @@ use crate::instruments::Group;
 /// это и есть аранж, а не бросок монет на каждом шаге.
 pub type LayerMask = u8;
 
+/// Аранж стиля: кто играет в каждой из четырех секций (порядок
+/// [`LAYER_ORDER`]). Стиль решает сам: у рока рифф остается в
+/// передышке, в клубе вокал молчит до дропа, в лофай пэд держит тему.
+/// Это данные, а не код: правка стиля — правка таблицы.
+pub type Layers = [LayerMask; 4];
+
+/// Порядок секций в таблице аранжа.
+pub const LAYER_ORDER: [SongSection; 4] = [
+    SongSection::MainMotif,
+    SongSection::BuildUp,
+    SongSection::Drop,
+    SongSection::PostChorus,
+];
+
+/// Индекс секции в таблице аранжа.
+pub fn layer_index(section: SongSection) -> usize {
+    match section {
+        SongSection::MainMotif => 0,
+        SongSection::BuildUp => 1,
+        SongSection::Drop => 2,
+        SongSection::PostChorus => 3,
+    }
+}
+
 /// Грув: бочка, снейр, хэт, бас — то, что держит такт.
 pub const L_GROOVE: LayerMask = (1 << Group::Kick.index())
     | (1 << Group::Snare.index())
@@ -46,6 +70,7 @@ pub const L_VOCAL: LayerMask = 1 << Group::Vocal.index();
 pub const L_TEXTURE: LayerMask = 1 << Group::Texture.index();
 
 /// Маска секции по её виду: кто играет в теме, разгоне, дропе, передышке.
+/// Общий аранж на стиль — стили переопределяют таблицу у себя.
 pub fn layers_for(section: SongSection) -> LayerMask {
     match section {
         // Тема: грув + пампа + тема. Эффекты и вокал молчат — их вход
@@ -58,6 +83,16 @@ pub fn layers_for(section: SongSection) -> LayerMask {
         // Передышка: грув катит дальше, верх отдыхает.
         SongSection::PostChorus => L_GROOVE | L_HARMONY | L_TEXTURE,
     }
+}
+
+/// Аранж по общему правилу (тема, разгон, удар, передышка).
+pub fn default_layers() -> Layers {
+    [
+        layers_for(SongSection::MainMotif),
+        layers_for(SongSection::BuildUp),
+        layers_for(SongSection::Drop),
+        layers_for(SongSection::PostChorus),
+    ]
 }
 
 /// Маска шва (финала куска): только грув и текстура. Верхние голоса
@@ -167,6 +202,7 @@ pub fn plan_piece(
     index: u64,
     start_bar: usize,
     transition: Transition,
+    layers: Layers,
 ) -> PiecePlan {
     let salt = splitmix64(seed ^ 0x9E37_79B9 ^ index.wrapping_mul(0x2545_F491));
     let bar_secs = if bpm > 1.0 { 4.0 * 60.0 / bpm } else { 2.0 };
@@ -210,7 +246,7 @@ pub fn plan_piece(
                 bars: len,
                 vary: false,
                 energy: None,
-                layers: layers_for(*section),
+                layers: layers[layer_index(*section)],
             });
             total += len;
             if total >= target_bars {
@@ -287,7 +323,7 @@ mod tests {
             ("lofi", 82.0, CALM_SCORE.cycle),
         ] {
             for index in 0..8u64 {
-                let plan = plan_piece(42, bpm, skeleton, index, 0, rolling());
+                let plan = plan_piece(42, bpm, skeleton, index, 0, rolling(), default_layers());
                 let secs = plan.bars() as f32 * 4.0 * 60.0 / bpm;
                 assert!(
                     (30.0..=60.0).contains(&secs),
@@ -301,7 +337,15 @@ mod tests {
     #[test]
     fn piece_ends_with_a_joint() {
         // Финал есть у каждого куска: последние такты — шов.
-        let plan = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 0, 0, rolling());
+        let plan = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            0,
+            rolling(),
+            default_layers(),
+        );
         assert_eq!(plan.joint.bars, 2);
         assert!(
             plan.joint.energy.is_some(),
@@ -314,7 +358,15 @@ mod tests {
     fn joint_leaves_room_for_the_next_piece() {
         // В шве верхние голоса молчат: туда входит голос следующего
         // куска — иначе стык режет фразу.
-        let plan = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 0, 0, rolling());
+        let plan = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            0,
+            rolling(),
+            default_layers(),
+        );
         assert_eq!(plan.joint.layers & L_THEME, 0, "в шве не должно быть темы");
         assert_ne!(plan.joint.layers & L_GROOVE, 0, "в шве должен идти грув");
     }
@@ -323,7 +375,15 @@ mod tests {
     fn sharp_transition_does_not_overlap() {
         // Резкий стык: короткий хвост, куски не перекрываются —
         // следующий начинается сразу, без нахлеста.
-        let plan = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 0, 0, Transition::Cut);
+        let plan = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            0,
+            Transition::Cut,
+            default_layers(),
+        );
         assert_eq!(plan.joint.bars, 1);
         assert_eq!(Transition::Cut.overlap_bars(), 0);
         assert_eq!(Transition::Rolling { bars: 2 }.overlap_bars(), 2);
@@ -355,8 +415,24 @@ mod tests {
     fn pieces_differ_between_themselves() {
         // Соседние куски не повторяются дословно: длина секций и набор
         // отличаются (иначе поток снова станет «кольцом»).
-        let a = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 0, 0, rolling());
-        let b = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 1, 0, rolling());
+        let a = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            0,
+            rolling(),
+            default_layers(),
+        );
+        let b = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            1,
+            0,
+            rolling(),
+            default_layers(),
+        );
         assert_ne!(
             a.body.iter().map(|s| s.bars).collect::<Vec<_>>(),
             b.body.iter().map(|s| s.bars).collect::<Vec<_>>(),
@@ -366,8 +442,24 @@ mod tests {
 
     #[test]
     fn same_seed_same_piece() {
-        let a = plan_piece(7, 126.0, ENERGETIC_SCORE.cycle, 3, 0, rolling());
-        let b = plan_piece(7, 126.0, ENERGETIC_SCORE.cycle, 3, 0, rolling());
+        let a = plan_piece(
+            7,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            3,
+            0,
+            rolling(),
+            default_layers(),
+        );
+        let b = plan_piece(
+            7,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            3,
+            0,
+            rolling(),
+            default_layers(),
+        );
         assert_eq!(
             a.body.iter().map(|s| s.bars).collect::<Vec<_>>(),
             b.body.iter().map(|s| s.bars).collect::<Vec<_>>()
@@ -378,8 +470,24 @@ mod tests {
     fn remainder_is_planned_from_the_current_bar() {
         // Живая смена сида/стиля вступает с следующего такта: остаток
         // куска перепланируется, отыгранное — не трогаем.
-        let full = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 0, 0, rolling());
-        let rest = plan_piece(42, 126.0, ENERGETIC_SCORE.cycle, 0, 8, rolling());
+        let full = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            0,
+            rolling(),
+            default_layers(),
+        );
+        let rest = plan_piece(
+            42,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            8,
+            rolling(),
+            default_layers(),
+        );
         let full_bars: usize = full.body.iter().map(|s| s.bars).sum();
         let rest_bars: usize = rest.body.iter().map(|s| s.bars).sum();
         assert_eq!(
@@ -395,7 +503,7 @@ mod tests {
     #[test]
     fn calm_style_piece_breathes() {
         // Спокойный скелет: тема dominates, подъем и передышка — гости.
-        let plan = plan_piece(7, 82.0, CALM_SCORE.cycle, 0, 0, rolling());
+        let plan = plan_piece(7, 82.0, CALM_SCORE.cycle, 0, 0, rolling(), default_layers());
         let mains = plan
             .body
             .iter()

@@ -155,6 +155,8 @@ pub struct Composer {
     plan: [u64; 4],
     /// Партитура стиля (нужна тени перехода).
     score: crate::arranger::Score,
+    /// Аранж стиля: кто играет в каждой секции.
+    layers: crate::piece::Layers,
     /// Как стиль склеивает куски.
     transition: crate::piece::Transition,
     /// Тень: голос следующего куска, который поет поверх грува текущего
@@ -212,12 +214,13 @@ impl Composer {
         visual: Arc<RwLock<VisualSnap>>,
     ) -> Self {
         let current_seed = snapshot(&seed);
-        let (score, style_name, bpm, transition) = match style.read() {
+        let (score, style_name, bpm, transition, layers) = match style.read() {
             Ok(g) => (
                 g.arrangement(),
                 g.name().to_string(),
                 g.bpm(),
                 g.transition(),
+                g.arrangement_layers(),
             ),
             Err(poisoned) => {
                 let g = poisoned.into_inner();
@@ -226,13 +229,15 @@ impl Composer {
                     g.name().to_string(),
                     g.bpm(),
                     g.transition(),
+                    g.arrangement_layers(),
                 )
             }
         };
         // Первый кусок: форма конечна (30-60 с), дальше куски идут
         // подряд, и каждый следующий пишется заранее (стык написан).
-        let plan = crate::piece::plan_piece(current_seed, bpm, score.cycle, 0, 0, transition);
-        let mut arranger = Arranger::with_plan(current_seed, bpm, score, plan, transition);
+        let plan =
+            crate::piece::plan_piece(current_seed, bpm, score.cycle, 0, 0, transition, layers);
+        let mut arranger = Arranger::with_plan(current_seed, bpm, score, plan, transition, layers);
         let song = arranger.advance_measure();
         Self {
             queue,
@@ -261,6 +266,7 @@ impl Composer {
             phrase_start: 0,
             plan: [0u64; 4],
             score,
+            layers,
             transition,
             shadow: None,
             shadow_rng: StdRng::seed_from_u64(current_seed ^ 0x5A4D),
@@ -270,11 +276,21 @@ impl Composer {
 
     fn reset_form(&mut self, seed: u64) {
         // Партитура — от текущего стиля: спокойные идут коротким кругом.
-        let (score, bpm, transition) = match self.style.read() {
-            Ok(g) => (g.arrangement(), g.bpm(), g.transition()),
+        let (score, bpm, transition, layers) = match self.style.read() {
+            Ok(g) => (
+                g.arrangement(),
+                g.bpm(),
+                g.transition(),
+                g.arrangement_layers(),
+            ),
             Err(poisoned) => {
                 let g = poisoned.into_inner();
-                (g.arrangement(), g.bpm(), g.transition())
+                (
+                    g.arrangement(),
+                    g.bpm(),
+                    g.transition(),
+                    g.arrangement_layers(),
+                )
             }
         };
         // Живая смена вступает с следующего такта: остаток текущего куска
@@ -285,10 +301,11 @@ impl Composer {
         self.rng = StdRng::seed_from_u64(seed);
         self.score = score;
         self.transition = transition;
+        self.layers = layers;
         // Тень прошлого шва не переносится в новую форму.
         self.shadow = None;
-        let plan = crate::piece::plan_piece(seed, bpm, score.cycle, piece, bar, transition);
-        self.arranger = Arranger::with_plan(seed, bpm, score, plan, transition);
+        let plan = crate::piece::plan_piece(seed, bpm, score.cycle, piece, bar, transition, layers);
+        self.arranger = Arranger::with_plan(seed, bpm, score, plan, transition, layers);
         self.song = self.arranger.advance_measure();
         self.step_count = 0;
         self.last_planned = usize::MAX;

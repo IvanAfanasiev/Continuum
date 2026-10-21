@@ -116,6 +116,24 @@ impl Style for LofiStyle {
         crate::arranger::CALM_SCORE
     }
 
+    /// Аранж лофай: пэд и Rhodes держат тему (тема не должна пустовать),
+    /// винил и дождь — ровный фон, вокал-чопы — только как гость в
+    /// передышке. Дроп у лофай — это не удар, а смена тембра.
+    fn arrangement_layers(&self) -> crate::piece::Layers {
+        use crate::piece::{default_layers, L_GROOVE, L_HARMONY, L_TEXTURE, L_THEME};
+        let base = default_layers();
+        [
+            // Тема: грув, бас, пампа, тема и текстура.
+            L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
+            // Разгон: добавляется вокал.
+            base[1],
+            // Удар: тот же состав, что в теме, — у лофай нет «удара».
+            L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
+            // Передышка: грув и текстура, голос отдыхает.
+            L_GROOVE | L_TEXTURE,
+        ]
+    }
+
     fn transition(&self) -> crate::piece::Transition {
         // Тихий стык: кусок закрывается и следующий начинается с чистого
         // такта. Нахлёт здесь звучал бы как заедание.

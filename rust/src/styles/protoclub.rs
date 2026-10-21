@@ -69,6 +69,31 @@ impl Style for ProtoclubStyle {
         &SCALE
     }
 
+    /// Форма стиля: свои длины секций — стиль должен отличаться
+    /// не тембрами, а построением.
+    fn arrangement(&self) -> crate::arranger::Score {
+        crate::arranger::PROTO_SCORE
+    }
+
+    /// Аранж прото: голая сетка. Тема — грув, бас и щипок; пампа и
+    /// вокал приходят только к дропу. Пауза короткая: в прото это смена
+    /// рисунка, а не отдых.
+    fn arrangement_layers(&self) -> crate::piece::Layers {
+        use crate::piece::{default_layers, L_GROOVE, L_HARMONY, L_THEME};
+        let base = default_layers();
+        [
+            // Тема: грув, бас и щипок — больше никого.
+            L_GROOVE | L_THEME,
+            // Разгон: добавляется пампа.
+            L_GROOVE | L_HARMONY | L_THEME,
+            // Удар: весь состав.
+            base[2],
+            // Передышка: только грув — в прото пауза это чистая сетка
+            // (808 и бочка), щипок в нее не входит.
+            L_GROOVE,
+        ]
+    }
+
     fn reverb_wet(&self) -> f32 {
         0.1
     }

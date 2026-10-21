@@ -80,6 +80,29 @@ impl Style for PhonkStyle {
         &SCALE
     }
 
+    /// Форма стиля: свои длины секций — стиль должен отличаться
+    /// не тембрами, а построением.
+    fn arrangement(&self) -> crate::arranger::Score {
+        crate::arranger::DRIFT_SCORE
+    }
+
+    /// Аранж фонка: дрейф — минимум голосов, тема почти голая (808 и
+    /// бочка). Кла��иши приходят в разгоне, вокал — в дропе.
+    fn arrangement_layers(&self) -> crate::piece::Layers {
+        use crate::piece::{default_layers, L_GROOVE, L_HARMONY};
+        let base = default_layers();
+        [
+            // Тема: только грув (808 + бочка) — дрейф идет в пустоте.
+            L_GROOVE,
+            // Разгон: подключаются клавиши.
+            L_GROOVE | L_HARMONY,
+            // Удар: весь состав.
+            base[2],
+            // Передышка: half-time, голоса молчат.
+            L_GROOVE,
+        ]
+    }
+
     fn reverb_wet(&self) -> f32 {
         0.12
     }

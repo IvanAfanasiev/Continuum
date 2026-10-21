@@ -115,6 +115,29 @@ impl Style for RockStyle {
         &SCALE
     }
 
+    /// Форма стиля: свои длины секций — стиль должен отличаться
+    /// не тембрами, а построением.
+    fn arrangement(&self) -> crate::arranger::Score {
+        crate::arranger::ROCK_SCORE
+    }
+
+    /// Аранж рока: рифф (тема) не уходит даже в передышку — это держащая
+    /// линия группы. Соло-гитара и клавиши приходят к дропу.
+    fn arrangement_layers(&self) -> crate::piece::Layers {
+        use crate::piece::{default_layers, L_GROOVE, L_HARMONY, L_THEME};
+        let base = default_layers();
+        [
+            // Тема: грув, бас и рифф. Клавиши в теме не нужны.
+            L_GROOVE | L_THEME,
+            // Разгон: подключаются клавиши.
+            L_GROOVE | L_HARMONY | L_THEME,
+            // Удар: весь состав.
+            base[2],
+            // Передышка: рифф остается, клавиши уходят.
+            L_GROOVE | L_THEME,
+        ]
+    }
+
     fn transition(&self) -> crate::piece::Transition {
         // Рок стыкуется резко: короткий хвост с ударом, дальше следующий
         // кусок сразу с полной энергией.

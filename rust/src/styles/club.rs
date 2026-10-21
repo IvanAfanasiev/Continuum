@@ -108,6 +108,30 @@ impl Style for ClubStyle {
         &SCALE
     }
 
+    /// Форма стиля: свои длины секций — стиль должен отличаться
+    /// не тембрами, а построением.
+    fn arrangement(&self) -> crate::arranger::Score {
+        crate::arranger::HOUSE_SCORE
+    }
+
+    /// Аранж deep house: сетка never стоит, вокал и эффекты приходят
+    /// только к дропу, передышка — короткая (это club, а не half-time).
+    fn arrangement_layers(&self) -> crate::piece::Layers {
+        use crate::piece::{default_layers, L_GROOVE, L_HARMONY, L_TEXTURE, L_THEME};
+        let base = default_layers();
+        [
+            // Тема: грув, бас, тема и Rhodes-стабы. Вокал молчит — его
+            // вход на дропе слышен как событие.
+            L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
+            // Разгон: добавляется вокал.
+            base[1],
+            // Удар: весь состав.
+            base[2],
+            // Передышка: грув и Rhodes, тема отдыхает.
+            L_GROOVE | L_HARMONY | L_TEXTURE,
+        ]
+    }
+
     fn transition(&self) -> crate::piece::Transition {
         // Диско-склейка: грув катит дальше, голос следующего куска входит
         // поверх него — стыка не слышно.

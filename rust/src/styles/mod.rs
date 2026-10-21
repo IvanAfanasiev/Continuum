@@ -314,8 +314,17 @@ pub trait Style: Send + Sync {
     fn scale(&self) -> &'static [u8];
     /// Партитура круга: активным — бесконечный разгон-кульминация,
     /// спокойным — дыхание темы с редкими подъемами. Дефолт — активная.
+    /// Свой скелет у каждого стиля: разные длины секций — стиль слышно
+    /// до того, как зазвучат инструменты.
     fn arrangement(&self) -> crate::arranger::Score {
         crate::arranger::ENERGETIC_SCORE
+    }
+    /// Аранж стиля: кто играет в теме, разгоне, дропе и передышке.
+    /// Порядок — [`crate::piece::LAYER_ORDER`]. Это написанный аранж:
+    /// у рока рифф остается в передышке, в клубе вокал молчит до дропа,
+    /// в лофай пэд держит тему. Дефолт — общий аранж.
+    fn arrangement_layers(&self) -> crate::piece::Layers {
+        crate::piece::default_layers()
     }
     /// Как стиль склеивает куски: плавный внахлёст (голос следующего
     /// входит поверх грува) или резкий стык на границе такта. Энергичные
@@ -1438,6 +1447,37 @@ mod tests {
                         assert_eq!(pole.len(), spm, "{name} slot {i} pole {j}: len");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn every_style_has_its_own_form_and_arrangement() {
+        // Стиль должен отличаться построением, а не только тембрами:
+        // своя форма (длины секций) и свой аранж (кто играет в секции).
+        // Иначе все стили — один скелет с разными инструментами.
+        let mut forms: Vec<Vec<String>> = Vec::new();
+        let mut arrangements: Vec<Vec<u8>> = Vec::new();
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let sig: Vec<String> = style
+                .arrangement()
+                .cycle
+                .iter()
+                .map(|(s, bars)| format!("{s:?}{bars}"))
+                .collect();
+            assert!(!forms.contains(&sig), "{name}: форма совпала с другой");
+            forms.push(sig);
+            let layers = style.arrangement_layers();
+            assert_eq!(layers.len(), 4, "{name}: аранж не на четыре секции");
+            arrangements.push(layers.to_vec());
+        }
+        for i in 0..arrangements.len() {
+            for j in (i + 1)..arrangements.len() {
+                assert_ne!(
+                    arrangements[i], arrangements[j],
+                    "стили {i} и {j} играют одинаково"
+                );
             }
         }
     }

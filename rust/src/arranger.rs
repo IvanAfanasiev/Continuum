@@ -63,6 +63,53 @@ pub const CALM_SCORE: Score = Score {
     ],
 };
 
+/// Форма deep house: сетка не останавливается, удар длинный, передышка
+/// короткая. Ровный дом-кл��б: тема держит бит, разгон короткий, дроп
+/// растянут — в club дроп это не взрыв, а восемь тактов одной сетки.
+pub const HOUSE_SCORE: Score = Score {
+    cycle: &[
+        (SongSection::MainMotif, 8),
+        (SongSection::BuildUp, 4),
+        (SongSection::Drop, 12),
+        (SongSection::PostChorus, 4),
+    ],
+};
+
+/// Форма рока: рифф приходит быстро, разгон короткий, удар длинный.
+/// Рок держится риффом, а не сеткой: тема короткая, чтобы рифф сразу
+/// пошёл, и дроп длинный — там соло и второй голос.
+pub const ROCK_SCORE: Score = Score {
+    cycle: &[
+        (SongSection::MainMotif, 6),
+        (SongSection::BuildUp, 2),
+        (SongSection::Drop, 10),
+        (SongSection::PostChorus, 4),
+    ],
+};
+
+/// Форма фонка: дрейф (тема длинная и гипнотическая), разгон короткий,
+/// удар средний, передышка длинная — half-time и пустота.
+pub const DRIFT_SCORE: Score = Score {
+    cycle: &[
+        (SongSection::MainMotif, 12),
+        (SongSection::BuildUp, 4),
+        (SongSection::Drop, 8),
+        (SongSection::PostChorus, 8),
+    ],
+};
+
+/// Форма прото: голая сетка без уступок. Тема длинная и гипнотическая,
+/// разгон короткий, дроп длинный, передышка короткая — в прото пауза
+/// это смена ритма, а не отдых.
+pub const PROTO_SCORE: Score = Score {
+    cycle: &[
+        (SongSection::MainMotif, 10),
+        (SongSection::BuildUp, 4),
+        (SongSection::Drop, 10),
+        (SongSection::PostChorus, 2),
+    ],
+};
+
 /// Музыкальная фраза меняется каждые N тактов.
 const PHRASE_LENGTH_MEASURES: usize = 2;
 /// Сдвиг фраз между кругами: 3 взаимно просто и с 7, и с 5 —
@@ -147,6 +194,9 @@ pub struct Arranger {
     section_layers: crate::piece::LayerMask,
     /// Как стиль склеивает куски (плавный внахлёст или резкий стык).
     transition: crate::piece::Transition,
+    /// Аранж стиля: кто играет в каждой секции. Нужен, чтобы следующий
+    /// кусок планировался с тем же аранжем.
+    layers: crate::piece::Layers,
     /// Номер куска в потоке: куски отличаются друг от друга.
     piece: u64,
     /// Сквозной такт, на котором начался текущий кусок: по нему считаем,
@@ -250,6 +300,11 @@ impl Arranger {
     }
 
     pub fn with_score(seed: u64, score: Score) -> Self {
+        Self::with_score_and_layers(seed, score, crate::piece::default_layers())
+    }
+
+    /// Форма с аранжем стиля: кто играет в каждой секции.
+    pub fn with_score_and_layers(seed: u64, score: Score, layers: crate::piece::Layers) -> Self {
         // Форма по умолчанию: кусок из скелета стиля. Темп дефолтный —
         // стиль знает свой и подставляет свой план (см. `with_plan`).
         let plan = crate::piece::plan_piece(
@@ -259,6 +314,7 @@ impl Arranger {
             0,
             0,
             crate::piece::Transition::Rolling { bars: 2 },
+            layers,
         );
         Self::with_plan(
             seed,
@@ -266,6 +322,7 @@ impl Arranger {
             score,
             plan,
             crate::piece::Transition::Rolling { bars: 2 },
+            layers,
         )
     }
 
@@ -278,8 +335,9 @@ impl Arranger {
         score: Score,
         plan: crate::piece::PiecePlan,
         transition: crate::piece::Transition,
+        layers: crate::piece::Layers,
     ) -> Self {
-        let mut a = Self::with_plan_inner(seed, bpm, score, plan, transition);
+        let mut a = Self::with_plan_inner(seed, bpm, score, plan, transition, layers);
         a.enter_section();
         a
     }
@@ -290,6 +348,7 @@ impl Arranger {
         score: Score,
         plan: crate::piece::PiecePlan,
         transition: crate::piece::Transition,
+        layers: crate::piece::Layers,
     ) -> Self {
         let seed_hash = splitmix64(seed ^ 0x51ED);
         // Размах темы — почерк сида: половина сидов поёт узко
@@ -397,8 +456,9 @@ impl Arranger {
             plan_done: false,
             section: first_section,
             section_energy: None,
-            section_layers: crate::piece::layers_for(SongSection::MainMotif),
+            section_layers: layers[crate::piece::layer_index(first_section)],
             transition,
+            layers,
             piece: 0,
             piece_start_measure: 0,
             seed,
@@ -536,6 +596,7 @@ impl Arranger {
             index,
             0,
             self.transition,
+            self.layers,
         ));
     }
 
@@ -753,8 +814,23 @@ mod tests {
         // стык слышно как смена тона.
         use crate::piece::{plan_piece, Transition};
         let transition = Transition::Rolling { bars: 2 };
-        let plan = plan_piece(424242, 126.0, ENERGETIC_SCORE.cycle, 0, 0, transition);
-        let mut a = Arranger::with_plan(424242, 126.0, ENERGETIC_SCORE, plan, transition);
+        let plan = plan_piece(
+            424242,
+            126.0,
+            ENERGETIC_SCORE.cycle,
+            0,
+            0,
+            transition,
+            crate::piece::default_layers(),
+        );
+        let mut a = Arranger::with_plan(
+            424242,
+            126.0,
+            ENERGETIC_SCORE,
+            plan,
+            transition,
+            crate::piece::default_layers(),
+        );
         let mut shadow: Option<Arranger> = None;
         let mut shadow_ctx: Option<SongContext> = None;
         let mut was_joint = false;
