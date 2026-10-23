@@ -174,6 +174,27 @@ impl Slot {
         self as usize
     }
 
+    /// Позиция в `ALL`: по ней индексируются направляющие стиля.
+    /// Дискриминант id для этого не годится (в нем дыры).
+    pub const fn index(self) -> usize {
+        match self {
+            Slot::Bass => 0,
+            Slot::Kick => 1,
+            Slot::Pad => 2,
+            Slot::Snare => 3,
+            Slot::Hat => 4,
+            Slot::Pluck => 5,
+            Slot::Keys => 6,
+            Slot::Kick808 => 7,
+            Slot::Vinyl => 8,
+            Slot::Vocal => 9,
+            Slot::Guitar => 10,
+            Slot::Rain => 11,
+            Slot::Shaker => 12,
+            Slot::GuitarLead => 13,
+        }
+    }
+
     pub fn from_id(id: usize) -> Option<Slot> {
         Slot::ALL.iter().find(|s| s.id() == id).copied()
     }
@@ -262,6 +283,11 @@ pub struct NoteEvent {
     /// как написано всегда. Диапазон 0.8..1.8 — характер цел, сиды разные.
     pub attack_mul: f32,
     pub release_mul: f32,
+    /// Лига: нота продолжает уже звучащую ту же высоту, а не переатакует.
+    /// Ставит композитор на моно-слоях (бас), когда повтор приходится
+    /// на еще звучащую ноту: длинная нота реально тянется, а не режется
+    /// следующим онсетом.
+    pub tie: bool,
     /// Саб-перекос 0..1 от стиля: 1.0 = чистый синус без струны/щелчка.
     /// Читает только бас-голос.
     pub sub_bias: f32,
@@ -283,6 +309,7 @@ impl NoteEvent {
             duration_secs: duration_secs.max(0.0),
             attack_mul: 1.0,
             release_mul: 1.0,
+            tie: false,
             sub_bias: 0.0,
             due_step: 0,
             step_us: 0,
@@ -342,6 +369,12 @@ pub trait Voice: Send {
     /// коротким путем (без хвоста) только со своим.
     fn legato(&mut self, note: &NoteEvent) {
         self.trigger(note);
+    }
+    /// Продление уже звучащей ноты (лига). По умолчанию — legato, но
+    /// голос может сохранить тембр/атаку и продлить только хвост:
+    /// лига — продолжение той же ноты, а не новый удар.
+    fn extend(&mut self, note: &NoteEvent) {
+        self.legato(note);
     }
     fn has_legato(&self) -> bool {
         false
@@ -494,6 +527,14 @@ impl<V: Voice + Default + Clone> Instrument for Mono<V> {
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
+        // Лига: повтор той же высоты, пока нота звучит, ПРОДЛЕВАЕТ ее
+        // без переатаки. Иначе длинная нота на моно-слое бессмысленна:
+        // следующий онсет режет ее до шага. Стаккато-пульс остается
+        // там, где композитор лигу не поставил.
+        if note.tie && self.main.is_active() && self.pitch == Some(note.midi_pitch) {
+            self.main.extend(note);
+            return;
+        }
         // Легато: звонкий голос берет новую ВЫСОТУ без перезапуска —
         // линия течет глиссом, а не рубится на каждой восьмой.
         // Та же высота — свежая атака (повтор артикулируется).
@@ -529,6 +570,9 @@ impl<V: Voice + Default + Clone> Instrument for Mono<V> {
         self.main.reset();
         self.tail.reset();
         self.tail_gain = 0.0;
+        // Сброс стиля/сида гасит голос: «звучащая высота» больше не
+        // звучит и не должна участвовать в лигах следующего куска.
+        self.pitch = None;
     }
 
     fn is_active(&self) -> bool {
@@ -834,5 +878,73 @@ mod tests {
         }
         assert!(!pool.is_active());
         assert_eq!(pool.next_sample(), 0.0);
+    }
+
+    /// Голос-счетчик: отличает переатаку от продления лиги.
+    #[derive(Default, Clone)]
+    struct CountVoice {
+        triggers: u32,
+        legatos: u32,
+        active: bool,
+    }
+
+    impl Voice for CountVoice {
+        fn set_sample_rate(&mut self, _sample_rate: f32) {}
+        fn trigger(&mut self, _note: &NoteEvent) {
+            self.triggers += 1;
+            self.active = true;
+        }
+        fn next_sample(&mut self) -> f32 {
+            if self.active {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        fn is_active(&self) -> bool {
+            self.active
+        }
+        fn reset(&mut self) {
+            self.active = false;
+        }
+        fn legato(&mut self, _note: &NoteEvent) {
+            self.legatos += 1;
+            self.active = true;
+        }
+        fn has_legato(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn mono_tie_extends_without_reattack() {
+        // Лига — не новая нота: та же высота, пока голос звучит, идет
+        // через extend (продление), а не trigger (переатака). Иначе
+        // длинная нота на моно-слое режется следующим онсетом.
+        let mut mono: Mono<CountVoice> = Mono::new(1, InstrumentRole::Bass);
+        mono.set_sample_rate(44_100.0);
+        let base = NoteEvent::new(1, 60, 0.8, 0.5);
+        mono.trigger(&base);
+        assert_eq!(mono.main.triggers, 1);
+        assert_eq!(mono.main.legatos, 0);
+
+        let mut tie = base;
+        tie.tie = true;
+        mono.trigger(&tie);
+        assert_eq!(mono.main.triggers, 1, "tie must not re-attack");
+        assert_eq!(mono.main.legatos, 1, "tie must extend the voice");
+
+        // Без лиги повтор той же высоты — честная переатака (пульс):
+        // свежий голос бьет, старый уходит в хвост-заглушку.
+        mono.trigger(&base);
+        assert_eq!(mono.main.triggers, 1, "plain repeat must re-attack");
+        assert_eq!(mono.main.legatos, 0);
+        assert_eq!(mono.tail.triggers, 1, "old voice goes to the choke tail");
+        assert_eq!(mono.tail.legatos, 1);
+
+        // Сброс стиля/сида гасит и «звучащую высоту»: лига через
+        // границу куска не должна тянуть старую ноту.
+        mono.reset();
+        assert_eq!(mono.pitch, None);
     }
 }

@@ -196,8 +196,8 @@ impl Style for DeepHouseStyle {
         // но бас не исчезает.
         let bass = RoleGuide {
             energy_response: 2.0,
-            duration_mult: 2.0,
-            duration_var: 0.35,
+            gates: &[1.5, 2.0, 3.0],
+            tie_repeats: 0.65,
             vel_base: 0.78,
             vel_energy: 0.25,
             vel_jitter: 0.05,
@@ -212,7 +212,7 @@ impl Style for DeepHouseStyle {
             bass_fifth: true,
             bass_top: 41,
             sub_bias: 0.74,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 1, 2.0, 0.78)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 1, &[1.5, 2.0, 3.0], 0.78)
         };
         // Бочка: ровная четверка. Толчки редкие и тихие — бит ровный.
         let kick = RoleGuide {
@@ -224,11 +224,10 @@ impl Style for DeepHouseStyle {
         // Пэд: глубокая подушка под всем (октава ниже корня), тише — он
         // фон, а не голос. Наверху подложки мёртвый верх переполняется.
         let pad = RoleGuide {
-            duration_mult: 10.0,
-            duration_var: 0.5,
+            gates: &[8.0, 10.0, 12.0],
             vel_base: 0.45,
             vel_jitter: 0.0,
-            ..RoleGuide::pitched(PAD_W, 0, -1, 0, 10.0, 0.45)
+            ..RoleGuide::pitched(PAD_W, 0, -1, 0, &[8.0, 10.0, 12.0], 0.45)
         };
         // Клэп на 2 и 4, с призвуком. Забивка на стыке фразы — стык
         // слышно как ход, а не как обрыв.
@@ -246,8 +245,7 @@ impl Style for DeepHouseStyle {
             energy_response: 1.2,
             drop_before_climax: true,
             long_offbeats: true,
-            long_mult: 3.0,
-            duration_mult: 0.35,
+            gates: &[0.35, 0.7, 1.1],
             vel_base: 0.4,
             vel_energy: 0.3,
             vel_jitter: 0.1,
@@ -260,8 +258,7 @@ impl Style for DeepHouseStyle {
         // наверху спорил с EP и хэтом — линия должна быть в середине.
         let pluck = RoleGuide {
             energy_response: 1.4,
-            duration_mult: 2.2,
-            duration_var: 0.2,
+            gates: &[1.5, 2.0, 3.0, 4.0],
             vel_base: 0.4,
             vel_energy: 0.28,
             vel_jitter: 0.05,
@@ -272,15 +269,14 @@ impl Style for DeepHouseStyle {
             },
             follow_motif: true,
             phrase_rest: 0.15,
-            ..RoleGuide::pitched(LEAD_W, 0, 1, 0, 2.2, 0.4)
+            ..RoleGuide::pitched(LEAD_W, 0, 1, 0, &[1.5, 2.0, 3.0, 4.0], 0.4)
         };
         // Rhodes/DX: подпись электро — арпеджио вместо аккорда. Одна
         // ступень за удар, квинта и септима: звук колокольный, как у
         // DX-электропиано. Ноты короткие — EP здесь перкуссивный.
         let keys = RoleGuide {
             energy_response: 1.1,
-            duration_mult: 1.2,
-            duration_var: 0.35,
+            gates: &[0.9, 1.2, 1.6],
             vel_base: 0.42,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -290,7 +286,7 @@ impl Style for DeepHouseStyle {
             },
             chord: Some(&[0, 2, 4, 6]),
             arp: true,
-            ..RoleGuide::pitched(EP_ARP_W, 2, 1, 0, 1.2, 0.42)
+            ..RoleGuide::pitched(EP_ARP_W, 2, 1, 0, &[0.9, 1.2, 1.6], 0.42)
         };
         // 808: гостевой бас для тех, кто хочет скользящий 808 вместо саба.
         let kick808 = RoleGuide {
@@ -302,13 +298,13 @@ impl Style for DeepHouseStyle {
                 jitter: 0,
             },
             bass_top: 41,
-            ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, 1.0, 0.95)
+            ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, &[1.0], 0.95)
         };
         // Вокал: мягкий, чувственный, редкий. Эффект обработки дает
         // мастер (эхо и реверб), сам голос сидит сзади.
         let vocal = RoleGuide {
             energy_response: 1.1,
-            duration_mult: 3.4,
+            gates: &[2.0, 3.0, 4.0, 6.0],
             vel_base: 0.38,
             vel_energy: 0.12,
             vel_jitter: 0.06,
@@ -317,37 +313,37 @@ impl Style for DeepHouseStyle {
                 octave: 2,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(VOCAL_W, 2, 2, 2, 3.4, 0.38)
+            ..RoleGuide::pitched(VOCAL_W, 2, 2, 2, &[2.0, 3.0, 4.0, 6.0], 0.38)
         };
         // Винил: треск и пыль, постоянная подложка.
         let vinyl = RoleGuide {
-            duration_mult: 200.0,
+            gates: &[200.0],
             vel_base: 0.35,
             vel_jitter: 0.05,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[200.0], 0.35)
         };
         // Гитара — ручной гость (духовый элемент для слушателя).
         let guitar = RoleGuide {
             energy_response: 1.1,
-            duration_mult: 1.8,
+            gates: &[1.5, 2.0, 3.0],
             vel_base: 0.35,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(LEAD_W, 0, 1, 2, 1.8, 0.35)
+            ..RoleGuide::pitched(LEAD_W, 0, 1, 2, &[1.5, 2.0, 3.0], 0.35)
         };
         // Дождь: ровная пелена, тише винила.
         let rain = RoleGuide {
-            duration_mult: 150.0,
+            gates: &[150.0],
             vel_base: 0.3,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[150.0], 0.3)
         };
         // Шейкер: песок 16-х поверх хэта.
         let shaker = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.4,
+            gates: &[0.4],
             vel_base: 0.62,
             vel_energy: 0.15,
             vel_jitter: 0.08,
@@ -356,14 +352,14 @@ impl Style for DeepHouseStyle {
         // Соло-гитара — ручной гость.
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 2,
                 jitter: 1,
             },
-            ..RoleGuide::pitched(BED_W, 0, 2, 1, 1.5, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 2, 1, &[1.0, 1.5, 2.0], 0.3)
         };
         [
             bass,

@@ -174,7 +174,8 @@ impl Style for ClubStyle {
         // сустейн баса ниже пика бочки, бит ведет кик, а не бас.
         let bass = RoleGuide {
             energy_response: 2.2,
-            duration_mult: 1.8,
+            gates: &[1.5, 2.0, 3.0],
+            tie_repeats: 0.55,
             vel_base: 0.78,
             vel_energy: 0.25,
             vel_jitter: 0.06,
@@ -194,7 +195,7 @@ impl Style for ClubStyle {
             // фундамент — чистый синус. Рок держит струну (0.0).
             // Громкость с запасом: саб без презенса тише струнного.
             sub_bias: 0.8,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 1, 1.8, 0.78)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 1, &[1.5, 2.0, 3.0], 0.78)
         };
         let kick = RoleGuide {
             // Заливка перед дропом умеренная: пулемет вместо брейка
@@ -205,10 +206,10 @@ impl Style for ClubStyle {
             ..RoleGuide::kit(FOUR_FLOOR, 36, 0.95)
         };
         let pad = RoleGuide {
-            duration_mult: 8.0,
+            gates: &[6.0, 8.0, 10.0],
             vel_base: 0.5,
             vel_jitter: 0.0,
-            ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.5)
+            ..RoleGuide::pitched(PAD_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.5)
         };
         let snare = RoleGuide {
             // Забивка на стыке фраз: в последней доле фразы снейр
@@ -226,8 +227,7 @@ impl Style for ClubStyle {
             long_offbeats: true,
             // Короче и тише: звонкий металл на верху давал «треугольник»
             // вместо бита и забивал весь верх микса. Ритм держит шейкер.
-            long_mult: 3.0,
-            duration_mult: 0.35,
+            gates: &[0.35, 0.7, 1.1],
             vel_base: 0.42,
             vel_energy: 0.3,
             vel_jitter: 0.1,
@@ -244,8 +244,7 @@ impl Style for ClubStyle {
         // линия льется фразами, а не тычет разовыми ударами.
         let pluck = RoleGuide {
             energy_response: 1.5,
-            duration_mult: 1.6,
-            duration_var: 0.2,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.55,
             vel_energy: 0.3,
             vel_jitter: 0.07,
@@ -260,14 +259,13 @@ impl Style for ClubStyle {
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(LEAD_W, 0, 1, 0, 1.6, 0.45)
+            ..RoleGuide::pitched(LEAD_W, 0, 1, 0, &[1.0, 1.5, 2.0], 0.45)
         };
         let keys = RoleGuide {
             // Гость-текучка, а не рубильник: ровное присутствие
             // через секции вместо «то нет, то стена».
             energy_response: 1.2,
-            duration_mult: 1.5,
-            duration_var: 0.35,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.62,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -275,7 +273,7 @@ impl Style for ClubStyle {
                 octave: 1,
                 jitter: 0,
             },
-            ..RoleGuide::pitched(STAB_W, 2, 1, 0, 1.5, 0.55)
+            ..RoleGuide::pitched(STAB_W, 2, 1, 0, &[1.0, 1.5, 2.0], 0.55)
         };
         // 808 держит сетку four-floor корнями прогрессии (тот же
         // гармонический путь, что у саба); слайд между нотами — дело
@@ -291,14 +289,14 @@ impl Style for ClubStyle {
                 jitter: 0,
             },
             bass_top: 43,
-            ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, 1.0, 0.95)
+            ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, &[1.0], 0.95)
         };
         // Оперный голос: редкие долгие «ah→oh» в эхе, сидит сзади.
         // Только для ручного включения: в битмейкере вокала нет.
         // Текут через секции, а не мигают (отклик сглажен).
         let vocal = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 3.0,
+            gates: &[2.0, 3.0, 4.0],
             vel_base: 0.45,
             vel_energy: 0.15,
             vel_jitter: 0.08,
@@ -307,39 +305,39 @@ impl Style for ClubStyle {
                 octave: 2,
                 jitter: 3,
             },
-            ..RoleGuide::pitched(VOCAL_W, 2, 2, 3, 3.0, 0.45)
+            ..RoleGuide::pitched(VOCAL_W, 2, 2, 3, &[2.0, 3.0, 4.0], 0.45)
         };
         // Чужие слоты: рабочие, но сдержанные направляющие — включаются
         // только ручкой фронта, характер стиля не ломают.
         let vinyl = RoleGuide {
-            duration_mult: 200.0,
+            gates: &[200.0],
             vel_base: 0.4,
             vel_jitter: 0.05,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.4)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[200.0], 0.4)
         };
         // Чужие мелодические/текстуры: разреженные направляющие.
         // Гитара в club — ручной гость (ритм-гитара вместо плака).
         let guitar = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.4,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 3,
             },
-            ..RoleGuide::pitched(LEAD_W, 0, 1, 3, 1.5, 0.4)
+            ..RoleGuide::pitched(LEAD_W, 0, 1, 3, &[1.0, 1.5, 2.0], 0.4)
         };
         // Шейкер deep house: песок 16-х поверх хэта, акцент на оффбитах.
         // Дождь: ровная пелена во все фразы (тише винила и музыки).
         let rain = RoleGuide {
-            duration_mult: 150.0,
+            gates: &[150.0],
             vel_base: 0.35,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[150.0], 0.35)
         };
         let shaker = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.4,
+            gates: &[0.4],
             vel_base: 0.62,
             vel_energy: 0.15,
             vel_jitter: 0.08,
@@ -348,14 +346,14 @@ impl Style for ClubStyle {
         // Соло-гитара вне автомикса club: ручная краска для фронта.
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.35,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 2,
                 jitter: 1,
             },
-            ..RoleGuide::pitched(BED_W, 0, 2, 1, 1.5, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 2, 1, &[1.0, 1.5, 2.0], 0.35)
         };
         [
             bass,

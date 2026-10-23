@@ -137,7 +137,8 @@ impl Style for PhonkStyle {
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         let bass = RoleGuide {
             energy_response: 1.8,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
+            tie_repeats: 0.5,
             vel_base: 0.8,
             vel_energy: 0.2,
             vel_jitter: 0.06,
@@ -153,7 +154,7 @@ impl Style for PhonkStyle {
             sub_bias: 0.6,
             // Реф: 808 сидит на F2 (86 Гц) — кап 41, ниже клубного.
             bass_top: 41,
-            ..RoleGuide::pitched(BASS_PH, 0, -1, 0, 1.5, 0.8)
+            ..RoleGuide::pitched(BASS_PH, 0, -1, 0, &[1.0, 1.5, 2.0], 0.8)
         };
         let kick = RoleGuide {
             vel_base: 0.95,
@@ -161,9 +162,9 @@ impl Style for PhonkStyle {
             ..RoleGuide::kit(KICK_PH, 36, 0.95)
         };
         let pad = RoleGuide {
-            duration_mult: 8.0,
+            gates: &[6.0, 8.0, 10.0],
             vel_base: 0.25,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 8.0, 0.25)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.25)
         };
         let snare = RoleGuide {
             // Забивка на стыке фраз: в последней доле фразы снейр
@@ -177,7 +178,8 @@ impl Style for PhonkStyle {
         };
         let hat = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 0.35,
+            // Фонк-хэт — закрытый: открытый хэт не был частью рисунка.
+            gates: &[0.35, 0.7],
             vel_base: 0.42,
             vel_energy: 0.3,
             vel_jitter: 0.08,
@@ -185,19 +187,19 @@ impl Style for PhonkStyle {
         };
         let pluck = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.0,
+            gates: &[1.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 1, 2, &[1.0], 0.3)
         };
         // Тёмные мемфис-стабы: низкая октава, мотив держат.
         let keys = RoleGuide {
             energy_response: 1.5,
-            duration_mult: 1.2,
+            gates: &[0.9, 1.2, 1.6],
             vel_base: 0.55,
             vel_energy: 0.2,
             vel_jitter: 0.07,
@@ -208,7 +210,7 @@ impl Style for PhonkStyle {
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(KEYS_PH, 0, 0, 1, 1.2, 0.55)
+            ..RoleGuide::pitched(KEYS_PH, 0, 0, 1, &[0.9, 1.2, 1.6], 0.55)
         };
         // 808 держит корни прогрессии на своей сетке (SUB_PH) в
         // суб-регистре рефа; слайды между нотами делает голос Kick808.
@@ -221,17 +223,17 @@ impl Style for PhonkStyle {
                 jitter: 0,
             },
             bass_top: 41,
-            ..RoleGuide::pitched(SUB_PH, 0, -1, 0, 1.0, 0.95)
+            ..RoleGuide::pitched(SUB_PH, 0, -1, 0, &[1.0], 0.95)
         };
         let vinyl = RoleGuide {
-            duration_mult: 200.0,
+            gates: &[200.0],
             vel_base: 0.2,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.2)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[200.0], 0.2)
         };
         // Хор-призрак: редкие долгие в эхе, сидят сзади.
         let vocal = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 3.0,
+            gates: &[2.0, 3.0, 4.0],
             vel_base: 0.45,
             vel_energy: 0.15,
             vel_jitter: 0.08,
@@ -240,28 +242,28 @@ impl Style for PhonkStyle {
                 octave: 2,
                 jitter: 3,
             },
-            ..RoleGuide::pitched(VOCAL_PH, 2, 2, 3, 3.0, 0.45)
+            ..RoleGuide::pitched(VOCAL_PH, 2, 2, 3, &[2.0, 3.0, 4.0], 0.45)
         };
         let guitar = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 1, 2, &[1.0, 1.5, 2.0], 0.3)
         };
         // Дождь: ровная пелена во все фразы (тише винила и музыки).
         let rain = RoleGuide {
-            duration_mult: 150.0,
+            gates: &[150.0],
             vel_base: 0.35,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[150.0], 0.35)
         };
         let shaker = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 0.4,
+            gates: &[0.4],
             vel_base: 0.55,
             vel_energy: 0.2,
             vel_jitter: 0.08,
@@ -270,14 +272,14 @@ impl Style for PhonkStyle {
         // Соло-гитара вне автомикса phonk: ручная краска для фронта.
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 1,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 1, 1.5, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 1, 1, &[1.0, 1.5, 2.0], 0.3)
         };
         [
             bass,

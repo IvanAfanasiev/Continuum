@@ -169,6 +169,30 @@ pub struct Composer {
     /// Момент старта текущего шага: точная фаза внутри шага
     /// для якоря колеса (лесенки опросов больше нет).
     step_t0: Instant,
+    /// Последняя нота каждого слота: (высота, шаг, на котором она
+    /// перестанет звучать). Нужна лигам: повтор той же высоты, пока
+    /// нота еще звучит, продлевает ее, а не переатакует.
+    last_note: [Option<(u8, u64)>; Slot::COUNT],
+}
+
+/// Лига возможна, только если пришла та же высота, предыдущая нота
+/// еще звучит и детерминированный бросок ниже вероятности стиля.
+/// Разные высоты — не лига: моно-голос сам сольет их легато.
+fn should_tie(
+    tie_repeats: f32,
+    last: Option<(u8, u64)>,
+    pitch: u8,
+    due_now: u64,
+    seed_hash: u64,
+    slot_idx: usize,
+) -> bool {
+    let Some((prev_pitch, prev_end)) = last else {
+        return false;
+    };
+    tie_repeats > 0.0
+        && prev_pitch == pitch
+        && prev_end > due_now
+        && crate::styles::tie_chance(seed_hash, slot_idx, due_now as usize) < tie_repeats
 }
 
 impl Composer {
@@ -276,6 +300,7 @@ impl Composer {
             shadow: None,
             shadow_rng: StdRng::seed_from_u64(current_seed ^ 0x5A4D),
             step_t0: Instant::now(),
+            last_note: [None; Slot::COUNT],
         }
     }
 
@@ -318,6 +343,9 @@ impl Composer {
         self.song = self.arranger.advance_measure();
         self.step_count = 0;
         self.last_planned = usize::MAX;
+        // Голоса погашены движком: запомненные ноты больше не звучат
+        // и не должны давать лигу через границу стиля/сида.
+        self.last_note = [None; Slot::COUNT];
     }
 
     /// Один шаг генерации: ноты + длительность до следующего шага.
@@ -438,6 +466,40 @@ impl Composer {
             intensity,
         };
         let mut notes = render_style(&**guard, &mut sctx);
+
+        // Лиги на моно-слоях: повтор той же высоты, пришедший пока нота
+        // еще звучит, не переатакует, а продлевает ее. Это делает длину
+        // ноты слышимой: иначе следующий онсет режет бас до шага.
+        // Полифония накладывает голоса сама — лига нужна только басу.
+        let due_now = self.step_count as u64;
+        let guides = style.slot_guides();
+        for note in notes.iter_mut() {
+            let Some(slot) = Slot::from_id(note.instrument_id) else {
+                continue;
+            };
+            let Some(guide) = guides.get(slot.index()) else {
+                continue;
+            };
+            let gate = (note.duration_secs / base_step_secs).round().max(1.0) as u64;
+            let mut end = due_now + gate;
+            let prev = self.last_note[slot.index()];
+            if slot == Slot::Bass
+                && should_tie(
+                    guide.tie_repeats,
+                    prev,
+                    note.midi_pitch,
+                    due_now,
+                    self.song.seed_hash,
+                    slot.index(),
+                )
+            {
+                note.tie = true;
+                if let Some((_, prev_end)) = prev {
+                    end = end.max(prev_end);
+                }
+            }
+            self.last_note[slot.index()] = Some((note.midi_pitch, end));
+        }
 
         // Тень перехода: голос следующего куска входит поверх грува
         // текущего. Только мелодические группы (лид, вокал): грув и
@@ -661,4 +723,67 @@ pub fn start_composing(
     seed: u64,
 ) {
     Composer::new(queue, style_lock, mixer, stop, is_paused, seed).run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instruments::Slot;
+    use crate::mixer::MixerState;
+
+    #[test]
+    fn deep_bass_lengths_vary() {
+        // Интеграция длин: композитор реально отдает басу разные
+        // длительности, а не одну константу тембра.
+        let style = Arc::new(RwLock::new(
+            crate::styles::make_style("deep").expect("deep style"),
+        ));
+        let mixer = Arc::new(RwLock::new(MixerState::new()));
+        {
+            let guard = style.read().expect("style readable");
+            let mut m = mixer.write().expect("mixer writable");
+            crate::playback::apply_style_mix(&**guard, &mut m);
+        }
+        let queue = Arc::new(ArrayQueue::new(16_384));
+        let mut composer = Composer::new(
+            queue,
+            style,
+            mixer,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            424242,
+        );
+        let mut bass = 0usize;
+        let mut lengths = std::collections::HashSet::new();
+        for _ in 0..1600 {
+            let (notes, _) = composer.next_step();
+            for n in notes {
+                if n.instrument_id == Slot::Bass.id() {
+                    bass += 1;
+                    lengths.insert((n.duration_secs * 1000.0).round() as i32);
+                }
+            }
+        }
+        assert!(bass > 100, "too few bass notes: {bass}");
+        assert!(lengths.len() >= 3, "bass lengths did not vary: {lengths:?}");
+    }
+
+    #[test]
+    fn tie_decision_needs_same_pitch_and_overlap() {
+        let due = 100u64;
+        assert!(should_tie(1.0, Some((40, 104)), 40, due, 7, 0));
+        assert!(
+            !should_tie(1.0, Some((41, 104)), 40, due, 7, 0),
+            "other pitch is a legato, not a tie"
+        );
+        assert!(
+            !should_tie(1.0, Some((40, 100)), 40, due, 7, 0),
+            "previous note already ended"
+        );
+        assert!(
+            !should_tie(0.0, Some((40, 104)), 40, due, 7, 0),
+            "style forbids ties"
+        );
+        assert!(!should_tie(1.0, None, 40, due, 7, 0), "no previous note");
+    }
 }

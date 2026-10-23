@@ -124,14 +124,18 @@ pub struct RoleGuide {
     pub every_n_measures: usize,
     /// Оффбитные 8-е звучат длиннее (открытые хэты сами собой).
     pub long_offbeats: bool,
-    /// Во сколько раз длиннее (от duration_mult).
-    pub long_mult: f32,
-    pub duration_mult: f32,
-    /// Разброс длины ноты от ноты к ноте (0..1). Без него все ноты
-    /// инструмента одной длины: генерация звучит механически, одинаково
-    /// в каждом стиле и сиде. 0 = фиксированная длина (ритмичные
-    /// слои), 0.5 = свободные (пэды, бас, EP).
-    pub duration_var: f32,
+    /// Словарь длин ноты в шагах (16-х), из которого генерация выбирает
+    /// по метру, фразе и характеру сида. Это не множитель: длина —
+    /// такое же решение композиции, как высота и шаг. Один элемент —
+    /// фиксированная длина (текстуры, ударные), несколько — живая
+    /// артикуляция. Значения нецелые там, где важен затвор, а не шаг:
+    /// хэт 0.3/1.1 (закрытый/открытый), шейкер 0.4.
+    pub gates: &'static [f32],
+    /// Лига на моно-слое: вероятность, что повтор той же высоты, пока
+    /// нота еще звучит, будет продлен, а не переаткован. Работает на
+    /// басу (Mono): полифонические пулы накладывают голоса сами.
+    /// 0 = всегда переатака (стаккато-пульс).
+    pub tie_repeats: f32,
     pub vel_base: f32,
     pub vel_energy: f32,
     pub vel_jitter: f32,
@@ -198,9 +202,8 @@ impl RoleGuide {
         drop_before_climax: false,
         every_n_measures: 1,
         long_offbeats: false,
-        long_mult: 1.0,
-        duration_mult: 1.0,
-        duration_var: 0.0,
+        gates: &[1.0],
+        tie_repeats: 0.0,
         vel_base: 0.0,
         vel_energy: 0.0,
         vel_jitter: 0.0,
@@ -241,9 +244,8 @@ impl RoleGuide {
             drop_before_climax: false,
             every_n_measures: 1,
             long_offbeats: false,
-            long_mult: 1.0,
-            duration_mult: 1.0,
-            duration_var: 0.0,
+            gates: &[1.0],
+            tie_repeats: 0.0,
             vel_base: vel,
             vel_energy: 0.0,
             vel_jitter: 0.05,
@@ -270,7 +272,7 @@ impl RoleGuide {
         degree: usize,
         octave: i8,
         jitter: usize,
-        duration_mult: f32,
+        gates: &'static [f32],
         vel: f32,
     ) -> Self {
         Self {
@@ -280,9 +282,8 @@ impl RoleGuide {
             drop_before_climax: false,
             every_n_measures: 1,
             long_offbeats: false,
-            long_mult: 1.0,
-            duration_mult,
-            duration_var: 0.0,
+            gates,
+            tie_repeats: 0.0,
             vel_base: vel,
             vel_energy: 0.0,
             vel_jitter: 0.05,
@@ -755,13 +756,97 @@ pub(crate) fn envelope_shape(seed_hash: u64, slot_idx: usize) -> (f32, f32) {
     (0.8 + 1.0 * hi, 0.8 + 0.8 * lo)
 }
 
-/// Длительность ноты от сида 0.85..1.25, статична на (сид, слот):
-/// одни сиды играют протяжнее, другие отрывистее («медленнее/быстрее»).
-/// Ударные короткие по построению — им почти не влияет.
+/// Характер артикуляции сида 0.85..1.25, статичен на (сид, слот):
+/// одни сиды протяжные, другие отрывистые. Это смещение ВЫБОРА длины
+/// (см. `choose_gate`), а не множитель: сама длина остается музыкальной
+/// величиной из словаря гайда.
 pub(crate) fn duration_shape(seed_hash: u64, slot_idx: usize) -> f32 {
     let h =
         crate::arranger::splitmix64(seed_hash ^ (slot_idx as u64).wrapping_mul(0xC0FFEE) ^ 0xD0A4);
     0.85 + 0.4 * ((h >> 32) as f32 / (u32::MAX as f32))
+}
+
+/// Метрическая сила шага 0..1: даунбит — 1, четверти — 0.65,
+/// восьмые — 0.35, шестнадцатые — 0. На сильной доле нота тянется,
+/// на слабой — короче: фраза дышит, а не рубит ровными шестнадцатыми.
+fn metric_strength(step_in_measure: usize, steps_per_measure: usize) -> f32 {
+    let q = (steps_per_measure / 4).max(1);
+    if step_in_measure.is_multiple_of(steps_per_measure.max(1)) {
+        1.0
+    } else if step_in_measure.is_multiple_of(q) {
+        0.65
+    } else if step_in_measure.is_multiple_of((q / 2).max(1)) {
+        0.35
+    } else {
+        0.0
+    }
+}
+
+/// Длина ноты в шагах — решение генерации, а не константа тембра.
+///
+/// Словарь гайда задает диапазон; метр, фраза, энергия секции и характер
+/// сида выбирают точку внутри. Выбор — квантиль, а не точное значение:
+/// на сильной доле вероятнее длинная нота, на слабой — короткая.
+/// Джиттер детерминирован (сид, слот, позиция во фразе): рисунок длин
+/// повторяется фразой, а не мерцает каждый такт. Ударные и текстуры
+/// имеют словарь из одного элемента и играют фиксированно.
+fn choose_gate(
+    guide: &RoleGuide,
+    song: &SongContext,
+    slot_idx: usize,
+    step_in_measure: usize,
+    steps_per_measure: usize,
+    motif: bool,
+) -> f32 {
+    let gates = guide.gates;
+    let Some(&last) = gates.last() else {
+        return 1.0;
+    };
+    if gates.len() == 1 {
+        return last;
+    }
+    // Оффбитные восьмые тянутся: открытый хэт сам собой.
+    if guide.long_offbeats {
+        let eighth = (steps_per_measure / 8).max(1);
+        if step_in_measure % (eighth * 2) == eighth {
+            return last;
+        }
+    }
+    // Каданс: последняя четверть последнего такта раздела — длинная
+    // нота. Раздел заканчивается точкой, а не обрывом на слабой доле.
+    let q = (steps_per_measure / 4).max(1);
+    if song.is_last_measure && step_in_measure + q >= steps_per_measure {
+        return last;
+    }
+    // Характер сида: 0 — отрывистый, 1 — протяжный.
+    let legato = ((duration_shape(song.seed_hash, slot_idx) - 0.85) / 0.4).clamp(0.0, 1.0);
+    // Рисунок длин развивается: у сопровождения — от фразы к фразе,
+    // у темы — от секции к секции. Внутри фразы/секции мотив держит
+    // свой ритм, но один и тот же такт не звучит годами одной длиной.
+    let variation = if motif { song.stage } else { song.phrase_index };
+    let pos = phrase_position(song, step_in_measure, steps_per_measure)
+        .wrapping_add(variation.wrapping_mul(131));
+    let jitter = fixed_gate(song.seed_hash, slot_idx, pos, 0x6A7E) - 0.5;
+    let strength = metric_strength(step_in_measure, steps_per_measure);
+    // Спокойные секции тянут ноты, дропы — короче и острее.
+    let calm = 1.0 - song.energy.clamp(0.0, 1.0);
+    let qpos =
+        (0.08 + 0.50 * strength + 0.20 * legato + 0.10 * calm + 0.50 * jitter).clamp(0.0, 0.999);
+    // Последний затвор у long_offbeats — открытый хэт: он принадлежит
+    // только офбиту, иначе открытые хэты рассыпаются по слабым долям.
+    let choice_len = if guide.long_offbeats {
+        (gates.len() - 1).max(1)
+    } else {
+        gates.len()
+    };
+    let idx = (qpos * (choice_len - 1) as f32).round() as usize;
+    gates[idx.min(choice_len - 1)]
+}
+
+/// Бросок лиги: детерминирован (сид, слот, шаг). То же решение при том
+/// же сиде, но рисунок лиг живой, а не «каждая вторая» механически.
+pub(crate) fn tie_chance(seed_hash: u64, slot_idx: usize, step: usize) -> f32 {
+    fixed_gate(seed_hash, slot_idx, step, 0x71E5)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -987,38 +1072,24 @@ fn play_guide(
     // с разной мягкостью у разных сидов. Ударные идут как есть.
     let (attack_mul, release_mul) = envelope_shape(song.seed_hash, slot_idx);
 
-    // Оффбитные 8-е: шаг q/2 внутри четверти (q = шагов на четверть).
-    // Длительность — от сида: одни сиды протяжнее, другие отрывистее.
-    let quarter = steps_per_measure / 4;
-    let long = guide.long_offbeats && quarter > 0 && step_in_measure % quarter == quarter / 2;
-    // Фразировка темы: сильные доли поют (длинные ноты), слабые —
-    // коротко. Общая для всех носителей (чистая функция шага):
-    // унисон держит и ритм. Мелодия дышит длинно-коротко, а не стучит
-    // 8-ми одинаковой длины (замер: 1–2 длительности на стиль).
-    let theme_phrase = if guide.follow_motif || force_motif {
-        if step_in_measure == 0 {
-            3.0
-        } else if step_in_measure == steps_per_measure / 2 {
-            2.6
-        } else {
-            match step_in_measure % 4 {
-                0 => 2.0,
-                2 => 0.9,
-                _ => 1.3,
-            }
-        }
-    } else {
-        1.0
-    };
-    let duration = base_step_secs
-        * guide.duration_mult
-        * duration_shape(song.seed_hash, slot_idx)
-        * theme_phrase
-        * if long { guide.long_mult } else { 1.0 }
-        // Разброс длины от ноты к ноте: без него все ноты инструмента
-        // одной длины — генерация механическая и одинаковая во всех
-        // стилях и сидах.
-        * (1.0 + guide.duration_var * rng.gen_range(-1.0..1.0));
+    // Длина — решение генерации: словарь гайда + метр + фраза + сид.
+    // Раньше была константа тембра (duration_mult) с множителями: все
+    // ноты инструмента одной длины, стиль и сид меняли только ее центр.
+    let gate_steps = choose_gate(
+        guide,
+        song,
+        slot_idx,
+        step_in_measure,
+        steps_per_measure,
+        guide.follow_motif || force_motif,
+    );
+    let duration = gate_steps
+        * base_step_secs
+        // Человеческая микро-вариация ±4%: ровные до миллисекунды ноты
+        // звучат механически, но класс длины (16-я, 8-я, четверть) цел.
+        * (1.0
+            + 0.04
+                * (fixed_gate(song.seed_hash, slot_idx, step_in_measure, 0xD07A) * 2.0 - 1.0));
 
     // Ударные: одиночная нота фиксированного питча, коротким путем.
     if let Voicing::Kit(pitch) = guide.voice {
@@ -1535,7 +1606,10 @@ mod tests {
         // Мелодия плавная: джиттер 0 (цельная линия) и длинные ноты.
         let pluck = at(crate::instruments::Slot::Pluck);
         assert!(pluck.follow_motif, "мелодия должна повторяться");
-        assert!(pluck.duration_mult >= 2.0, "мелодия должна быть плавной");
+        assert!(
+            pluck.gates.len() >= 2 && pluck.gates.iter().any(|&g| g >= 3.0),
+            "мелодия должна уметь тянуть ноты, а не стучать одной длиной"
+        );
         // Вокал мягкий: тише основного состава.
         assert!(at(crate::instruments::Slot::Vocal).vel_base <= 0.45);
         // Объём: хвост есть, но микс сухой (в плейлисте объем даёт линия,
@@ -1705,7 +1779,7 @@ mod tests {
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let mut song = test_song(0.5);
@@ -1749,7 +1823,7 @@ mod tests {
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let mut rng = rand::SeedableRng::seed_from_u64(3);
@@ -1892,7 +1966,7 @@ mod tests {
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let probe = |measure: usize| -> Vec<u8> {
@@ -1956,7 +2030,7 @@ mod tests {
             weights: &[1.0; 16],
             follow_motif: true,
             bass_top: 100,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
         };
         for seed in [
             42u64, 1000, 1007, 1014, 1021, 1028, 1035, 1042, 1049, 2001, 2002,
@@ -2000,7 +2074,7 @@ mod tests {
         // Якоря — исключение (скелет держится фразу), здесь веса 0.5.
         let guide = RoleGuide {
             weights: &[0.5; 16],
-            ..RoleGuide::pitched(&[0.5; 16], 0, 1, 0, 1.0, 0.7)
+            ..RoleGuide::pitched(&[0.5; 16], 0, 1, 0, &[1.0], 0.7)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let mask = |seed: u64, measure: usize| -> Vec<bool> {
@@ -2154,7 +2228,7 @@ mod tests {
             // в кадре чистая высота без дыхательных пропусков.
             let guide = RoleGuide {
                 weights: &[1.0; 8],
-                ..RoleGuide::pitched(&[1.0; 8], 1, 0, jitter, 1.0, 0.8)
+                ..RoleGuide::pitched(&[1.0; 8], 1, 0, jitter, &[1.0], 0.8)
             };
             let scale = [48, 50, 52, 53, 55, 57, 59];
             let song = test_song(0.5);
@@ -2187,7 +2261,7 @@ mod tests {
             let guide = RoleGuide {
                 weights: &[1.0; 16],
                 follow_motif: true,
-                ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+                ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
             };
             let scale = [48, 50, 52, 53, 55, 57, 59];
             let mut song = test_song(0.5);
@@ -2258,7 +2332,7 @@ mod tests {
         // Пэд с ролью Chords звучит трезвучием, а не одиночной нотой.
         let guide = RoleGuide {
             weights: &[1.0; 8],
-            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 4.0, 0.6)
+            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, &[2.0, 4.0], 0.6)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let song = test_song(0.5);
@@ -2485,7 +2559,7 @@ mod tests {
             let guide = RoleGuide {
                 weights: &[1.0; 16],
                 follow_motif: true,
-                ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+                ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
             };
             let scale = [48, 50, 52, 53, 55, 57, 59];
             let mut song = test_song(0.5);
@@ -2547,7 +2621,7 @@ mod tests {
         let anchor_motif = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, &[1.0], 0.8)
         };
         let mut rng = rand::SeedableRng::seed_from_u64(21);
         // Эталон снимаем с допусками: якорь дышит (0.95) — пара шагов
@@ -2798,7 +2872,7 @@ mod tests {
         // Гайд цепляет shaping сида к ноте.
         let guide = RoleGuide {
             weights: &[1.0; 8],
-            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 4.0, 0.6)
+            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, &[2.0, 4.0], 0.6)
         };
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
@@ -2834,7 +2908,7 @@ mod tests {
         let mut guide = RoleGuide {
             weights: &[1.0; 8],
             sub_bias: 0.8,
-            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, &[1.0], 0.8)
         };
         let song = test_song(0.5);
         let mut rng = rand::SeedableRng::seed_from_u64(9);
@@ -3047,7 +3121,7 @@ mod tests {
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 1, 0, &[1.0], 0.8)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let pitch = |hash: u64, step: usize| -> Option<u8> {
@@ -3142,7 +3216,7 @@ mod tests {
         // 8 тактов: корни стоят и держат фразу, а не едут каждые 2 такта.
         let guide = RoleGuide {
             weights: &[1.0; 8],
-            ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 8], 0, -1, 0, &[1.0], 0.8)
         };
         let scale = [48, 51, 53, 55, 58];
         let mut pitches = Vec::new();
@@ -3339,7 +3413,7 @@ mod tests {
         let guide = RoleGuide {
             weights: &[1.0; 16],
             follow_motif: true,
-            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, 1.0, 0.8)
+            ..RoleGuide::pitched(&[1.0; 16], 0, 2, 0, &[1.0], 0.8)
         };
         let scale = [48, 50, 52, 53, 55, 57, 59];
         let pitches = |stage: usize| -> Vec<(usize, u8)> {
@@ -3507,9 +3581,10 @@ mod tests {
     }
 
     #[test]
-    fn duration_shape_stretches_notes_by_seed() {
-        // Длительность от сида 0.85..1.25: детерминирована, варьируется,
-        // цепляется к ноте (доля базового шага × mult гайда × shape).
+    fn duration_shape_is_seed_character_not_multiplier() {
+        // Характер артикуляции сида 0.85..1.25: детерминирован и различает
+        // сиды. Это смещение выбора длины, а не множитель: сама длина
+        // приходит из словаря гайда.
         for h in [0u64, 1, 42, 777] {
             let d = duration_shape(h, 3);
             assert!((0.85..=1.25).contains(&d), "out of range: {d}");
@@ -3518,38 +3593,121 @@ mod tests {
         let set: std::collections::HashSet<u32> = (0..32u64)
             .map(|h| (duration_shape(h, 3) * 1000.0) as u32)
             .collect();
-        assert!(set.len() > 8, "seeds share lengths");
-        // Прилипание: длительность ноты = база × mult × shape.
+        assert!(set.len() > 8, "seeds share articulation character");
+    }
+
+    #[test]
+    fn note_lengths_are_chosen_from_the_guide_vocabulary() {
+        // Длина — решение генерации: метр и характер сида выбирают
+        // элемент словаря. Длинные ноты чаще на сильных долях, короткие —
+        // на слабых; разные сиды дают разные рисунки длин.
+        let gates = &[1.0, 2.0, 3.0, 4.0];
         let guide = RoleGuide {
-            weights: &[1.0; 8],
-            ..RoleGuide::pitched(&[1.0; 8], 0, 0, 0, 2.0, 0.8)
+            weights: &[1.0; 16],
+            ..RoleGuide::pitched(&[1.0; 16], 0, 0, 0, gates, 0.8)
         };
-        let mut song = test_song(0.5);
-        song.seed_hash = 99;
-        let mut rng = rand::SeedableRng::seed_from_u64(3);
-        let notes = play_guide(
-            &guide,
-            &[48, 50, 52, 53, 55, 57, 59],
-            &song,
-            1.0,
-            0,
-            8,
-            0.5,
-            3,
-            2,
-            1.0,
-            false,
-            false,
-            true,
-            &mut rng,
-        );
-        assert!(!notes.is_empty());
-        let expected = 0.5 * 2.0 * duration_shape(99, 2);
+        let scale = [48, 50, 52, 53, 55, 57, 59];
+        let mut seen = std::collections::HashSet::new();
+        let (mut long_on_down, mut n_down) = (0.0f32, 0u32);
+        let (mut short_on_weak, mut n_weak) = (0.0f32, 0u32);
+        for seed in 0..64u64 {
+            let mut song = test_song(0.5);
+            song.seed_hash = seed;
+            for (step, weak) in [(0usize, false), (1usize, true)] {
+                let mut rng = rand::SeedableRng::seed_from_u64(seed);
+                let notes = play_guide(
+                    &guide, &scale, &song, 1.0, step, 16, 0.5, 3, 2, 1.0, false, false, true,
+                    &mut rng,
+                );
+                let Some(note) = notes.first() else {
+                    continue;
+                };
+                let gate = note.duration_secs / 0.5;
+                assert!(
+                    gates.iter().any(|&g| (g - gate).abs() <= 0.05 * g + 1e-4),
+                    "gate {gate} not in vocabulary {gates:?}"
+                );
+                seen.insert(gate.round() as i32);
+                if weak {
+                    short_on_weak += gate;
+                    n_weak += 1;
+                } else {
+                    long_on_down += gate;
+                    n_down += 1;
+                }
+            }
+        }
+        assert!(seen.len() >= 3, "seeds share lengths: {seen:?}");
+        assert!(n_down > 16 && n_weak > 16, "too few notes");
         assert!(
-            (notes[0].duration_secs - expected).abs() < 1e-4,
-            "shape ignored: {} vs {expected}",
-            notes[0].duration_secs
+            long_on_down / n_down as f32 > short_on_weak / n_weak as f32,
+            "downbeats must ring longer than weak sixteenths"
         );
+    }
+
+    #[test]
+    fn every_style_has_a_musical_gate_vocabulary() {
+        // Словарь длин — данные стиля: положительный, отсортированный,
+        // без пустых слоев. Протяжные слои обязаны иметь выбор, иначе
+        // длина снова станет константой тембра.
+        use crate::instruments::Slot;
+        // Один затвор — осознанное решение для ритмичного слоя (рок-
+        // рифф, фонк-колокольчик), а не забытая константа. Но у каждого
+        // стиля обязана быть настоящая артикуляция: бас выбирает длину
+        // всегда, и минимум три протяжных слоя имеют словарь.
+        const PITCHED: [Slot; 7] = [
+            Slot::Bass,
+            Slot::Pad,
+            Slot::Pluck,
+            Slot::Keys,
+            Slot::Vocal,
+            Slot::Guitar,
+            Slot::GuitarLead,
+        ];
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let mut flexible = 0;
+            for (i, guide) in style.slot_guides().iter().enumerate() {
+                let slot = Slot::ALL[i];
+                assert!(!guide.gates.is_empty(), "{name} {slot:?}: empty gates");
+                assert!(
+                    guide.gates.iter().all(|&g| g > 0.0 && g <= 400.0),
+                    "{name} {slot:?}: bad gates {:?}",
+                    guide.gates
+                );
+                assert!(
+                    guide.gates.windows(2).all(|w| w[0] < w[1]),
+                    "{name} {slot:?}: gates not sorted {:?}",
+                    guide.gates
+                );
+                if !guide.is_silent() && PITCHED.contains(&slot) && guide.gates.len() >= 2 {
+                    flexible += 1;
+                }
+                if !guide.is_silent() && slot == Slot::Bass {
+                    assert!(
+                        guide.gates.len() >= 2,
+                        "{name}: bass must choose its length"
+                    );
+                }
+            }
+            assert!(
+                flexible >= 3,
+                "{name}: only {flexible} pitched layers choose length"
+            );
+        }
+    }
+
+    #[test]
+    fn tie_chance_is_stable_and_lively() {
+        // Лига детерминирована (тот же сид — тот же рисунок), но не
+        // «каждая вторая»: шаги дают разные броски.
+        let a = tie_chance(7, 0, 32);
+        assert_eq!(a, tie_chance(7, 0, 32));
+        assert!((0.0..=1.0).contains(&a));
+        let set: std::collections::HashSet<u32> = (0..64)
+            .map(|step| (tie_chance(7, 0, step) * 100.0) as u32)
+            .collect();
+        assert!(set.len() > 10, "tie pattern too static");
     }
 
     #[test]
@@ -3564,7 +3722,7 @@ mod tests {
             let guide = RoleGuide {
                 weights: &[1.0; 8],
                 follow_motif,
-                ..RoleGuide::pitched(&[1.0; 8], 0, 1, 0, 1.0, 0.8)
+                ..RoleGuide::pitched(&[1.0; 8], 0, 1, 0, &[1.0], 0.8)
             };
             let scale = [48, 50, 52, 53, 55, 57, 59];
             let mut song = test_song(0.5);

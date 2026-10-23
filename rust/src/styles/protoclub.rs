@@ -119,7 +119,8 @@ impl Style for ProtoclubStyle {
         // регистр — фолдом, как везде.
         let bass = RoleGuide {
             energy_response: 1.5,
-            duration_mult: 3.0,
+            gates: &[2.0, 3.0, 4.0],
+            tie_repeats: 0.5,
             vel_base: 0.85,
             vel_energy: 0.15,
             vel_jitter: 0.05,
@@ -134,7 +135,7 @@ impl Style for ProtoclubStyle {
             bass_fifth: false,
             sub_bias: 0.8,
             bass_top: 43,
-            ..RoleGuide::pitched(BASS_PH, 0, 0, 0, 3.0, 0.85)
+            ..RoleGuide::pitched(BASS_PH, 0, 0, 0, &[2.0, 3.0, 4.0], 0.85)
         };
         let kick = RoleGuide {
             vel_base: 1.0,
@@ -143,9 +144,9 @@ impl Style for ProtoclubStyle {
             ..RoleGuide::kit(KICK_PH, 36, 1.0)
         };
         let pad = RoleGuide {
-            duration_mult: 8.0,
+            gates: &[6.0, 8.0, 10.0],
             vel_base: 0.25,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 8.0, 0.25)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.25)
         };
         let snare = RoleGuide {
             // Забивка на стыке фраз: в последней доле фразы снейр
@@ -159,7 +160,8 @@ impl Style for ProtoclubStyle {
         };
         let hat = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 0.35,
+            // Прото-хэт — закрытый: длинные открытые хэты не были частью грува.
+            gates: &[0.35, 0.7],
             vel_base: 0.45,
             vel_energy: 0.25,
             vel_jitter: 0.08,
@@ -169,7 +171,7 @@ impl Style for ProtoclubStyle {
         // Второй темы нет — солист один, как в прототипе.
         let pluck = RoleGuide {
             energy_response: 1.8,
-            duration_mult: 0.9,
+            gates: &[0.7, 0.9, 1.4],
             vel_base: 0.55,
             vel_energy: 0.3,
             vel_jitter: 0.07,
@@ -179,31 +181,31 @@ impl Style for ProtoclubStyle {
                 jitter: 1,
             },
             follow_motif: true,
-            ..RoleGuide::pitched(LEAD_PH, 0, 2, 1, 0.9, 0.55)
+            ..RoleGuide::pitched(LEAD_PH, 0, 2, 1, &[0.7, 0.9, 1.4], 0.55)
         };
         let keys = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.0,
+            gates: &[1.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.0, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 1, 2, &[1.0], 0.3)
         };
         let kick808 = RoleGuide {
             vel_base: 0.5,
             ..RoleGuide::kit(BED_W, 36, 0.5)
         };
         let vinyl = RoleGuide {
-            duration_mult: 200.0,
+            gates: &[200.0],
             vel_base: 0.2,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.2)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[200.0], 0.2)
         };
         let vocal = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 3.0,
+            gates: &[2.0, 3.0, 4.0],
             vel_base: 0.45,
             vel_energy: 0.15,
             vel_jitter: 0.08,
@@ -212,28 +214,28 @@ impl Style for ProtoclubStyle {
                 octave: 2,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 2, 2, 2, 3.0, 0.45)
+            ..RoleGuide::pitched(BED_W, 2, 2, 2, &[2.0, 3.0, 4.0], 0.45)
         };
         let guitar = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 1, 2, &[1.0, 1.5, 2.0], 0.3)
         };
         // Дождь: ровная пелена во все фразы (тише винила и музыки).
         let rain = RoleGuide {
-            duration_mult: 150.0,
+            gates: &[150.0],
             vel_base: 0.35,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[150.0], 0.35)
         };
         let shaker = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.4,
+            gates: &[0.4],
             vel_base: 0.3,
             vel_jitter: 0.06,
             ..RoleGuide::kit(BED_W, 60, 0.3)
@@ -242,14 +244,14 @@ impl Style for ProtoclubStyle {
         // Соло-гитара вне автомикса: ручная краска для фронта.
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 1,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 1, 1.5, 0.3)
+            ..RoleGuide::pitched(BED_W, 0, 1, 1, &[1.0, 1.5, 2.0], 0.3)
         };
         [
             bass,

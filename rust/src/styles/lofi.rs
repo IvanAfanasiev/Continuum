@@ -192,7 +192,8 @@ impl Style for LofiStyle {
         // Пыльный бас ходит корнями (джиттер 1 — соседние ступени).
         let bass = RoleGuide {
             energy_response: 0.8,
-            duration_mult: 6.0,
+            gates: &[4.0, 6.0, 8.0],
+            tie_repeats: 0.35,
             vel_base: 0.5,
             vel_jitter: 0.05,
             voice: Voicing::Scale {
@@ -202,7 +203,7 @@ impl Style for LofiStyle {
             },
             vel_high_cut: 0.6,
             sub_bias: 0.4,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 1, 6.0, 0.5)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 1, &[4.0, 6.0, 8.0], 0.5)
         };
         let kick = RoleGuide {
             energy_response: 0.8,
@@ -212,14 +213,14 @@ impl Style for LofiStyle {
             ..RoleGuide::kit(KICK_W, 36, 0.9)
         };
         let pad = RoleGuide {
-            duration_mult: 8.0,
+            gates: &[6.0, 8.0, 10.0],
             vel_base: 0.35,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 0,
                 jitter: 0,
             },
-            ..RoleGuide::pitched(PAD_W, 0, 0, 0, 8.0, 0.35)
+            ..RoleGuide::pitched(PAD_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.35)
         };
         let snare = RoleGuide {
             vel_base: 0.7,
@@ -228,8 +229,7 @@ impl Style for LofiStyle {
         };
         let hat = RoleGuide {
             long_offbeats: true,
-            long_mult: 5.0,
-            duration_mult: 0.3,
+            gates: &[0.3, 0.6, 1.1],
             vel_base: 0.34,
             vel_energy: 0.15,
             vel_jitter: 0.08,
@@ -240,7 +240,7 @@ impl Style for LofiStyle {
         // Нарезки гитары: тот же план боя, что у гитары (общий скелет
         // роли), своим тембром и своим броском гейта. Гетерофония.
         let pluck = RoleGuide {
-            duration_mult: 2.0,
+            gates: &[1.5, 2.0, 3.0],
             vel_base: 0.5,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -250,10 +250,10 @@ impl Style for LofiStyle {
             },
             follow_motif: true,
             phrase_rest: 0.2,
-            ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 2.0, 0.5)
+            ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, &[1.5, 2.0, 3.0], 0.5)
         };
         let keys = RoleGuide {
-            duration_mult: 6.0,
+            gates: &[4.0, 6.0, 8.0],
             vel_base: 0.6,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -261,7 +261,7 @@ impl Style for LofiStyle {
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(KEYS_W, 0, 1, 2, 6.0, 0.6)
+            ..RoleGuide::pitched(KEYS_W, 0, 1, 2, &[4.0, 6.0, 8.0], 0.6)
         };
         // Чужие слоты: приглушенные рабочие направляющие — включаются
         // только ручкой фронта, дефолтный характер не ломают.
@@ -277,21 +277,21 @@ impl Style for LofiStyle {
         // Пыль тише музыки: стем-аудит показал винил самым ярким
         // после тёмных клавиш — убавляем подложку, не музыку.
         let vinyl = RoleGuide {
-            duration_mult: 300.0,
+            gates: &[300.0],
             vel_base: 0.15,
             vel_jitter: 0.05,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 300.0, 0.15)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[300.0], 0.15)
         };
         let vocal = RoleGuide {
             energy_response: 1.2,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.45,
             voice: Voicing::Scale {
                 degree: 2,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(KEYS_W, 2, 1, 2, 1.5, 0.45)
+            ..RoleGuide::pitched(KEYS_W, 2, 1, 2, &[1.0, 1.5, 2.0], 0.45)
         };
         // Гитара поверх Rhodes: мотив сида длинными нотами с дыханием.
         // База — ровные восьмые (бой слышно), апстроуки заполняют.
@@ -302,7 +302,7 @@ impl Style for LofiStyle {
         const STRUM_IV: &[i8] = &[0, 2, 4];
         let guitar = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.8,
+            gates: &[1.5, 2.0, 3.0],
             vel_base: 0.85,
             vel_jitter: 0.08,
             voice: Voicing::Scale {
@@ -314,18 +314,18 @@ impl Style for LofiStyle {
             phrase_rest: 0.2,
             chord: Some(STRUM_IV),
             arp: true,
-            ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, 1.8, 0.85)
+            ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, &[1.5, 2.0, 3.0], 0.85)
         };
         // Шейкер вне club: пыльные оффбиты для ручки фронта.
         // Дождь: ровная пелена во все фразы (тише винила и музыки).
         let rain = RoleGuide {
-            duration_mult: 150.0,
+            gates: &[150.0],
             vel_base: 0.35,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[150.0], 0.35)
         };
         let shaker = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.4,
+            gates: &[0.4],
             vel_base: 0.25,
             vel_jitter: 0.06,
             ..RoleGuide::kit(SHAKER_LOFI_W, 60, 0.25)
@@ -334,14 +334,14 @@ impl Style for LofiStyle {
         // Дефолт lofi не тронут (там своя гитара-фингерпикинг).
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.5,
+            gates: &[1.0, 1.5, 2.0],
             vel_base: 0.25,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 2, 1.5, 0.25)
+            ..RoleGuide::pitched(BED_W, 0, 1, 2, &[1.0, 1.5, 2.0], 0.25)
         };
         [
             bass,

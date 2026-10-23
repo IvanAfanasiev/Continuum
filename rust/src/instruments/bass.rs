@@ -127,6 +127,18 @@ impl Voice for BassVoice {
         self.sub_bias = note.sub_bias.clamp(0.0, 1.0);
     }
 
+    fn extend(&mut self, note: &NoteEvent) {
+        // Лига — продолжение той же ноты: фазу, атаку и тембр не трогаем,
+        // только продлеваем хвост и плавно ведем динамику к новой.
+        if self.samples_left == 0 {
+            self.trigger(note);
+            return;
+        }
+        let want = (note.duration_secs * self.sample_rate).max(1.0) as usize;
+        self.samples_left = self.samples_left.max(want);
+        self.gain_target = note.velocity;
+    }
+
     fn next_sample(&mut self) -> f32 {
         if self.samples_left == 0 {
             return 0.0;

@@ -186,7 +186,8 @@ impl Style for RockStyle {
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         let bass = RoleGuide {
             energy_response: 1.4,
-            duration_mult: 0.6,
+            gates: &[0.4, 0.6, 0.9],
+            tie_repeats: 0.3,
             vel_base: 0.8,
             vel_energy: 0.15,
             vel_jitter: 0.04,
@@ -201,7 +202,7 @@ impl Style for RockStyle {
             // Бас риффует вслед за гитарой (ref: doubling вплоть до D3),
             // а не лежит сабом: кап выше.
             bass_top: 52,
-            ..RoleGuide::pitched(BASS_W, 0, -1, 0, 0.6, 0.8)
+            ..RoleGuide::pitched(BASS_W, 0, -1, 0, &[0.4, 0.6, 0.9], 0.8)
         };
         // Вдавленная бочка: якоря в пол, компрессия — в миксе.
         // Заливка умеренная, чтобы не ломать бит очередью.
@@ -213,9 +214,9 @@ impl Style for RockStyle {
             ..RoleGuide::kit(KICK_W, 36, 1.0)
         };
         let pad = RoleGuide {
-            duration_mult: 8.0,
+            gates: &[6.0, 8.0, 10.0],
             vel_base: 0.25,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 8.0, 0.25)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.25)
         };
         // Хлесткий снейр: транзиент + тело. Заливка умеренная.
         let snare = RoleGuide {
@@ -231,7 +232,8 @@ impl Style for RockStyle {
         };
         let hat = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.35,
+            // Рок-хэт — закрытый: открытый хэт тут не был частью грува.
+            gates: &[0.35, 0.7],
             vel_base: 0.42,
             vel_energy: 0.18,
             vel_jitter: 0.06,
@@ -243,25 +245,25 @@ impl Style for RockStyle {
         };
         let pluck = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.8,
+            gates: &[0.6, 0.8, 1.2],
             vel_base: 0.28,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(RIFF_W, 0, 1, 2, 0.8, 0.28)
+            ..RoleGuide::pitched(RIFF_W, 0, 1, 2, &[0.6, 0.8, 1.2], 0.28)
         };
         let keys = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 3.0,
+            gates: &[2.0, 3.0, 4.0],
             vel_base: 0.28,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 0,
             },
-            ..RoleGuide::pitched(BED_W, 0, 1, 0, 3.0, 0.28)
+            ..RoleGuide::pitched(BED_W, 0, 1, 0, &[2.0, 3.0, 4.0], 0.28)
         };
         // Чужие слоты: сдержанные направляющие для ручек фронта.
         let kick808 = RoleGuide {
@@ -269,20 +271,20 @@ impl Style for RockStyle {
             ..RoleGuide::kit(KICK_W, 36, 0.7)
         };
         let vinyl = RoleGuide {
-            duration_mult: 200.0,
+            gates: &[200.0],
             vel_base: 0.2,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 200.0, 0.2)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[200.0], 0.2)
         };
         let vocal = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.2,
+            gates: &[0.9, 1.2, 1.6],
             vel_base: 0.3,
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
                 jitter: 2,
             },
-            ..RoleGuide::pitched(RIFF_W, 0, 1, 2, 1.2, 0.3)
+            ..RoleGuide::pitched(RIFF_W, 0, 1, 2, &[0.9, 1.2, 1.6], 0.3)
         };
         // Чистая гитара риффом по мотиву: общий скелет риффа, своим
         // тембром и броском гейта.
@@ -291,7 +293,7 @@ impl Style for RockStyle {
         // Ведёт без отдыха: рифф relentless, передышка — у стены риффа.
         let guitar = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 1.0,
+            gates: &[1.0],
             vel_base: 0.85,
             voice: Voicing::Scale {
                 degree: 0,
@@ -301,7 +303,7 @@ impl Style for RockStyle {
             follow_motif: true,
             phrase_rest: 0.0,
             poles: Some(RIFF_POLES),
-            ..RoleGuide::pitched(RIFF_W, 0, 1, 1, 1.0, 0.85)
+            ..RoleGuide::pitched(RIFF_W, 0, 1, 1, &[1.0], 0.85)
         };
         // Соло поверх риффа: поёт тему редко и длинно (перебор),
         // а не чоппит вместе с риффом. Другой ритм (редкие доли),
@@ -309,7 +311,7 @@ impl Style for RockStyle {
         // Октава та же, что у риффа (вверх — писк, вниз — каша с басом).
         let guitar_lead = RoleGuide {
             energy_response: 1.5,
-            duration_mult: 2.2,
+            gates: &[1.5, 2.0, 3.0, 4.0],
             vel_base: 0.7,
             vel_energy: 0.2,
             vel_jitter: 0.06,
@@ -320,18 +322,18 @@ impl Style for RockStyle {
             },
             follow_motif: true,
             phrase_rest: 0.45,
-            ..RoleGuide::pitched(ROCK_LEAD_W, 0, 1, 0, 2.2, 0.7)
+            ..RoleGuide::pitched(ROCK_LEAD_W, 0, 1, 0, &[1.5, 2.0, 3.0, 4.0], 0.7)
         };
         // Шейкер вне club: тихий ровный слой для ручки фронта.
         // Дождь: ровная пелена во все фразы (тише винила и музыки).
         let rain = RoleGuide {
-            duration_mult: 150.0,
+            gates: &[150.0],
             vel_base: 0.35,
-            ..RoleGuide::pitched(BED_W, 0, 0, 0, 150.0, 0.35)
+            ..RoleGuide::pitched(BED_W, 0, 0, 0, &[150.0], 0.35)
         };
         let shaker = RoleGuide {
             energy_response: 1.0,
-            duration_mult: 0.4,
+            gates: &[0.4],
             vel_base: 0.3,
             vel_jitter: 0.06,
             ..RoleGuide::kit(SHAKER_ROCK_W, 60, 0.3)
