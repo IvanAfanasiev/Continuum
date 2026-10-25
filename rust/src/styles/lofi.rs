@@ -1,3 +1,5 @@
+use super::riff::RiffKind;
+use super::transition::{Kind, Spec};
 use super::{RoleGuide, Style, StyleGroup, Voicing};
 use crate::instruments::Slot;
 
@@ -138,6 +140,22 @@ impl Style for LofiStyle {
         // Тихий стык: кусок закрывается и следующий начинается с чистого
         // такта. Нахлёт здесь звучал бы как заедание.
         crate::piece::Transition::Cut
+    }
+
+    /// Lofi не бьет, а выдыхает: тихий пикап хэта в конце разгона и
+    /// два шага пыли после него. Никакого ролла — это не клуб.
+    fn transition_gesture(&self) -> Option<Spec> {
+        Some(Spec::new(
+            Kind::BreathPickup,
+            &[Slot::Hat],
+            &[Slot::Hat],
+            2,
+            42,
+        ))
+    }
+
+    fn riff_kind(&self) -> RiffKind {
+        RiffKind::Lofi
     }
 
     fn reverb_wet(&self) -> f32 {

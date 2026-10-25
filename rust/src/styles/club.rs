@@ -1,3 +1,5 @@
+use super::riff::RiffKind;
+use super::transition::{Kind, Spec};
 use super::{RoleGuide, Style, Voicing};
 use crate::instruments::Slot;
 
@@ -104,6 +106,12 @@ impl Style for ClubStyle {
         1.2
     }
 
+    fn style_contract(&self) -> super::contract::StyleContract {
+        // Club: бас уступает кику, фраза дышит velocity-аркой,
+        // не больше трёх мелодических онсетов на шаг, верхний регистр 78.
+        super::contract::StyleContract::new(true, true, 3, Some(78))
+    }
+
     fn scale(&self) -> &'static [u8] {
         &SCALE
     }
@@ -136,6 +144,22 @@ impl Style for ClubStyle {
         // Диско-склейка: грув катит дальше, голос следующего куска входит
         // поверх него — стыка не слышно.
         crate::piece::Transition::Rolling { bars: 2 }
+    }
+
+    /// Club: снейр-ролл 16-ми в последнем такте разгона и короткий
+    /// хвост после удара — энергичный, но не пулемет на весь такт.
+    fn transition_gesture(&self) -> Option<Spec> {
+        Some(Spec::new(
+            Kind::SnareRoll,
+            &[Slot::Snare],
+            &[Slot::Snare],
+            3,
+            60,
+        ))
+    }
+
+    fn riff_kind(&self) -> RiffKind {
+        RiffKind::Club
     }
 
     fn reverb_wet(&self) -> f32 {
@@ -212,18 +236,12 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(PAD_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.5)
         };
         let snare = RoleGuide {
-            // Забивка на стыке фраз: в последней доле фразы снейр
-            // играет каждую 16-ю с нарастанием — стык слышно как ход.
-            phrase_fill: true,
             vel_base: 0.95,
             poles: Some(SNARE_POLES),
-            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
-            build_roll: true,
             ..RoleGuide::kit(CLAP_W, 60, 0.95)
         };
         let hat = RoleGuide {
             energy_response: 1.2,
-            drop_before_climax: true,
             long_offbeats: true,
             // Короче и тише: звонкий металл на верху давал «треугольник»
             // вместо бита и забивал весь верх микса. Ритм держит шейкер.

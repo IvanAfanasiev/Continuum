@@ -1,3 +1,5 @@
+use super::riff::RiffKind;
+use super::transition::{Kind, Spec};
 use super::{RoleGuide, Style, Voicing};
 use crate::instruments::Slot;
 
@@ -112,6 +114,12 @@ impl Style for DeepHouseStyle {
         1.2
     }
 
+    fn style_contract(&self) -> super::contract::StyleContract {
+        // Deep house: бас уступает кику, фраза дышит velocity-аркой,
+        // не больше двух мелодических онсетов на шаг, верхний регистр 76.
+        super::contract::StyleContract::new(true, true, 2, Some(76))
+    }
+
     fn scale(&self) -> &'static [u8] {
         &SCALE
     }
@@ -150,6 +158,22 @@ impl Style for DeepHouseStyle {
         // Мягкая склейка: грув катит дальше, голос следующего куска
         // входит поверх него.
         crate::piece::Transition::Rolling { bars: 2 }
+    }
+
+    /// Deep входит в удар шейкерным вихрем: песок сгущается к дропу,
+    /// а после удара еще несколько шагов осыпается хвостом.
+    fn transition_gesture(&self) -> Option<Spec> {
+        Some(Spec::new(
+            Kind::ShakerSpiral,
+            &[Slot::Shaker],
+            &[Slot::Shaker],
+            4,
+            70,
+        ))
+    }
+
+    fn riff_kind(&self) -> RiffKind {
+        RiffKind::Deep
     }
 
     /// Пространство сухое, но с хвостом: в плейлисте «Deephouse +
@@ -229,13 +253,10 @@ impl Style for DeepHouseStyle {
             vel_jitter: 0.0,
             ..RoleGuide::pitched(PAD_W, 0, -1, 0, &[8.0, 10.0, 12.0], 0.45)
         };
-        // Клэп на 2 и 4, с призвуком. Забивка на стыке фразы — стык
-        // слышно как ход, а не как обрыв.
+        // Клэп на 2 и 4, с призвуком.
         let snare = RoleGuide {
-            phrase_fill: true,
             vel_base: 0.95,
             poles: Some(SNARE_POLES),
-            build_roll: true,
             ..RoleGuide::kit(CLAP_W, 60, 0.9)
         };
         // Хэт: закрытый, короткий, тише шейкера. Звонкий металл на
@@ -243,7 +264,6 @@ impl Style for DeepHouseStyle {
         // Ритм держит шейкер — быстрый и сухой.
         let hat = RoleGuide {
             energy_response: 1.2,
-            drop_before_climax: true,
             long_offbeats: true,
             gates: &[0.35, 0.7, 1.1],
             vel_base: 0.4,

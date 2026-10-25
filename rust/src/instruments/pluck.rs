@@ -56,9 +56,12 @@ impl Voice for PluckVoice {
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
-        self.phase_saw1 = 0.0;
-        self.phase_saw2 = 0.0;
-        self.phase_sub = 0.0;
+        // Небольшое сид-зависимое смещение фаз: транзиенты не совпадают
+        // бит-в-бит при повторах, но высота и огибающая сохраняются.
+        let phase_seed = note_seed(note, 0x1234);
+        self.phase_saw1 = (phase_seed as f32 / u32::MAX as f32) * 0.08;
+        self.phase_saw2 = ((phase_seed >> 8) as f32 / u32::MAX as f32) * 0.08;
+        self.phase_sub = ((phase_seed >> 16) as f32 / u32::MAX as f32) * 0.08;
         self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
         self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
         // Щипок гаснет за ~7 мс: атака струны, а не второй инструмент.

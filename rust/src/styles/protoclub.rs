@@ -1,3 +1,5 @@
+use super::riff::RiffKind;
+use super::transition::{Kind, Spec};
 use super::{RoleGuide, Style, Voicing};
 use crate::instruments::Slot;
 
@@ -65,6 +67,12 @@ impl Style for ProtoclubStyle {
         1.1
     }
 
+    fn style_contract(&self) -> super::contract::StyleContract {
+        // Прото-клуб: бас на долях — это лицо стиля, уступает только если
+        // стили этого захотят. Не больше двух мелодических онсетов на шаг.
+        super::contract::StyleContract::new(false, true, 2, None)
+    }
+
     fn scale(&self) -> &'static [u8] {
         &SCALE
     }
@@ -96,6 +104,22 @@ impl Style for ProtoclubStyle {
 
     fn reverb_wet(&self) -> f32 {
         0.1
+    }
+
+    /// Proto входит в удар коротким стаб-пикапом щипка: три ноты в
+    /// последней четверти разгона и легкое эхо на даунбите.
+    fn transition_gesture(&self) -> Option<Spec> {
+        Some(Spec::new(
+            Kind::StabPickup,
+            &[Slot::Pluck],
+            &[Slot::Pluck],
+            3,
+            60,
+        ))
+    }
+
+    fn riff_kind(&self) -> RiffKind {
+        RiffKind::Proto
     }
 
     fn reverb_size(&self) -> f32 {
@@ -149,13 +173,8 @@ impl Style for ProtoclubStyle {
             ..RoleGuide::pitched(BED_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.25)
         };
         let snare = RoleGuide {
-            // Забивка на стыке фраз: в последней доле фразы снейр
-            // играет каждую 16-ю с нарастанием — стык слышно как ход.
-            phrase_fill: true,
             vel_base: 0.9,
             vel_jitter: 0.04,
-            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
-            build_roll: true,
             ..RoleGuide::kit(SNARE_PH, 38, 0.9)
         };
         let hat = RoleGuide {

@@ -64,7 +64,7 @@ pub const CALM_SCORE: Score = Score {
 };
 
 /// Форма deep house: сетка не останавливается, удар длинный, передышка
-/// короткая. Ровный дом-кл��б: тема держит бит, разгон короткий, дроп
+/// короткая. Ровный дом-клуб: тема держит бит, разгон короткий, дроп
 /// растянут — в club дроп это не взрыв, а восемь тактов одной сетки.
 pub const HOUSE_SCORE: Score = Score {
     cycle: &[
@@ -120,8 +120,8 @@ const CYCLE_PHRASE_JUMP: usize = 3;
 pub struct SongContext {
     pub section: SongSection,
     /// Сквозной номер такта от старта сессии (1-based). Не сбрасывается
-    /// на границах секций: по нему живут прогрессия, `every_n_measures`
-    /// и вторая половина мотива (см. `styles::play_guide`).
+    /// на границах секций: по нему живут прогрессия, вторая половина
+    /// мотива и фаза многотактовой клетки риффа (см. `styles::play_guide`).
     pub measure_index: usize,
     /// Монотонный номер музыкальной фразы (2 такта). Фразы выровнены
     /// по нечетным тактам: `total=1,2 -> 0; 3,4 -> 1; ...`. Внутри фразы
@@ -130,6 +130,13 @@ pub struct SongContext {
     pub energy: f32,
     pub progress: f32,
     pub is_last_measure: bool,
+    /// Номер такта внутри текущей секции (1-based). Переходы и
+    /// кроссфейд полюсов знают, что раздел только начался, а не
+    /// просто что сменился сквозной такт.
+    pub section_measure_index: usize,
+    /// Предыдущая секция формы. На первом разделе и при удержании
+    /// последней секции совпадает с текущей.
+    pub previous_section: SongSection,
     /// Ступень круга 0..8 (тема встречается на 1 и 5).
     pub stage: usize,
     /// Номер круга формы (0 = первый проход).
@@ -188,6 +195,9 @@ pub struct Arranger {
     plan_done: bool,
     /// Текущая секция плана (из плана, а не из кольца скелета).
     section: SongSection,
+    /// Секция, которая играла до текущей: нужна переходам (хвост
+    /// жеста после BuildUp) и кроссфейду полюсов на первом такте.
+    previous_section: SongSection,
     /// Написанная энергия секции (None — по общей формуле формы).
     section_energy: Option<f32>,
     /// Кто играет в секции (маска групп) — из плана куска.
@@ -355,7 +365,7 @@ impl Arranger {
         // (поступенно, как раньше), половина — широко (скачки до
         // терции). Один напев на всех давал «одинаковую генерацию»;
         // теперь характер темы (напев vs прыжки) различает сиды.
-        let wide = splitmix64(seed_hash ^ 0x1DE5) % 2 == 0;
+        let wide = splitmix64(seed_hash ^ 0x1DE5).is_multiple_of(2);
         // Мотив сида: напевная линия 0..4 (узкий напев),
         // а не 16 независимых бросков. Случайное блуждание шагом ≤ 1
         // (широкие сиды — до 2) с аркой (подъем к середине, спад
@@ -391,7 +401,7 @@ impl Arranger {
                 // Широкие сиды иногда шагают через ступень (терция).
                 // Не влезает — откат на поступенный (всегда валиден).
                 let mut next = pos + dir;
-                if wide && (m >> 32) % 4 == 0 {
+                if wide && (m >> 32).is_multiple_of(4) {
                     let ext = pos + dir * 2;
                     if (0..=4).contains(&ext) {
                         next = ext;
@@ -430,8 +440,8 @@ impl Arranger {
             // узкие — поступенно: B в размахе своей A.
             let mag: i8 = if wide { 2 } else { 1 };
             for d in [
-                if g % 2 == 0 { mag } else { -mag },
-                if g % 2 == 0 { -1 } else { 1 },
+                if g.is_multiple_of(2) { mag } else { -mag },
+                if g.is_multiple_of(2) { -1 } else { 1 },
             ] {
                 let v = (cur + d).clamp(0, 4);
                 if (v - left).abs() <= line_lim && (v - right).abs() <= line_lim {
@@ -455,6 +465,7 @@ impl Arranger {
             plan_idx: 0,
             plan_done: false,
             section: first_section,
+            previous_section: first_section,
             section_energy: None,
             section_layers: layers[crate::piece::layer_index(first_section)],
             transition,
@@ -621,6 +632,9 @@ impl Arranger {
         });
         match planned {
             Some((section, energy, layers, len)) => {
+                // Старая секция становится предыдущей ровно на входе.
+                // Нужна переходам и кроссфейду полюсов, а не истории.
+                self.previous_section = self.section;
                 self.section = section;
                 self.section_energy = energy;
                 self.section_layers = layers;
@@ -681,6 +695,10 @@ impl Arranger {
                     self.plan_done = true;
                     self.section_len = self.section_len.max(1);
                     self.section_measure_count = 1;
+                    // Удержанная секция не должна каждый такт выглядеть
+                    // «только что вошедшей»: иначе хвост перехода из
+                    // BuildUp повторялся бы в каждом такте Drop.
+                    self.previous_section = self.section;
                 }
             } else {
                 self.plan_idx += 1;
@@ -723,7 +741,7 @@ impl Arranger {
 
         SongContext {
             section,
-            // Сквозной такт сессии: гармония, `every_n_measures` и вторая
+            // Сквозной такт сессии: гармония, клетка риффа и вторая
             // половина мотива живут по нему, а не по локальному счетчику.
             measure_index: self.total_measures,
             phrase_index,
@@ -737,6 +755,8 @@ impl Arranger {
             ),
             progress,
             is_last_measure: is_last,
+            section_measure_index: self.section_measure_count,
+            previous_section: self.previous_section,
             stage,
             cycle: self.cycle,
             stage_gains: gains,
@@ -1089,7 +1109,7 @@ mod tests {
     #[test]
     fn measure_index_is_global_across_sections() {
         // section_measure_count сбрасывается на стыках, а сквозной такт — нет:
-        // по нему движутся прогрессия и every_n_measures.
+        // по нему движутся прогрессия и клетка риффа.
         let mut a = Arranger::new(1);
         let mut measures = 0usize;
         let mut last_section = None;
@@ -1145,7 +1165,7 @@ mod tests {
             // Размах темы — почерк сида: узкие поступенные (≤1),
             // широкие терцовые (≤2). Каданс всегда на тонике.
             let seed_hash = splitmix64(seed ^ 0x51ED);
-            let lim: i8 = if splitmix64(seed_hash ^ 0x1DE5) % 2 == 0 {
+            let lim: i8 = if splitmix64(seed_hash ^ 0x1DE5).is_multiple_of(2) {
                 2
             } else {
                 1

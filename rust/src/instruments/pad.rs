@@ -1,7 +1,7 @@
 use std::f32::consts::TAU;
 
 use super::{
-    dsp::{fast_sin, release_fade, saw_blep, sin01, Svf},
+    dsp::{fast_sin, note_seed, release_fade, saw_blep, sin01, Svf},
     sane_sample_rate, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
@@ -65,7 +65,13 @@ impl Voice for PadVoice {
         self.fade_samples = ((total as f32 * 0.3 * note.release_mul.max(0.25)) as usize)
             .min((0.6 * self.sample_rate) as usize)
             .max(1);
-        self.phases = [0.0; 5];
+        // Небольшое сид-зависимое смещение фаз: избегаем полностью
+        // идентичного транзиента при повторах одной и той же ноты.
+        let mut seed = note_seed(note, 0x4321);
+        for phase in &mut self.phases {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            *phase = (seed as f32 / u32::MAX as f32) * 0.03;
+        }
         self.drift_phase = (note.midi_pitch as f32 * 0.7) % TAU;
         // LFO и фильтры сохраняются — стена звука дышит непрерывно.
         // Состояния лишь чистятся от деначала (иначе редкие всплески CPU).

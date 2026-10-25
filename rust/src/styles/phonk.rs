@@ -1,3 +1,5 @@
+use super::riff::RiffKind;
+use super::transition::{Kind, Spec};
 use super::{RoleGuide, Style, Voicing};
 use crate::instruments::Slot;
 
@@ -76,6 +78,13 @@ impl Style for PhonkStyle {
         1.1
     }
 
+    fn style_contract(&self) -> super::contract::StyleContract {
+        // Phonk: бас уступает кику, не больше двух мелодических онсетов
+        // на шаг. Верхний регистр без ограничения (стиль кладёт
+        // вокал/808 выше и это лицо стиля).
+        super::contract::StyleContract::new(true, true, 2, None)
+    }
+
     fn scale(&self) -> &'static [u8] {
         &SCALE
     }
@@ -87,7 +96,7 @@ impl Style for PhonkStyle {
     }
 
     /// Аранж фонка: дрейф — минимум голосов, тема почти голая (808 и
-    /// бочка). Кла��иши приходят в разгоне, вокал — в дропе.
+    /// бочка). Клавиши приходят в разгоне, вокал — в дропе.
     fn arrangement_layers(&self) -> crate::piece::Layers {
         use crate::piece::{default_layers, L_GROOVE, L_HARMONY};
         let base = default_layers();
@@ -101,6 +110,22 @@ impl Style for PhonkStyle {
             // Передышка: half-time, голоса молчат.
             L_GROOVE,
         ]
+    }
+
+    /// Phonk входит в удар слайдом 808: квинта и корень в последнем
+    /// такте разгона, короткий хвост на даунбите дропа.
+    fn transition_gesture(&self) -> Option<Spec> {
+        Some(Spec::new(
+            Kind::Slide808,
+            &[Slot::Kick808],
+            &[Slot::Kick808],
+            2,
+            36,
+        ))
+    }
+
+    fn riff_kind(&self) -> RiffKind {
+        RiffKind::Phonk
     }
 
     fn reverb_wet(&self) -> f32 {
@@ -167,13 +192,8 @@ impl Style for PhonkStyle {
             ..RoleGuide::pitched(BED_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.25)
         };
         let snare = RoleGuide {
-            // Забивка на стыке фраз: в последней доле фразы снейр
-            // играет каждую 16-ю с нарастанием — стык слышно как ход.
-            phrase_fill: true,
             vel_base: 0.9,
             vel_jitter: 0.04,
-            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
-            build_roll: true,
             ..RoleGuide::kit(SNARE_PH, 38, 0.9)
         };
         let hat = RoleGuide {

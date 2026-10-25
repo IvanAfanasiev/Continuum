@@ -1,3 +1,5 @@
+use super::riff::RiffKind;
+use super::transition::{Kind, Spec};
 use super::{RoleGuide, Style, StyleGroup, Voicing};
 use crate::instruments::Slot;
 
@@ -111,6 +113,12 @@ impl Style for RockStyle {
         1.0
     }
 
+    fn style_contract(&self) -> super::contract::StyleContract {
+        // Рок: бас часто идёт вместе с киком — это лицо стиля, уступает
+        // только по мелодической плотности. Не больше двух онсетов на шаг.
+        super::contract::StyleContract::new(false, true, 2, None)
+    }
+
     fn scale(&self) -> &'static [u8] {
         &SCALE
     }
@@ -142,6 +150,22 @@ impl Style for RockStyle {
         // Рок стыкуется резко: короткий хвост с ударом, дальше следующий
         // кусок сразу с полной энергией.
         crate::piece::Transition::Cut
+    }
+
+    /// Rock: филл бочка/снейр как томы в последнем такте разгона.
+    /// Хвост — только снейр: даунбит дропа остается за бочкой.
+    fn transition_gesture(&self) -> Option<Spec> {
+        Some(Spec::new(
+            Kind::TomFill,
+            &[Slot::Kick, Slot::Snare],
+            &[Slot::Snare],
+            3,
+            36,
+        ))
+    }
+
+    fn riff_kind(&self) -> RiffKind {
+        RiffKind::Rock
     }
 
     fn reverb_wet(&self) -> f32 {
@@ -218,16 +242,11 @@ impl Style for RockStyle {
             vel_base: 0.25,
             ..RoleGuide::pitched(BED_W, 0, 0, 0, &[6.0, 8.0, 10.0], 0.25)
         };
-        // Хлесткий снейр: транзиент + тело. Заливка умеренная.
+        // Хлесткий снейр: транзиент + тело.
         let snare = RoleGuide {
-            // Забивка на стыке фраз: в последней доле фразы снейр
-            // играет каждую 16-ю с нарастанием — стык слышно как ход.
-            phrase_fill: true,
             vel_base: 0.9,
             vel_jitter: 0.04,
             poles: Some(SNARE_POLES),
-            // Ролл в дроп: последний такт билда — 16-е с нарастанием.
-            build_roll: true,
             ..RoleGuide::kit(SNARE_W, 38, 0.9)
         };
         let hat = RoleGuide {

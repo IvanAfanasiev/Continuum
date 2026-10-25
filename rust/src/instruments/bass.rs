@@ -94,7 +94,9 @@ impl Voice for BassVoice {
         self.gain = note.velocity;
         self.gain_target = note.velocity;
         self.velocity = note.velocity;
-        self.phase = 0.0;
+        // Небольшое сид-зависимое смещение фазы: бас не начинается бит-в-бит
+        // одинаково, но высота и огибающая сохраняются.
+        self.phase = (super::dsp::note_seed(note, 0x8A55) as f32 / u32::MAX as f32) * 0.05;
         self.elapsed = 0;
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
