@@ -244,7 +244,7 @@ impl Composer {
         let current_seed = snapshot(&seed);
         let (score, style_name, bpm, transition, layers) = match style.read() {
             Ok(g) => (
-                g.arrangement(),
+                g.arrangement_for_seed(current_seed),
                 g.name().to_string(),
                 g.bpm(),
                 g.transition(),
@@ -253,7 +253,7 @@ impl Composer {
             Err(poisoned) => {
                 let g = poisoned.into_inner();
                 (
-                    g.arrangement(),
+                    g.arrangement_for_seed(current_seed),
                     g.name().to_string(),
                     g.bpm(),
                     g.transition(),
@@ -309,10 +309,11 @@ impl Composer {
         // а не доигрывают поверх новой (слушатель сам сменил сид/стиль —
         // резкий обрыв уместен).
         self.voice_reset.store(true, Ordering::Relaxed);
-        // Партитура — от текущего стиля: спокойные идут коротким кругом.
+        // Партитура — от текущего стиля и сида: каждый сид выбирает
+        // свой вариант формы, а не только тему внутри одной сетки.
         let (score, bpm, transition, layers) = match self.style.read() {
             Ok(g) => (
-                g.arrangement(),
+                g.arrangement_for_seed(seed),
                 g.bpm(),
                 g.transition(),
                 g.arrangement_layers(),
@@ -320,7 +321,7 @@ impl Composer {
             Err(poisoned) => {
                 let g = poisoned.into_inner();
                 (
-                    g.arrangement(),
+                    g.arrangement_for_seed(seed),
                     g.bpm(),
                     g.transition(),
                     g.arrangement_layers(),
@@ -375,8 +376,8 @@ impl Composer {
         }
 
         // Микс читаем после сбросов: живой seed/style мог сменить
-        // состав (гости/вайтлист), и старый срез активных треков не
-        // должен попасть в первый шаг новой формы.
+        // каст, и старый срез активных треков не должен попасть в
+        // первый шаг новой формы.
         let mut active_tracks = [0usize; MAX_ACTIVE_TRACKS];
         let active_count = match self.mixer.read() {
             Ok(state) => state.active_ids(&mut active_tracks),
@@ -742,7 +743,7 @@ mod tests {
         {
             let guard = style.read().expect("style readable");
             let mut m = mixer.write().expect("mixer writable");
-            crate::playback::apply_style_mix(&**guard, &mut m);
+            crate::playback::apply_style_mix(&**guard, 424242, &mut m);
         }
         let queue = Arc::new(ArrayQueue::new(16_384));
         let mut composer = Composer::new(

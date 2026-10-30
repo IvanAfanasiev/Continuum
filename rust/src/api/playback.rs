@@ -76,9 +76,9 @@ pub fn playback_set_track(instrument_id: u64, volume: f32) -> PlaybackStatus {
     controller().set_track(instrument_id, volume)
 }
 
-/// Сброс списка инструментов на дефолты текущего стиля (вайтлист +
-/// гости сида). Снимает пометку «правил слушатель»: дальше стиль снова
-/// влияет на состав.
+/// Сброс списка инструментов на дефолтный каст текущего стиля и сида.
+/// Снимает пометку «правил слушатель»: дальше стиль и сид снова влияют
+/// на состав.
 pub fn playback_reset_instruments() -> PlaybackStatus {
     controller().reset_instruments()
 }

@@ -127,14 +127,45 @@ impl Style for DeepHouseStyle {
     /// Форма deep house: длинная тема, длинный разгон (развитие идет
     /// постепенно), длинный удар, средняя передышка.
     fn arrangement(&self) -> crate::arranger::Score {
-        crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const LONG_VIEW: Score = Score {
             cycle: &[
-                (crate::arranger::SongSection::MainMotif, 12),
-                (crate::arranger::SongSection::BuildUp, 8),
-                (crate::arranger::SongSection::Drop, 12),
-                (crate::arranger::SongSection::PostChorus, 6),
+                (SongSection::MainMotif, 12),
+                (SongSection::BuildUp, 8),
+                (SongSection::Drop, 12),
+                (SongSection::PostChorus, 6),
             ],
-        }
+        };
+        LONG_VIEW
+    }
+
+    fn arrangement_for_seed(&self, seed: u64) -> crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const LONG_VIEW: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 12),
+                (SongSection::BuildUp, 8),
+                (SongSection::Drop, 12),
+                (SongSection::PostChorus, 6),
+            ],
+        };
+        const LONG_DROP: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 8),
+                (SongSection::BuildUp, 6),
+                (SongSection::Drop, 14),
+                (SongSection::PostChorus, 6),
+            ],
+        };
+        const DEEP_BREATH: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 10),
+                (SongSection::BuildUp, 10),
+                (SongSection::Drop, 10),
+                (SongSection::PostChorus, 8),
+            ],
+        };
+        crate::arranger::pick_score(seed, 0xD33F_F0A7, &[LONG_VIEW, LONG_DROP, DEEP_BREATH])
     }
 
     /// Аранж deep house: мечтательная подложка (пэд и Rhodes) и мягкий
@@ -211,6 +242,11 @@ impl Style for DeepHouseStyle {
             Slot::Shaker,
             Slot::Vocal,
         ]
+    }
+
+    fn signature_slots(&self) -> &'static [Slot] {
+        // Пэд держит мечтательную подложку, плак поёт тему.
+        &[Slot::Pad, Slot::Pluck]
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {

@@ -19,13 +19,13 @@ fn main() {
         println!("guide {:<10} gates {:?}", Slot::ALL[i].name(), guide.gates);
     }
 
+    let seed = 424242u64;
     let mut mixer = MixerState::new();
-    apply_style_mix(&*style, &mut mixer);
+    apply_style_mix(&*style, seed, &mut mixer);
     let mut ids = [0usize; rust_lib_cont::core::MAX_ACTIVE_TRACKS];
     let n = mixer.active_ids(&mut ids);
     let active = ids[..n].to_vec();
 
-    let seed = 424242u64;
     let mut rng = rand::SeedableRng::seed_from_u64(seed);
     let mut arranger = Arranger::new(seed);
     let mut song = arranger.advance_measure();

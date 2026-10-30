@@ -117,9 +117,38 @@ impl Style for ClubStyle {
     }
 
     /// Форма стиля: свои длины секций — стиль должен отличаться
-    /// не тембрами, а построением.
+    /// не тембрами, а построением. Сид выбирает один из трёх рисунков.
     fn arrangement(&self) -> crate::arranger::Score {
         crate::arranger::HOUSE_SCORE
+    }
+
+    fn arrangement_for_seed(&self, seed: u64) -> crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const STEADY: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 8),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 12),
+                (SongSection::PostChorus, 4),
+            ],
+        };
+        const LONG_GROOVE: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 10),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 10),
+                (SongSection::PostChorus, 4),
+            ],
+        };
+        const SHORT_ARC: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 6),
+                (SongSection::BuildUp, 2),
+                (SongSection::Drop, 10),
+                (SongSection::PostChorus, 4),
+            ],
+        };
+        crate::arranger::pick_score(seed, 0xC1B5_F0A7, &[STEADY, LONG_GROOVE, SHORT_ARC])
     }
 
     /// Аранж deep house: сетка never стоит, вокал и эффекты приходят
@@ -180,7 +209,8 @@ impl Style for ClubStyle {
         // Deep house: бочка, клэп, бас, плак темы, Rhodes-стабы и
         // шейкер. Хэта нет: звонкая тарелка на верху убивала характер
         // (в микс шл «треугольник» вместо бита) — ритм держит шейкер.
-        // Состав меняет слушатель в миксе, не стиль.
+        // Пад и вокал — краски палитры: одни сиды берут их, другие
+        // оставляют клуб сухим.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -188,7 +218,14 @@ impl Style for ClubStyle {
             Slot::Pluck,
             Slot::Keys,
             Slot::Shaker,
+            Slot::Pad,
+            Slot::Vocal,
         ]
+    }
+
+    fn signature_slots(&self) -> &'static [Slot] {
+        // Тема плаком и Rhodes-стабы — лицо club.
+        &[Slot::Pluck, Slot::Keys, Slot::Shaker]
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {

@@ -50,16 +50,15 @@ pub const ENERGETIC_SCORE: Score = Score {
     ],
 };
 
-/// Спокойная форма: тема почти всегда, редкие подъем и передышка
-/// для разнообразия — без взрывных дропов по кругу.
+/// Спокойная форма: тема дышит, но кусок всё равно доходит до удара
+/// (у lofi это смена тембра, а не взрыв) и возвращается к теме.
 pub const CALM_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 8),
-        (SongSection::MainMotif, 8),
         (SongSection::BuildUp, 4),
-        (SongSection::MainMotif, 8),
+        (SongSection::Drop, 8),
         (SongSection::PostChorus, 4),
-        (SongSection::MainMotif, 8),
+        (SongSection::MainMotif, 6),
     ],
 };
 
@@ -109,6 +108,15 @@ pub const PROTO_SCORE: Score = Score {
         (SongSection::PostChorus, 2),
     ],
 };
+
+/// Выбрать форму стиля по сиду: детерминированно, без состояния.
+pub fn pick_score(seed: u64, salt: u64, variants: &'static [Score]) -> Score {
+    if variants.is_empty() {
+        return ENERGETIC_SCORE;
+    }
+    let idx = (splitmix64(seed ^ salt) % variants.len() as u64) as usize;
+    variants[idx]
+}
 
 /// Музыкальная фраза меняется каждые N тактов.
 const PHRASE_LENGTH_MEASURES: usize = 2;
@@ -953,9 +961,8 @@ mod tests {
 
     #[test]
     fn calm_score_breathes_main_with_rare_variety() {
-        // Спокойный кусок дышит темой: тема занимает большую часть,
-        // подъем — редкий гость, а конец куска — передышка (шов-финал).
-        // Разогрева нет.
+        // Спокойный кусок дышит темой, но всё равно проходит арку:
+        // тема, разгон, удар (смена тембра), передышка и возврат темы.
         let mut a = Arranger::with_score(1, CALM_SCORE);
         let mut order = Vec::new();
         let mut last = SongSection::Drop;
@@ -969,8 +976,13 @@ mod tests {
             }
         }
         use SongSection::*;
-        // Кусок: тема, подъем, передышка на конце — и снова кусок.
-        assert_eq!(&order[..3], &[MainMotif, BuildUp, PostChorus], "{order:?}");
+        // Кусок: тема, разгон, удар, передышка, возврат темы.
+        assert_eq!(
+            &order[..4],
+            &[MainMotif, BuildUp, Drop, PostChorus],
+            "{order:?}"
+        );
+        assert_eq!(order[4], MainMotif, "тема не вернулась: {order:?}");
         let mains = order.iter().filter(|s| **s == MainMotif).count();
         let builds = order.iter().filter(|s| **s == BuildUp).count();
         assert!(mains >= builds, "calm must breathe main: {order:?}");

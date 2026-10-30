@@ -83,6 +83,31 @@ impl Style for ProtoclubStyle {
         crate::arranger::PROTO_SCORE
     }
 
+    fn arrangement_for_seed(&self, seed: u64) -> crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const LONG_DROP: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 8),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 12),
+                (SongSection::PostChorus, 4),
+            ],
+        };
+        const LONG_DRIFT: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 12),
+                (SongSection::BuildUp, 6),
+                (SongSection::Drop, 8),
+                (SongSection::PostChorus, 2),
+            ],
+        };
+        crate::arranger::pick_score(
+            seed,
+            0x9A70_F0A7,
+            &[crate::arranger::PROTO_SCORE, LONG_DROP, LONG_DRIFT],
+        )
+    }
+
     /// Аранж прото: голая сетка. Тема — грув, бас и щипок; пампа и
     /// вокал приходят только к дропу. Пауза короткая: в прото это смена
     /// рисунка, а не отдых.
@@ -132,11 +157,25 @@ impl Style for ProtoclubStyle {
 
     fn ensemble(&self) -> &'static [Slot] {
         // Худое ядро прототипа: кик, саб, снейр, хэты, один щипок.
-        &[Slot::Bass, Slot::Kick, Slot::Snare, Slot::Hat, Slot::Pluck]
+        // Клавиши, пэд, 808 и шейкер — редкие краски палитры: одни
+        // сиды остаются голой сеткой, другие добавляют стаб или саб.
+        &[
+            Slot::Bass,
+            Slot::Kick,
+            Slot::Snare,
+            Slot::Hat,
+            Slot::Pluck,
+            Slot::Keys,
+            Slot::Pad,
+            Slot::Kick808,
+            Slot::Shaker,
+        ]
     }
 
-    // Гостей нет: худоба ядра, разнообразие — грувом и темой сидов.
-    // Вокальная группа выведена из набора.
+    fn signature_slots(&self) -> &'static [Slot] {
+        // Щипок — единственный голос темы; без него прото пуст.
+        &[Slot::Pluck]
+    }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         // Саб держит корни (ступень 0, без квинт и прыжков),

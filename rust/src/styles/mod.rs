@@ -1,23 +1,27 @@
 //! Стили как данные-направления, а не партитуры.
 //!
-//! Каждый стиль объявляет: лад, темп, свинг, дефолтный микс по слотам
-//! и по одной направляющей [`RoleGuide`] на слот. Как именно из весов
-//! родятся ноты, решает общий движок [`render_style`]: вес 1.0 —
-//! структурный якорь жанра (почти всегда играет, приоритет 0.95;
-//! кик-якорь — всегда), веса между — вероятности,
-//! масштабируемые энергией секции. Никаких номеров шагов в коде стилей.
+//! Каждый стиль объявляет: лад, темп, свинг, палитру инструментов и по
+//! одной направляющей [`RoleGuide`] на слот. Как именно из весов родятся
+//! ноты, решает общий движок [`render_style`]: вес 1.0 — структурный
+//! якорь жанра (почти всегда играет, приоритет 0.95; кик-якорь — всегда),
+//! веса между — вероятности, масштабируемые энергией секции. Никаких
+//! номеров шагов в коде стилей.
 //!
-//! Принцип правил: их умеренное количество, а не минимум. Фиксированная
-//! структура (форма циклом, якоря жанра, регистровые капы) — разрешена
-//! и желательна: она держит музыку музыкой. Свобода сидов — в содержании:
-//! мотив, грув, гости, тембровые выборы. Правила задают русло,
-//! сиды — воду. Бесконечность от этого не страдает: циклы длинные,
-//! короткие слышимые повторы запрещены контрактами.
+//! Палитра (`Style::ensemble`) — краски стиля, а не жёсткий состав:
+//! [`Style::cast`] выбирает из неё каст сида, оставляя фундамент,
+//! подписи и слоты перехода. Форма тоже не одна на стиль: несколько
+//! написанных вариантов выбираются сидом ([`Style::arrangement_for_seed`]),
+//! и каждый проходит тему → разгон → удар → передышку.
 //!
-//! Худые миксы: дефолтный ансамбль — 5–9 слотов, каждый с уникальной
-//! работой. Дубль текстуры/второго лида «на всякий случай» — в ручные
-//! слоты, а не в дефолт: плотность доказывается замером, не ощущением.
+//! Правила задают русло, сиды — воду: каст, форма, мотив, грув и
+//! тембровые выборы меняются от сида к сиду. Короткие слышимые повторы
+//! запрещены контрактами, куски живут 30–60 секунд.
+//!
+//! Худые миксы: палитра — 5–9 слотов, каждый с уникальной работой.
+//! Дубль текстуры/второго лида «на всякий случай» — в ручные слоты,
+//! а не в фундамент каста: плотность доказывается замером, не ощущением.
 
+pub mod cast;
 pub mod club;
 pub mod contract;
 pub mod deephouse;
@@ -303,12 +307,17 @@ pub trait Style: Send + Sync {
     fn steps_per_measure(&self) -> usize;
     fn swing_ratio(&self) -> f32;
     fn scale(&self) -> &'static [u8];
-    /// Партитура круга: активным — бесконечный разгон-кульминация,
-    /// спокойным — дыхание темы с редкими подъемами. Дефолт — активная.
-    /// Свой скелет у каждого стиля: разные длины секций — стиль слышно
-    /// до того, как зазвучат инструменты.
+    /// Базовая партитура стиля: его лицо в форме. Сид выбирает вариант
+    /// из [`Style::arrangement_for_seed`], поэтому куски одного стиля
+    /// отличаются драматургией, а не только темой.
     fn arrangement(&self) -> crate::arranger::Score {
         crate::arranger::ENERGETIC_SCORE
+    }
+    /// Форма куска для сида: 2–3 написанных варианта на стиль. Все
+    /// варианты проходят тему → разгон → удар → передышку; порядок и
+    /// длины разные. Дефолт — базовая партитура.
+    fn arrangement_for_seed(&self, _seed: u64) -> crate::arranger::Score {
+        self.arrangement()
     }
     /// Аранж стиля: кто играет в теме, разгоне, дропе и передышке.
     /// Порядок — [`crate::piece::LAYER_ORDER`]. Это написанный аранж:
@@ -333,11 +342,39 @@ pub trait Style: Send + Sync {
     fn riff_kind(&self) -> riff::RiffKind {
         riff::RiffKind::None
     }
-    /// Вайтлист инструментов стиля: кто включен при выборе стиля,
-    /// остальные глушатся в ноль. Громкости — канонические, у слотов
-    /// ([`Slot::base_volume`]); пресет не хардкодит цифры.
-    /// Состав меняет слушатель в миксе; сид на него не влияет.
+    /// Палитра инструментов стиля: краски, из которых собирается
+    /// состав. Не все слоты палитры звучат одновременно — конкретный
+    /// набор выбирает сид ([`Style::cast`]). Громкости канонические, у
+    /// слотов ([`Slot::base_volume`]); пресет не хардкодит цифры.
     fn ensemble(&self) -> &'static [Slot];
+    /// Инструменты-подписи: без них стиль теряет лицо (риффовая гитара
+    /// рока, Rhodes лофай). Каст включает их всегда. Дефолт — нет
+    /// обязательных сверх фундамента.
+    fn signature_slots(&self) -> &'static [Slot] {
+        &[]
+    }
+    /// Состав на сид: подмножество палитры плюс подписные инструменты
+    /// и слоты перехода. Детерминирован; ручная правка микса в микшере
+    /// по-прежнему главнее.
+    fn cast(&self, seed: u64) -> Vec<Slot> {
+        let required: Vec<Slot> = self
+            .transition_gesture()
+            .map(|spec| {
+                spec.fill_slots
+                    .iter()
+                    .chain(spec.tail_slots.iter())
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        cast::from_palette(
+            self.ensemble(),
+            seed,
+            self.name(),
+            self.signature_slots(),
+            &required,
+        )
+    }
     /// Направляющие по слотам в порядке [`Slot::ALL`].
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT];
     /// Комната реверба: доля мокрого (0 = сухо, как хит клуба на массиве).
@@ -1570,6 +1607,12 @@ mod tests {
     use super::*;
     use crate::arranger::SongSection;
 
+    /// Полная палитра стиля: тесты исполнения проверяют направляющие
+    /// на всех красках, а не на конкретном касте сида.
+    fn palette_active(style: &dyn Style) -> Vec<usize> {
+        style.ensemble().iter().map(|s| s.id()).collect()
+    }
+
     fn test_song(progress: f32) -> SongContext {
         SongContext {
             section: SongSection::MainMotif,
@@ -1647,11 +1690,7 @@ mod tests {
         // одна ступень.
         use crate::instruments::Slot;
         let style = make_style("deep").expect("deep house");
-        let mut mixer = crate::mixer::MixerState::new();
-        crate::playback::apply_style_mix(&*style, &mut mixer);
-        let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-        let n = mixer.active_ids(&mut buf);
-        let active = buf[..n].to_vec();
+        let active = palette_active(&*style);
         let mut rng = rand::SeedableRng::seed_from_u64(424242);
         let mut arranger = crate::arranger::Arranger::new(424242);
         let song = arranger.advance_measure();
@@ -1765,6 +1804,123 @@ mod tests {
     }
 
     #[test]
+    fn seed_picks_a_cast_from_the_palette() {
+        // Каст — подмножество палитры, но фундамент, подписи и слоты
+        // перехода остаются. Разные сиды дают разные составы.
+        use crate::instruments::Slot;
+        use std::collections::HashSet;
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let palette = style.ensemble();
+            let mut casts = HashSet::new();
+            for seed in 0..24u64 {
+                let cast = style.cast(seed);
+                for slot in &cast {
+                    assert!(
+                        palette.contains(slot),
+                        "{name}/{seed}: {slot:?} вне палитры"
+                    );
+                }
+                for slot in [Slot::Bass, Slot::Kick, Slot::Snare] {
+                    assert!(cast.contains(&slot), "{name}/{seed}: {slot:?} потерян");
+                }
+                for slot in style.signature_slots() {
+                    assert!(
+                        cast.contains(slot),
+                        "{name}/{seed}: подпись {slot:?} потеряна"
+                    );
+                }
+                if let Some(spec) = style.transition_gesture() {
+                    for slot in spec.fill_slots.iter().chain(spec.tail_slots.iter()) {
+                        assert!(
+                            cast.contains(slot),
+                            "{name}/{seed}: слот перехода {slot:?} потерян"
+                        );
+                    }
+                }
+                casts.insert(cast);
+            }
+            assert!(
+                casts.len() >= 2,
+                "{name}: каст одинаков на все сиды ({casts:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn seed_picks_a_form_not_just_a_motif() {
+        // Форма — тоже решение сида: у стиля несколько написанных
+        // вариантов, иначе куски отличались бы только темой.
+        use std::collections::HashSet;
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let shapes: HashSet<Vec<(SongSection, usize)>> = (0..24u64)
+                .map(|seed| style.arrangement_for_seed(seed).cycle.to_vec())
+                .collect();
+            assert!(
+                shapes.len() >= 2,
+                "{name}: форма одна на все сиды ({shapes:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn every_seed_gets_the_full_arc_in_the_window() {
+        // Куски любого стиля и сида доходят до удара и возвращаются к
+        // теме, укладываясь в 30–60 с; ни одна секция не обрезана.
+        use crate::arranger::SongSection;
+        for name in style_names() {
+            let style = make_style(name).expect("known style");
+            let bpm = style.bpm();
+            for seed in [1u64, 2, 3, 42, 777] {
+                let score = style.arrangement_for_seed(seed);
+                for index in 0..3u64 {
+                    let plan = crate::piece::plan_piece(
+                        seed,
+                        bpm,
+                        score.cycle,
+                        index,
+                        0,
+                        style.transition(),
+                        style.arrangement_layers(),
+                    );
+                    let secs = plan.bars() as f32 * 4.0 * 60.0 / bpm;
+                    assert!(
+                        (30.0..=60.0).contains(&secs),
+                        "{name}/{seed} кусок {index}: {secs:.1} с ({} тактов)",
+                        plan.bars()
+                    );
+                    let at = |want| plan.body.iter().position(|s| s.section == want);
+                    let main = at(SongSection::MainMotif)
+                        .unwrap_or_else(|| panic!("{name}/{seed}: нет темы"));
+                    let build = at(SongSection::BuildUp)
+                        .unwrap_or_else(|| panic!("{name}/{seed}: нет разгона"));
+                    let drop =
+                        at(SongSection::Drop).unwrap_or_else(|| panic!("{name}/{seed}: нет удара"));
+                    let post = at(SongSection::PostChorus)
+                        .unwrap_or_else(|| panic!("{name}/{seed}: нет передышки"));
+                    assert!(
+                        main < build && build < drop && drop < post,
+                        "{name}/{seed}: арка сломана: {:?}",
+                        plan.body
+                    );
+                    for section in &plan.body {
+                        assert!(
+                            section.bars >= 2 && section.bars % 2 == 0,
+                            "{name}/{seed}: секция не целая фраза: {section:?}"
+                        );
+                    }
+                    assert_eq!(
+                        plan.joint.section,
+                        SongSection::PostChorus,
+                        "{name}/{seed}: шов должен быть финалом"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn style_transitions_sound_at_the_seam() {
         // Переход стиля — не флаг в направляющей, а жест на шве:
         // последний такт разгона получает ноты перехода. У каждого
@@ -1776,11 +1932,7 @@ mod tests {
                 .transition_gesture()
                 .unwrap_or_else(|| panic!("{name}: нет перехода"));
             let spm = style.steps_per_measure();
-            let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer);
-            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-            let n = mixer.active_ids(&mut buf);
-            let active = buf[..n].to_vec();
+            let active = palette_active(&*style);
             let mut rng = rand::SeedableRng::seed_from_u64(424242);
             let mut arranger = crate::arranger::Arranger::new(424242);
             let mut song = arranger.advance_measure();
@@ -2935,11 +3087,7 @@ mod tests {
         use crate::instruments::Slot;
         let style = make_style("lofi").expect("known style");
         for seed in [11u64, 12, 42, 777, 424242] {
-            let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer);
-            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-            let n = mixer.active_ids(&mut buf);
-            let active = buf[..n].to_vec();
+            let active = palette_active(&*style);
             let mut rng = rand::SeedableRng::seed_from_u64(seed);
             let mut arranger = crate::arranger::Arranger::new(seed);
             let mut song = arranger.advance_measure();
@@ -3090,11 +3238,9 @@ mod tests {
         use crate::instruments::Slot;
         let style = make_style("rock").expect("rock");
         let seed = 5u64;
-        let mut mixer = crate::mixer::MixerState::new();
-        crate::playback::apply_style_mix(&*style, &mut mixer);
-        let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-        let n = mixer.active_ids(&mut buf);
-        let active = buf[..n].to_vec();
+        // Играет дефолтный каст сида, а не вся палитра: проверяем то,
+        // что услышит слушатель без ручной правки микса.
+        let active: Vec<usize> = style.cast(seed).iter().map(|s| s.id()).collect();
         let mut rng = rand::SeedableRng::seed_from_u64(seed);
         let mut arranger = crate::arranger::Arranger::new(seed);
         let mut song = arranger.advance_measure();
@@ -3135,12 +3281,14 @@ mod tests {
         // Потолки — по самому плотному намеренному полюсу + запас:
         // club drive-восьмые дают до 9 ударов, это лицо, а не баг.
         // Club держит тему плаком (сквозная мелодия битмейкера).
+        // Пол баса 44, а не 48: кусок стал длиннее, и окно в 24 такта
+        // у части сидов заходит в передышку, где бас играет реже.
         type Floors<'a> = &'a [(&'a str, usize)];
         let contract: &[(&str, usize, Floors, usize)] = &[
             (
                 "club",
                 10,
-                &[("kick", 48), ("snare", 24), ("hat", 48), ("bass", 48)],
+                &[("kick", 48), ("snare", 24), ("hat", 48), ("bass", 44)],
                 24,
             ),
             (
@@ -3173,11 +3321,9 @@ mod tests {
         for (name, kick_cap, role_floors, motif_floor) in contract {
             let style = make_style(name).expect("style");
             for seed in [11u64, 42, 777] {
-                let mut mixer = crate::mixer::MixerState::new();
-                crate::playback::apply_style_mix(&*style, &mut mixer);
-                let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-                let n = mixer.active_ids(&mut buf);
-                let active = buf[..n].to_vec();
+                // Контракт проверяем на дефолтном касте сида: именно его
+                // слышит слушатель, а не всю палитру стиля.
+                let active: Vec<usize> = style.cast(seed).iter().map(|s| s.id()).collect();
                 let mut rng = rand::SeedableRng::seed_from_u64(seed);
                 let mut arranger = crate::arranger::Arranger::new(seed);
                 let mut song = arranger.advance_measure();
@@ -3422,11 +3568,7 @@ mod tests {
         use crate::instruments::{InstrumentRole, Slot};
         for name in ["deep", "club"] {
             let style = make_style(name).expect("known style");
-            let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer);
-            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-            let n = mixer.active_ids(&mut buf);
-            let active = buf[..n].to_vec();
+            let active = palette_active(&*style);
             let mut rng = rand::SeedableRng::seed_from_u64(7777);
             let mut arranger = crate::arranger::Arranger::new(7777);
             let mut song = arranger.advance_measure();
@@ -3469,11 +3611,7 @@ mod tests {
         let ceilings = [("deep", 76u8), ("club", 78u8)];
         for (name, ceiling) in ceilings {
             let style = make_style(name).expect("known style");
-            let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer);
-            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-            let n = mixer.active_ids(&mut buf);
-            let active = buf[..n].to_vec();
+            let active = palette_active(&*style);
             let mut rng = rand::SeedableRng::seed_from_u64(999);
             let mut arranger = crate::arranger::Arranger::new(999);
             let mut song = arranger.advance_measure();
@@ -3519,11 +3657,7 @@ mod tests {
         type RhythmSig = HashSet<(usize, usize)>;
         fn signature(style_name: &str, seed: u64) -> (PitchSig, RhythmSig) {
             let style = make_style(style_name).expect("style");
-            let mut mixer = crate::mixer::MixerState::new();
-            crate::playback::apply_style_mix(&*style, &mut mixer);
-            let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-            let n = mixer.active_ids(&mut buf);
-            let active = buf[..n].to_vec();
+            let active: Vec<usize> = style.cast(seed).iter().map(|s| s.id()).collect();
             let mut rng = rand::SeedableRng::seed_from_u64(seed);
             let mut arranger = crate::arranger::Arranger::new(seed);
             let mut song = arranger.advance_measure();
@@ -3748,11 +3882,7 @@ mod tests {
             let style = make_style(name).expect("style");
             let mut pats = std::collections::HashSet::new();
             for seed in 0..12u64 {
-                let mut mixer = crate::mixer::MixerState::new();
-                crate::playback::apply_style_mix(&*style, &mut mixer);
-                let mut buf = [0usize; crate::core::MAX_ACTIVE_TRACKS];
-                let n = mixer.active_ids(&mut buf);
-                let active = buf[..n].to_vec();
+                let active: Vec<usize> = style.cast(seed).iter().map(|s| s.id()).collect();
                 let mut rng = rand::SeedableRng::seed_from_u64(seed);
                 let mut arranger = crate::arranger::Arranger::new(seed);
                 let mut song = arranger.advance_measure();

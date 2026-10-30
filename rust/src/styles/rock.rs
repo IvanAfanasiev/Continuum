@@ -129,6 +129,31 @@ impl Style for RockStyle {
         crate::arranger::ROCK_SCORE
     }
 
+    fn arrangement_for_seed(&self, seed: u64) -> crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const LONG_DROP: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 10),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 12),
+                (SongSection::PostChorus, 6),
+            ],
+        };
+        const WIDE: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 8),
+                (SongSection::BuildUp, 6),
+                (SongSection::Drop, 10),
+                (SongSection::PostChorus, 6),
+            ],
+        };
+        crate::arranger::pick_score(
+            seed,
+            0x0B0C_F0A7,
+            &[crate::arranger::ROCK_SCORE, LONG_DROP, WIDE],
+        )
+    }
+
     /// Аранж рока: рифф (тема) не уходит даже в передышку — это держащая
     /// линия группы. Соло-гитара и клавиши приходят к дропу.
     fn arrangement_layers(&self) -> crate::piece::Layers {
@@ -192,11 +217,9 @@ impl Style for RockStyle {
 
     fn ensemble(&self) -> &'static [Slot] {
         // Группа, а не оркестр: бочка, снейр, хэт, бас, гитара риффом
-        // и соло-гитара перебором. Без тарелок: металлический звон
-        // не к месту даже на стыках. Без гитарных переборов чужих
-        // голосов, клавиш и текстур. Фазз — вручную (стена по желанию).
-        // Без гостей: состав фиксирован (как живая группа), сиды
-        // различаются риффом, грувом и темой, а не набором.
+        // и соло-гитара перебором. Клавиши — редкая краска палитры:
+        // сид решает, добавить ли орган к дропу. Без тарелок и текстур:
+        // металлический звон не к месту даже на стыках. Фазз — вручную.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -204,7 +227,13 @@ impl Style for RockStyle {
             Slot::Hat,
             Slot::Guitar,
             Slot::GuitarLead,
+            Slot::Keys,
         ]
+    }
+
+    fn signature_slots(&self) -> &'static [Slot] {
+        // Риффовая гитара — лицо рока; соло и орган — краски сида.
+        &[Slot::Guitar]
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
@@ -384,12 +413,12 @@ mod tests {
     use crate::instruments::Slot;
 
     #[test]
-    fn rock_is_a_fixed_band() {
-        // Состав рока — группа, а не оркестр: ударные, бас, рифф
-        // и соло-гитара. Никаких пианино, хоров, синтов и гостей
-        // по сидам: сиды различаются риффом, а не набором.
+    fn rock_keeps_its_core_band() {
+        // Ядро рока — ударные, бас и риффовая гитара — не зависит от сида.
+        // Соло-гитара, клавиши и хэт-краски приходят по касту: сид решает,
+        // нужен ли второй голос, но группу не раздувает до оркестра.
         let style = RockStyle::new();
-        let ensemble = style.ensemble();
+        let palette = style.ensemble();
         for slot in [
             Slot::Bass,
             Slot::Kick,
@@ -397,10 +426,21 @@ mod tests {
             Slot::Hat,
             Slot::Guitar,
             Slot::GuitarLead,
+            Slot::Keys,
         ] {
-            assert!(ensemble.contains(&slot), "{slot:?} missing from band");
+            assert!(palette.contains(&slot), "{slot:?} missing from palette");
         }
-        assert_eq!(ensemble.len(), 6, "band bloated: {ensemble:?}");
+        assert_eq!(palette.len(), 7, "palette bloated: {palette:?}");
+        for seed in [1u64, 2, 3, 42, 777] {
+            let cast = style.cast(seed);
+            for slot in [Slot::Bass, Slot::Kick, Slot::Snare, Slot::Hat, Slot::Guitar] {
+                assert!(cast.contains(&slot), "seed {seed}: {slot:?} lost");
+            }
+            assert!(
+                cast.len() <= palette.len(),
+                "seed {seed}: cast outgrew palette"
+            );
+        }
         // Гитара ведёт без отдыха и в полную (рельеф — у стены фазза).
         let guides = style.slot_guides();
         let gi = Slot::ALL.iter().position(|s| *s == Slot::Guitar).unwrap();

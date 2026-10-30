@@ -179,12 +179,67 @@ impl PiecePlan {
 }
 
 /// Целевая длительность куска, с. Куски короче 30 с читаются как
-/// отдельные номера, длиннее 60 — как один длинный трек.
-pub const TARGET_PIECE_SECS: f32 = 42.0;
+/// отдельные номера, длиннее 60 — как один длинный трек. Цель — не
+/// догма: сид сдвигает её в окне, а форма подстраивается пропорционально.
+pub const TARGET_PIECE_SECS: f32 = 54.0;
 /// Границы цели: короче — кусок не успевает стать формой, длиннее —
 /// слушатель успевает забыть начало.
 const MIN_PIECE_SECS: f32 = 30.0;
 const MAX_PIECE_SECS: f32 = 60.0;
+
+/// Длины секций под целевой размер куска. Порядок и все секции
+/// сохраняются: форма не обрезается, а сжимается или растягивается
+/// пропорционально. Шаг — два такта (целая фраза), минимум — два такта.
+fn fit_section_bars(lengths: &[usize], target: usize, salt: u64) -> Vec<usize> {
+    if lengths.is_empty() {
+        return Vec::new();
+    }
+    let n = lengths.len();
+    let natural: usize = lengths.iter().sum();
+    let target = target.max(n * 2);
+    // Вниз до чётного: секция состоит из целых фраз.
+    let mut out: Vec<usize> = lengths
+        .iter()
+        .map(|bars| {
+            let scaled = if natural == 0 {
+                2
+            } else {
+                (*bars as f32 * target as f32 / natural as f32).round() as usize
+            };
+            scaled.max(2) & !1
+        })
+        .collect();
+    let mut total: usize = out.iter().sum();
+    let mut cursor = (splitmix64(salt ^ 0xF17B_A25D) % n as u64) as usize;
+    // Добираем по два такта по кругу: прибавка расходится по форме,
+    // а не оседает в последней секции.
+    while total < target {
+        for i in 0..n {
+            let idx = (cursor + i) % n;
+            out[idx] += 2;
+            total += 2;
+            if total >= target {
+                break;
+            }
+        }
+        cursor = (cursor + 1) % n;
+    }
+    // Снимаем с самых длинных секций, сохраняя минимум в два такта.
+    while total > target {
+        let mut longest: Option<usize> = None;
+        for i in 0..n {
+            let idx = (cursor + i) % n;
+            if out[idx] > 2 && longest.is_none_or(|b| out[idx] > out[b]) {
+                longest = Some(idx);
+            }
+        }
+        let Some(idx) = longest else { break };
+        out[idx] -= 2;
+        total -= 2;
+        cursor = (cursor + 1) % n;
+    }
+    out
+}
 
 /// Скелет стиля → план куска.
 ///
@@ -195,6 +250,10 @@ const MAX_PIECE_SECS: f32 = 60.0;
 /// этого места (перепланирование остатка при живой смене сида/стиля —
 /// вступает с следующего такта).
 /// `transition` — как стиль склеивает куски.
+///
+/// Форма пишется целиком: каждый проход скелета сохраняет все секции,
+/// включая передышку. В 30–60 с кусок укладывается сжатием/растяжением
+/// длин, а не отрезанием хвоста.
 pub fn plan_piece(
     seed: u64,
     bpm: f32,
@@ -207,57 +266,75 @@ pub fn plan_piece(
     let salt = splitmix64(seed ^ 0x9E37_79B9 ^ index.wrapping_mul(0x2545_F491));
     let bar_secs = if bpm > 1.0 { 4.0 * 60.0 / bpm } else { 2.0 };
     let joint_bars = transition.joint_bars();
-    // Границы считаем для тела: шов — часть куска.
-    let target_bars =
-        (((TARGET_PIECE_SECS / bar_secs).round() as usize).clamp(8, 48)).saturating_sub(joint_bars);
-    let min_bars =
-        (((MIN_PIECE_SECS / bar_secs).round() as usize).clamp(4, 40)).saturating_sub(joint_bars);
-    let max_bars =
-        (((MAX_PIECE_SECS / bar_secs).round() as usize).clamp(8, 64)).saturating_sub(joint_bars);
+    let bars_for = |secs: f32| ((secs / bar_secs).round() as usize).max(2);
+    // Границы считаем «внутрь»: нижняя — вверх, верхняя — вниз, иначе
+    // округление само выносит кусок за 30–60 с.
+    let min_total = ((MIN_PIECE_SECS / bar_secs).ceil() as usize)
+        .max(joint_bars + 8)
+        .max(2);
+    let max_total = ((MAX_PIECE_SECS / bar_secs).floor() as usize).max(min_total);
+    // Длина куска — тоже краска сида: ±4 такта вокруг цели. Границы
+    // 30–60 с остаются жёсткими: это не вкус, а формат.
+    let jitter = ((splitmix64(salt ^ 0xD0CE_5EED) % 5) as i64 - 2) * 2;
+    let target_total = (bars_for(TARGET_PIECE_SECS) as i64 + jitter)
+        .clamp(min_total as i64, max_total as i64) as usize;
+    let max_body = max_total.saturating_sub(joint_bars).max(2);
+    let min_body = min_total.saturating_sub(joint_bars).max(2);
 
-    let mut body: Vec<SectionPlan> = Vec::new();
-    let mut total = 0usize;
-    // Скелет может быть короче цели (или длиннее) — идём по нему циклом
-    // и набираем нужное число тактов. Порядок секций при этом сохраняется:
-    // тема → разгон → удар → передышка, а не случайная сборка.
-    let mut round = 0usize;
-    while total < min_bars && !skeleton.is_empty() {
-        for (section, bars) in skeleton {
-            let vary = *section != SongSection::Drop;
-            // Длина секции в куске: база плюс 0–2 такта от сида (круг
-            // варьировался так же — здесь это стало частью плана).
-            let extra = if vary {
-                (splitmix64(salt ^ (body.len() as u64).wrapping_mul(0x9E37_79B9)) % 2) as usize * 2
-            } else {
-                0
-            };
-            let mut len = bars + extra;
-            // Секция не влезает в кусок — подрезаем её (ровно на пары
-            // тактов: фразы остаются целыми) или пропускаем.
-            if total + len > max_bars {
-                let room = max_bars.saturating_sub(total);
-                len = room - room % 2;
-                if len < 2 {
-                    break;
-                }
-            }
-            body.push(SectionPlan {
-                section: *section,
-                bars: len,
-                vary: false,
-                energy: None,
-                layers: layers[layer_index(*section)],
-            });
-            total += len;
-            if total >= target_bars {
-                break;
-            }
-        }
-        round += 1;
-        if round > 8 {
+    // Пустой скелет — не повод паниковать: минимальная тема.
+    let fallback = [(SongSection::MainMotif, 8usize)];
+    let skeleton = if skeleton.is_empty() {
+        &fallback[..]
+    } else {
+        skeleton
+    };
+
+    // 1. Полный проход: все секции скелета, длины дышат от сида.
+    // Короткий скелет повторяется только если без повтора кусок не
+    // дотягивает до нижней границы; длинный — сжимается целиком.
+    let base_total: usize = skeleton.iter().map(|(_, bars)| (*bars).max(2)).sum();
+    let mut passes = 1usize;
+    while base_total * passes < min_body {
+        let next = passes + 1;
+        // Второй проход должен оставить каждой секции минимум 2 такта
+        // и не выйти за верхнюю границу куска.
+        if next > 2 || next * skeleton.len() * 2 > max_body {
             break;
         }
+        passes = next;
     }
+    let mut agenda: Vec<(SongSection, usize)> = Vec::with_capacity(skeleton.len() * passes);
+    for pass in 0..passes {
+        for (pos, (section, bars)) in skeleton.iter().enumerate() {
+            let visit = (pass * skeleton.len() + pos) as u64;
+            // Дроп — якорь формы: его длина от сида не скачет. Остальные
+            // секции получают +0/+2 такта: форма дышит, порядок цел.
+            let extra = if *section == SongSection::Drop {
+                0
+            } else {
+                (splitmix64(salt ^ visit.wrapping_mul(0x9E37_79B9)) % 2) as usize * 2
+            };
+            agenda.push((*section, (*bars).max(2) + extra));
+        }
+    }
+
+    // 2. Подгонка под окно 30–60 с: пропорционально, без обрезки.
+    let target_body = target_total
+        .saturating_sub(joint_bars)
+        .clamp(min_body, max_body);
+    let lengths: Vec<usize> = agenda.iter().map(|(_, bars)| *bars).collect();
+    let fitted = fit_section_bars(&lengths, target_body, salt);
+    let mut body: Vec<SectionPlan> = agenda
+        .iter()
+        .zip(fitted)
+        .map(|((section, _), bars)| SectionPlan {
+            section: *section,
+            bars,
+            vary: false,
+            energy: None,
+            layers: layers[layer_index(*section)],
+        })
+        .collect();
     if body.is_empty() {
         body.push(SectionPlan::new(SongSection::MainMotif, 8));
     }
@@ -318,18 +395,56 @@ mod tests {
 
     #[test]
     fn piece_is_30_to_60_seconds() {
+        // Все стили, все сиды, несколько кусков подряд: окно 30–60 с
+        // держится не в среднем, а в каждом куске.
         for (name, bpm, skeleton) in [
             ("club", 126.0, ENERGETIC_SCORE.cycle),
-            ("lofi", 82.0, CALM_SCORE.cycle),
+            ("lofi", 78.0, CALM_SCORE.cycle),
         ] {
-            for index in 0..8u64 {
-                let plan = plan_piece(42, bpm, skeleton, index, 0, rolling(), default_layers());
-                let secs = plan.bars() as f32 * 4.0 * 60.0 / bpm;
-                assert!(
-                    (30.0..=60.0).contains(&secs),
-                    "{name} кусок {index}: {secs:.1} с ({} тактов)",
-                    plan.bars()
-                );
+            for seed in [1u64, 2, 3, 42, 777] {
+                for index in 0..4u64 {
+                    let plan =
+                        plan_piece(seed, bpm, skeleton, index, 0, rolling(), default_layers());
+                    let secs = plan.bars() as f32 * 4.0 * 60.0 / bpm;
+                    assert!(
+                        (30.0..=60.0).contains(&secs),
+                        "{name} сид {seed} кусок {index}: {secs:.1} с ({} тактов)",
+                        plan.bars()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn piece_keeps_the_whole_arc() {
+        // Сжатие не режет хвост формы: тема, разгон, удар и передышка
+        // остаются в каждом куске, причём в исходном порядке.
+        for (name, bpm, skeleton) in [
+            ("club", 126.0, ENERGETIC_SCORE.cycle),
+            ("lofi", 78.0, CALM_SCORE.cycle),
+        ] {
+            for seed in [1u64, 2, 3, 42, 777] {
+                let plan = plan_piece(seed, bpm, skeleton, 0, 0, rolling(), default_layers());
+                let sections: Vec<SongSection> = plan.body.iter().map(|s| s.section).collect();
+                for want in [
+                    SongSection::MainMotif,
+                    SongSection::BuildUp,
+                    SongSection::Drop,
+                    SongSection::PostChorus,
+                ] {
+                    assert!(
+                        sections.contains(&want),
+                        "{name} сид {seed}: секция {want:?} потеряна ({sections:?})"
+                    );
+                }
+                // Каждая секция — целая фраза, не огрызок.
+                for s in &plan.body {
+                    assert!(
+                        s.bars >= 2 && s.bars % 2 == 0,
+                        "{name} сид {seed}: {s:?} не целая фраза"
+                    );
+                }
             }
         }
     }
@@ -502,13 +617,19 @@ mod tests {
 
     #[test]
     fn calm_style_piece_breathes() {
-        // Спокойный скелет: тема dominates, подъем и передышка — гости.
-        let plan = plan_piece(7, 82.0, CALM_SCORE.cycle, 0, 0, rolling(), default_layers());
+        // Спокойная форма: тема возвращается после удара, а удар у lofi —
+        // смена тембра, не взрыв. Форма не обрезается до одной темы.
+        let plan = plan_piece(7, 78.0, CALM_SCORE.cycle, 0, 0, rolling(), default_layers());
         let mains = plan
             .body
             .iter()
             .filter(|s| s.section == SongSection::MainMotif)
             .count();
-        assert!(mains >= 2, "кусок без темы: {:?}", plan.body);
+        assert!(mains >= 2, "кусок без возврата темы: {:?}", plan.body);
+        assert!(
+            plan.body.iter().any(|s| s.section == SongSection::Drop),
+            "у lofi пропал удар (смена тембра): {:?}",
+            plan.body
+        );
     }
 }

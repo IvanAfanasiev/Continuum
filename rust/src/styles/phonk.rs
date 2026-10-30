@@ -95,6 +95,31 @@ impl Style for PhonkStyle {
         crate::arranger::DRIFT_SCORE
     }
 
+    fn arrangement_for_seed(&self, seed: u64) -> crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const SHORT_DRIFT: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 8),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 10),
+                (SongSection::PostChorus, 10),
+            ],
+        };
+        const LONG_DRIFT: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 14),
+                (SongSection::BuildUp, 6),
+                (SongSection::Drop, 8),
+                (SongSection::PostChorus, 6),
+            ],
+        };
+        crate::arranger::pick_score(
+            seed,
+            0xF0A0_D21F,
+            &[crate::arranger::DRIFT_SCORE, SHORT_DRIFT, LONG_DRIFT],
+        )
+    }
+
     /// Аранж фонка: дрейф — минимум голосов, тема почти голая (808 и
     /// бочка). Клавиши приходят в разгоне, вокал — в дропе.
     fn arrangement_layers(&self) -> crate::piece::Layers {
@@ -153,11 +178,15 @@ impl Style for PhonkStyle {
             Slot::Keys,
             Slot::Kick808,
             Slot::Shaker,
+            Slot::Pluck,
         ]
     }
 
-    // Гостей нет: ядро худое и фиксированное, сиды различаются
-    // грувом и темой. Вокальная группа выведена из набора.
+    fn signature_slots(&self) -> &'static [Slot] {
+        // Тёмные клавиши и 808 держат дрейф; плак — редкий колокол,
+        // приходит только у части сидов. Вокальная группа выведена.
+        &[Slot::Keys, Slot::Kick808]
+    }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
         let bass = RoleGuide {

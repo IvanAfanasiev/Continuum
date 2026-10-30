@@ -118,6 +118,33 @@ impl Style for LofiStyle {
         crate::arranger::CALM_SCORE
     }
 
+    fn arrangement_for_seed(&self, seed: u64) -> crate::arranger::Score {
+        use crate::arranger::{Score, SongSection};
+        const BREATH: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 10),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 6),
+                (SongSection::PostChorus, 4),
+                (SongSection::MainMotif, 4),
+            ],
+        };
+        const AFTERGLOW: Score = Score {
+            cycle: &[
+                (SongSection::MainMotif, 6),
+                (SongSection::BuildUp, 4),
+                (SongSection::Drop, 8),
+                (SongSection::PostChorus, 4),
+                (SongSection::MainMotif, 6),
+            ],
+        };
+        crate::arranger::pick_score(
+            seed,
+            0x10F1_CA1F,
+            &[crate::arranger::CALM_SCORE, BREATH, AFTERGLOW],
+        )
+    }
+
     /// Аранж лофай: пэд и Rhodes держат тему (тема не должна пустовать),
     /// винил и дождь — ровный фон, вокал-чопы — только как гость в
     /// передышке. Дроп у лофай — это не удар, а смена тембра.
@@ -197,6 +224,11 @@ impl Style for LofiStyle {
             Slot::Vocal,
             Slot::Guitar,
         ]
+    }
+
+    fn signature_slots(&self) -> &'static [Slot] {
+        // Rhodes и перебор гитары — лицо lofi; пэд и винил — краски.
+        &[Slot::Keys, Slot::Guitar]
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
