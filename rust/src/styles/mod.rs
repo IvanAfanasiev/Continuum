@@ -288,6 +288,74 @@ impl RoleGuide {
     }
 }
 
+/// Гармонический почерк стиля на текущий сид: прогрессия, темп
+/// гармонии, сдвиг тональности и плотность. Стиль задает пул, сид
+/// выбирает вариант внутри пула — сиды остаются разными, но каждый
+/// стиль живет в своем гармоническом и тональном мире.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Harmony {
+    /// Лад стиля: гармония и переходы не могут разойтись с ним.
+    pub scale: &'static [u8],
+    /// Аккордовая последовательность (ступени лада).
+    pub prog: [u8; 4],
+    /// Тактов на аккорд: 2 — движение, 4 — дыхание, 8 — фундамент.
+    pub bar_len: usize,
+    /// Сдвиг всей тональности стиля, полутоны.
+    pub key_shift: i8,
+    /// Множитель плотности стиля (сид-плотность остается в SongContext).
+    pub density: f32,
+}
+
+impl Harmony {
+    /// Стиль + сид → конкретная гармония. Пул стиля не пуст по контракту;
+    /// на всякий случай пустой пул откатывается к общему.
+    fn for_style(style: &dyn Style, seed_hash: u64) -> Self {
+        let pool = style.progressions();
+        let (prog, bar_len) = if pool.is_empty() {
+            let len = prog_bar_len(seed_hash);
+            (
+                crate::arranger::PROGS[(seed_hash % crate::arranger::PROGS.len() as u64) as usize],
+                len,
+            )
+        } else {
+            let rhythm = style.harmonic_rhythm();
+            let len = if rhythm.is_empty() {
+                prog_bar_len(seed_hash)
+            } else {
+                // Соль отдельная от выбора прогрессии: темп гармонии и
+                // сам ход не должны ходить парой (иначе 4 прогрессии ×
+                // 2 темпа дают всего 8 комбинаций).
+                let h = crate::arranger::splitmix64(seed_hash ^ 0x4841_524D);
+                rhythm[(h % rhythm.len() as u64) as usize]
+            };
+            let h = crate::arranger::splitmix64(seed_hash ^ 0x5052_4F47);
+            (pool[(h % pool.len() as u64) as usize], len.max(1))
+        };
+        Self {
+            scale: style.scale(),
+            prog,
+            bar_len,
+            key_shift: style.key_shift(),
+            density: style.density().clamp(0.5, 1.5),
+        }
+    }
+
+    /// Нейтральная гармония для тестов направляющей: ровно то, что
+    /// лежит в `SongContext`, без стилевых надстроек. Лад сюда не
+    /// входит: `play_guide` получает его отдельным аргументом, поле
+    /// `scale` читает только переход (там тест задает его явно).
+    #[cfg(test)]
+    fn neutral(song: &SongContext) -> Self {
+        Self {
+            scale: &[],
+            prog: song.prog,
+            bar_len: prog_bar_len(song.seed_hash),
+            key_shift: 0,
+            density: 1.0,
+        }
+    }
+}
+
 pub trait Style: Send + Sync {
     fn name(&self) -> &str;
     /// Полка каталога для сортировки фронта: Club (хаус, техно, транс,
@@ -307,6 +375,28 @@ pub trait Style: Send + Sync {
     fn steps_per_measure(&self) -> usize;
     fn swing_ratio(&self) -> f32;
     fn scale(&self) -> &'static [u8];
+    /// Гармонические прогрессии стиля: сдвиги ступеней лада. Сид
+    /// выбирает одну из пула, поэтому аккомпанемент не повторяется
+    /// от сида к сиду, но движется в характере стиля (клуб — i-VI-III-VII,
+    /// лофай — мягкие ii/IV-ходы, рок — квинтовый круг и т.д.).
+    fn progressions(&self) -> &'static [[u8; 4]] {
+        &crate::arranger::PROGS
+    }
+    /// Гармонический ритм стиля: сколько тактов держится аккорд.
+    /// Сид выбирает вариант из пула. 2 — живое движение, 8 — дрон.
+    fn harmonic_rhythm(&self) -> &'static [usize] {
+        &[2, 4, 8]
+    }
+    /// Сдвиг тональности стиля в полутонах: один и тот же сид в
+    /// разных стилях звучит в разных тональностях (C, F, D, E...).
+    fn key_shift(&self) -> i8 {
+        0
+    }
+    /// Плотность стиля: множитель к сид-плотности. Рок гуще, лофай
+    /// разреженнее — при том же сиде и той же форме.
+    fn density(&self) -> f32 {
+        1.0
+    }
     /// Базовая партитура стиля: его лицо в форме. Сид выбирает вариант
     /// из [`Style::arrangement_for_seed`], поэтому куски одного стиля
     /// отличаются драматургией, а не только темой.
@@ -432,6 +522,9 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
     let scale = style.scale();
     let energy = (style.shape_energy(sctx.song.energy) * sctx.intensity).clamp(0.0, 1.5);
     let policy = style.style_contract();
+    // Стиль задает гармонический мир: прогрессию, темп гармонии и
+    // тональность. Сид выбирает вариант внутри стиля, не поверх него.
+    let harmony = Harmony::for_style(style, sctx.song.seed_hash);
     // Идентичность сида: одна маска риффа на фразу, общая для
     // баса/аккордов/носителей темы. Не слой, а краска существующих.
     let riff = riff::RiffCell::generate(style.riff_kind(), sctx.song, style.steps_per_measure());
@@ -444,8 +537,8 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
         sctx.step_in_measure,
         style.steps_per_measure(),
         sctx.base_step_secs,
-        scale,
         sctx.active_tracks,
+        &harmony,
     );
     // Сколько реально звучащих носителей у каждой роли — карта дележа
     // плотности. Молчащие гайды (нулевые веса и полюса) не считаются:
@@ -546,6 +639,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             false,
             // Кики тему не несут: лидерство им не нужно.
             false,
+            &harmony,
             &riff,
             sctx.rng,
         );
@@ -616,6 +710,7 @@ pub fn render_style(style: &dyn Style, sctx: &mut StepContext) -> Vec<NoteEvent>
             thicken,
             // Лидер фразы — в полную, остальные носители — эхом.
             leader == Some(slot.id()),
+            &harmony,
             &riff,
             sctx.rng,
         );
@@ -851,11 +946,19 @@ pub(crate) fn swing_var(seed_hash: u64) -> f32 {
 
 /// Модальный вариант от сида: дорийская секста / фригийская секунда /
 /// блюзовая нота. Та же гамма с другим характером.
+///
+/// Альтерации включаются только там, где они добавляют новый цвет, а не
+/// ломают уже выбранный стилем лад: фригийская секунда не «исправляется»
+/// в натуральный минор, а дорийская секста не поднимается в фригийский
+/// лад с высокой шестой. Иначе стиль терял бы лад на части сидов.
 fn modal_tone(scale: &[u8], idx: usize, seed_hash: u64) -> u8 {
     let root = scale[idx];
+    let natural_minor = scale.len() == 7
+        && scale[1].saturating_sub(scale[0]) == 2
+        && scale[5].saturating_sub(scale[4]) == 1;
     match (scale.len(), (seed_hash % 3) as u8) {
-        (7, 1) if idx == 5 => root.saturating_add(1),
-        (7, 2) if idx == 1 => root.saturating_sub(1),
+        (7, 1) if idx == 5 && natural_minor => root.saturating_add(1),
+        (7, 2) if idx == 1 && natural_minor => root.saturating_sub(1),
         (5, 1) if idx == 3 => root.saturating_add(1),
         _ => root,
     }
@@ -1019,6 +1122,7 @@ fn play_guide(
         force_motif,
         force_chords,
         theme_lead,
+        &Harmony::neutral(song),
         &riff::RiffCell::NONE,
         rng,
     )
@@ -1052,6 +1156,7 @@ fn play_guide_with_riff(
     // эхом (урезанная плотность, те же шаги). Тесты зовут с true:
     // голос в изоляции звучит как написано.
     theme_lead: bool,
+    harmony: &Harmony,
     riff: &riff::RiffCell,
     rng: &mut StdRng,
 ) -> Vec<NoteEvent> {
@@ -1119,7 +1224,13 @@ fn play_guide_with_riff(
         // Якоря идут своим приоритетом и не масштабируются.
         // Рифф и дыхание фразы смещают вероятность, но не создают
         // гарантий: якоря остаются якорями.
-        let mut p = weight * energy * energy * guide.energy_response * song.density * role_share;
+        let mut p = weight
+            * energy
+            * energy
+            * guide.energy_response
+            * song.density
+            * harmony.density
+            * role_share;
         if riff.is_active() {
             p *= riff::RiffCell::probability(riff_accent);
         }
@@ -1257,18 +1368,18 @@ fn play_guide_with_riff(
             let prog_shift = if use_motif {
                 0
             } else {
-                // Аккомпанемент идет за прогрессией: бас — корнями
+                // Аккомпанемент идет за прогрессией стиля: бас — корнями
                 // вместе со всеми (дрона на одной ноте больше нет),
-                // остальные — в полную. Гармонический ритм — от сида:
-                // одни сиды меняют аккорд каждые 2 такта (движение),
-                // другие держат по 8 (фундамент). Почерк сида, а не
-                // один темп гармонии на всех.
+                // остальные — в полную. Гармонический ритм — тоже стиля:
+                // клуб меняет аккорд каждые 2 такта, фонк держит 4,
+                // лофай дышит по 8. Сид выбирает вариант внутри стиля.
                 // Регистр баса держит фолд, блуждание — джиттер гайда.
                 // Прогрессия идет по сквозному такту сессии: сброс на
                 // каждом стыке секций превращал движение в топтание
                 // на первом аккорде в любой короткой секции.
-                song.prog[(song.measure_index.saturating_sub(1) / prog_bar_len(song.seed_hash))
-                    % song.prog.len()] as usize
+                harmony.prog
+                    [(song.measure_index.saturating_sub(1) / harmony.bar_len) % harmony.prog.len()]
+                    as usize
             };
             let (degree, jitter, contour_max) = if use_motif {
                 // Живой мотив: тема секции (A везде, B на Drop/PostChorus)
@@ -1384,15 +1495,16 @@ fn play_guide_with_riff(
             };
             // Октава общая для тонов аккорда; подъем проверяем по корню.
             let root_idx = (tone_base + degree as i32).rem_euclid(len as i32) as usize;
-            // Абсолютная высота — от сида (тон семейства + сдвиг тоники).
-            let shift = tonic_shift_for(song.seed_hash);
-            let root = modal_tone(scale, root_idx, song.seed_hash).saturating_add_signed(shift);
+            // Абсолютная высота — от сида (тон семейства + сдвиг тоники)
+            // и стиля (его тональность поверх сидового сдвига).
+            let shift = tonic_shift_for(song.seed_hash) as i32 + harmony.key_shift as i32;
+            let root = modal_tone(scale, root_idx, song.seed_hash) as i32 + shift;
             let bump = guide.octave_up > 0.0
                 // Потолок регистра лидов: выше D6 (86) — ледяной свист,
                 // а не музыка. Берем минимум из гайда и колпака.
                 // Бросок общий на план: подъемы унисоном, а не вразнобой.
                 // Визит секции — в ногу с тоникой: регистр стоит весь раздел.
-                && root.saturating_add(12) <= guide.top_pitch.min(86)
+                && root.saturating_add(12) <= guide.top_pitch.min(86) as i32
                 && fixed_gate(
                     song.seed_hash,
                     groove_key,
@@ -1441,7 +1553,7 @@ fn play_guide_with_riff(
                         top = p;
                     }
                 }
-                let top = top + shift as i32 + 12 * octaves_line as i32;
+                let top = top + shift + 12 * octaves_line as i32;
                 let cap = guide.top_pitch.min(86) as i32;
                 if top > cap {
                     (top - cap) / 12 + 1
@@ -1484,6 +1596,7 @@ fn play_guide_with_riff(
         // не режет отдельные ноты, иначе линия рвётся скачком на октаву.
         let mut tone = (modal_tone(scale, idx, song.seed_hash) as i32
             + tonic_shift_for(song.seed_hash) as i32
+            + harmony.key_shift as i32
             + 12 * octaves as i32
             - 12 * line_fold)
             .clamp(0, 255) as u8;
@@ -2417,6 +2530,7 @@ mod tests {
                 false,
                 false,
                 true,
+                &Harmony::neutral(&song),
                 &cell,
                 &mut rng_b,
             );
@@ -2500,6 +2614,73 @@ mod tests {
             seen.insert(len);
         }
         assert_eq!(seen.len(), 3, "rhythm never varies: {seen:?}");
+    }
+
+    #[test]
+    fn styles_own_harmony_key_and_density() {
+        // Стиль задает гармонический мир, а сид выбирает вариант внутри:
+        // прогрессии диатоничны своему ладу, ритм и тональность — стиля,
+        // плотность отличается, но сиды не зажаты в один ход.
+        let expected = [
+            ("club", 0, 1.0),
+            ("deep", 5, 0.9),
+            ("lofi", 2, 0.78),
+            ("rock", 4, 1.12),
+            ("phonk", 0, 0.86),
+            ("proto", 0, 0.92),
+        ];
+        for (name, key, density) in expected {
+            let style = make_style(name).expect("known style");
+            assert_eq!(style.key_shift(), key, "{name}: key");
+            assert!((style.density() - density).abs() < 1e-6, "{name}: density");
+            let len = style.scale().len();
+            assert!(!style.progressions().is_empty(), "{name}: no progressions");
+            for prog in style.progressions() {
+                for degree in prog {
+                    assert!(
+                        (*degree as usize) < len,
+                        "{name}: degree {degree} outside scale of {len}"
+                    );
+                }
+            }
+            assert!(!style.harmonic_rhythm().is_empty(), "{name}: no rhythm");
+            assert!(
+                style
+                    .harmonic_rhythm()
+                    .iter()
+                    .all(|b| [2, 4, 8].contains(b)),
+                "{name}: bad harmonic rhythm"
+            );
+
+            let mut progs = std::collections::HashSet::new();
+            let mut rhythms = std::collections::HashSet::new();
+            for seed in 0..32u64 {
+                let seed_hash = crate::arranger::splitmix64(seed ^ 0x51ED);
+                let h = Harmony::for_style(&*style, seed_hash);
+                let again = Harmony::for_style(&*style, seed_hash);
+                assert_eq!(
+                    (h.prog, h.bar_len, h.key_shift),
+                    (again.prog, again.bar_len, again.key_shift),
+                    "{name}: unstable"
+                );
+                progs.insert(h.prog);
+                rhythms.insert(h.bar_len);
+                assert!(h.bar_len >= 2, "{name}: harmony churns every bar");
+            }
+            assert!(progs.len() >= 3, "{name}: seeds share one progression");
+            if style.harmonic_rhythm().len() > 1 {
+                assert!(rhythms.len() >= 2, "{name}: seeds share one rhythm");
+            }
+        }
+        // Тембр/лад — тоже стилевой: deep дорийский, phonk фригийский.
+        let deep = make_style("deep").expect("deep");
+        assert_eq!(deep.scale()[5] - deep.scale()[4], 2, "deep must be Dorian");
+        let phonk = make_style("phonk").expect("phonk");
+        assert_eq!(
+            phonk.scale()[1] - phonk.scale()[0],
+            1,
+            "phonk must be Phrygian"
+        );
     }
 
     #[test]
@@ -2902,6 +3083,10 @@ mod tests {
         let spm = style.steps_per_measure();
         let ki = Slot::ALL.iter().position(|s| *s == Slot::Keys).unwrap();
         let song = test_song(0.5);
+        // Стиль задает тональность и плотность: эталон снимаем тем же
+        // гармоническим почерком, что и движок, иначе сравнение высот
+        // будет сравнивать разные тональности.
+        let harmony = Harmony::for_style(&*style, song.seed_hash);
         // Эталонная линия мотива: якорный носитель звучит на каждом шаге.
         let anchor_motif = RoleGuide {
             weights: &[1.0; 16],
@@ -2913,7 +3098,7 @@ mod tests {
         // из 16 может молчать, сверка идет по звучавшим.
         let full_line: Vec<(usize, u8)> = (0..16)
             .filter_map(|step| {
-                play_guide(
+                play_guide_with_riff(
                     &anchor_motif,
                     scale,
                     &song,
@@ -2927,6 +3112,8 @@ mod tests {
                     false,
                     false,
                     true,
+                    &harmony,
+                    &riff::RiffCell::NONE,
                     &mut rng,
                 )
                 .into_iter()
@@ -2944,7 +3131,7 @@ mod tests {
             let mut rng = rand::SeedableRng::seed_from_u64(22);
             (0..16)
                 .filter_map(|step| {
-                    play_guide(
+                    play_guide_with_riff(
                         &guides[ki],
                         scale,
                         &song,
@@ -2958,6 +3145,8 @@ mod tests {
                         force,
                         false,
                         true,
+                        &harmony,
+                        &riff::RiffCell::NONE,
                         &mut rng,
                     )
                     .into_iter()

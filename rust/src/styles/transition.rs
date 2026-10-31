@@ -10,6 +10,7 @@
 //! Это не `piece::Transition`: тот отвечает за склейку кусков, этот —
 //! за музыкальный вход из разгона в удар.
 
+use super::Harmony;
 use crate::arranger::{SongContext, SongSection};
 use crate::instruments::{NoteEvent, Slot};
 
@@ -88,14 +89,14 @@ impl Step {
 /// Отрисовать шаг перехода. `None` — стиль без перехода или шаг вне
 /// зоны жеста. Слоты, выключенные пользователем или отсутствующие в
 /// аранже секции, не занимаются: переход не обходит микшер.
-pub fn render(
+pub(crate) fn render(
     spec: Option<Spec>,
     song: &SongContext,
     step_in_measure: usize,
     steps_per_measure: usize,
     base_step_secs: f32,
-    scale: &[u8],
     active_tracks: &[usize],
+    harmony: &Harmony,
 ) -> Step {
     let Some(spec) = spec else {
         return Step::none();
@@ -180,7 +181,7 @@ pub fn render(
             }
         }
         Kind::Slide808 => {
-            let root = bass_root(scale, song);
+            let root = bass_root(harmony.scale, song, harmony);
             match phase {
                 Phase::Fill => {
                     // Квинта в середине и корень к трем четвертям:
@@ -244,7 +245,7 @@ pub fn render(
                 }
             };
             if play {
-                let pitch = scale_pitch(scale, degree, song, 2);
+                let pitch = scale_pitch(harmony.scale, degree, song, harmony, 2);
                 push(&mut out, Slot::Pluck, pitch, v, 1.0, base_step_secs, song);
             }
         }
@@ -338,15 +339,17 @@ fn push(
 }
 
 /// Корень текущей гармонии в суб-регистре: 808 не уезжает в лид.
-fn bass_root(scale: &[u8], song: &SongContext) -> u8 {
+/// Прогрессия, темп гармонии и тональность — стиля, а не общие.
+fn bass_root(scale: &[u8], song: &SongContext, harmony: &Harmony) -> u8 {
     if scale.is_empty() {
         return 36;
     }
-    let prog = song.prog[(song.measure_index.saturating_sub(1)
-        / super::prog_bar_len(song.seed_hash))
-        % song.prog.len()] as usize;
-    let mut pitch =
-        scale[prog % scale.len()] as i32 + super::tonic_shift_for(song.seed_hash) as i32;
+    let prog = harmony.prog
+        [(song.measure_index.saturating_sub(1) / harmony.bar_len) % harmony.prog.len()]
+        as usize;
+    let mut pitch = scale[prog % scale.len()] as i32
+        + super::tonic_shift_for(song.seed_hash) as i32
+        + harmony.key_shift as i32;
     while pitch > 41 {
         pitch -= 12;
     }
@@ -357,13 +360,21 @@ fn bass_root(scale: &[u8], song: &SongContext) -> u8 {
 }
 
 /// Ступень лада в верхнем регистре для стаб-пикапа.
-fn scale_pitch(scale: &[u8], degree: usize, song: &SongContext, octave_shift: i32) -> u8 {
+fn scale_pitch(
+    scale: &[u8],
+    degree: usize,
+    song: &SongContext,
+    harmony: &Harmony,
+    octave_shift: i32,
+) -> u8 {
     if scale.is_empty() {
         return 60;
     }
     let idx = degree % scale.len();
-    let pitch =
-        scale[idx] as i32 + super::tonic_shift_for(song.seed_hash) as i32 + 12 * octave_shift;
+    let pitch = scale[idx] as i32
+        + super::tonic_shift_for(song.seed_hash) as i32
+        + harmony.key_shift as i32
+        + 12 * octave_shift;
     pitch.clamp(0, 127) as u8
 }
 
@@ -374,6 +385,13 @@ mod tests {
     use crate::piece::layers_for;
 
     const SCALE: [u8; 7] = [48, 50, 51, 53, 55, 56, 58];
+
+    fn h(song: &SongContext) -> Harmony {
+        Harmony {
+            scale: &SCALE,
+            ..Harmony::neutral(song)
+        }
+    }
 
     fn song(
         section: SongSection,
@@ -418,13 +436,13 @@ mod tests {
         let active = [Slot::Snare.id()];
         let build = song(SongSection::BuildUp, true, 8, SongSection::MainMotif);
         assert!(
-            render(spec, &build, 7, 16, 0.1, &SCALE, &active)
+            render(spec, &build, 7, 16, 0.1, &active, &h(&build))
                 .notes
                 .is_empty(),
             "roll starts too early"
         );
         let fill: Vec<_> = (8..16)
-            .map(|step| render(spec, &build, step, 16, 0.1, &SCALE, &active))
+            .map(|step| render(spec, &build, step, 16, 0.1, &active, &h(&build)))
             .collect();
         for (i, step) in fill.iter().enumerate() {
             assert_eq!(step.notes.len(), 1, "roll missed step {}", i + 8);
@@ -436,11 +454,11 @@ mod tests {
         );
 
         let drop = song(SongSection::Drop, false, 1, SongSection::BuildUp);
-        let tail = render(spec, &drop, 0, 16, 0.1, &SCALE, &active);
+        let tail = render(spec, &drop, 0, 16, 0.1, &active, &h(&build));
         assert_eq!(tail.notes.len(), 1, "tail missing after the drop");
         assert!(tail.owns(Slot::Snare));
         assert!(
-            render(spec, &drop, 3, 16, 0.1, &SCALE, &active)
+            render(spec, &drop, 3, 16, 0.1, &active, &h(&build))
                 .notes
                 .is_empty(),
             "tail outlived its length"
@@ -460,15 +478,15 @@ mod tests {
         ));
         let active = [Slot::Kick.id(), Slot::Snare.id()];
         let build = song(SongSection::BuildUp, true, 8, SongSection::MainMotif);
-        let even = render(spec, &build, 8, 16, 0.1, &SCALE, &active);
+        let even = render(spec, &build, 8, 16, 0.1, &active, &h(&build));
         assert!(even.owns(Slot::Kick) && even.owns(Slot::Snare));
         assert_eq!(even.notes.len(), 1);
         assert_eq!(even.notes[0].instrument_id, Slot::Kick.id());
-        let odd = render(spec, &build, 9, 16, 0.1, &SCALE, &active);
+        let odd = render(spec, &build, 9, 16, 0.1, &active, &h(&build));
         assert_eq!(odd.notes[0].instrument_id, Slot::Snare.id());
 
         let drop = song(SongSection::Drop, false, 1, SongSection::BuildUp);
-        let tail = render(spec, &drop, 0, 16, 0.1, &SCALE, &active);
+        let tail = render(spec, &drop, 0, 16, 0.1, &active, &h(&build));
         assert_eq!(tail.notes.len(), 1);
         assert_eq!(tail.notes[0].instrument_id, Slot::Snare.id());
         assert!(
@@ -491,14 +509,14 @@ mod tests {
         let active = [Slot::Shaker.id()];
         let main = song(SongSection::MainMotif, true, 8, SongSection::MainMotif);
         for step in 0..16 {
-            let out = render(spec, &main, step, 16, 0.1, &SCALE, &active);
+            let out = render(spec, &main, step, 16, 0.1, &active, &h(&main));
             assert!(out.notes.is_empty(), "transition leaked at step {step}");
             assert!(!out.owns(Slot::Shaker));
         }
         // Секция после BuildUp, но не первая — хвоста уже нет.
         let later = song(SongSection::Drop, false, 2, SongSection::BuildUp);
         assert!(
-            render(spec, &later, 0, 16, 0.1, &SCALE, &active)
+            render(spec, &later, 0, 16, 0.1, &active, &h(&later))
                 .notes
                 .is_empty(),
             "tail repeated in every measure"

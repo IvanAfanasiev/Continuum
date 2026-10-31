@@ -7,22 +7,33 @@ use crate::core::midi_to_freq;
 /// Голос электро-плака: BLEP-пилы + BLEP суб-квадрат через резонансный
 /// SVF с быстрым «щелчком» среза и мягким насыщением. Чистый современный
 /// плак вместо резкого чиптюна. Короткий блип (хвост 0.35 с, как референс).
-const SUB_GAIN: f32 = 0.35;
-const DETUNE: f32 = 1.004;
-const FILTER_FLOOR_HZ: f32 = 350.0;
-const FILTER_SNAP_HZ: f32 = 3800.0;
-const FILTER_SNAP_RATE: f32 = 18.0;
-const FILTER_Q: f32 = 1.15;
-const AMP_DECAY_RATE: f32 = 10.0;
+///
+/// Тембр сознательно тёмный: тело плака живёт в 300–3000 Гц, резонанс
+/// почти убран (Q 0.9), а после сатурации стоит ещё один мягкий срез.
+/// Такой голос читается на телефоне, но не «звенит» и не дерет верх.
+const SUB_GAIN: f32 = 0.22;
+const DETUNE: f32 = 1.0025;
+const FILTER_FLOOR_HZ: f32 = 360.0;
+const FILTER_SNAP_HZ: f32 = 2400.0;
+const FILTER_SNAP_RATE: f32 = 13.0;
+const FILTER_Q: f32 = 0.9;
+/// Мягкая полка после насыщения: гармоники сатурации не уходят в свист.
+const TONE_LP_HZ: f32 = 6200.0;
+const TONE_Q: f32 = 0.6;
+const AMP_DECAY_RATE: f32 = 9.0;
 const MAX_RING_SECS: f32 = 0.35;
-const ATTACK_SECS: f32 = 0.002;
+const ATTACK_SECS: f32 = 0.003;
 const FADE_SECS: f32 = 0.02;
-const VOICE_GAIN: f32 = 0.7;
+const VOICE_GAIN: f32 = 0.78;
 /// Щипок: скорость спада и своя рампа. Громкость — как медиатор:
 /// слышно атаку, а не второй инструмент поверх струны.
-const PICK_DECAY: f32 = 150.0;
-const PICK_RAMP_SECS: f32 = 0.0005;
-const PICK_GAIN: f32 = 0.12;
+/// Шум щипка не белый: полосовой «тик» 1.2–2.8 кГц. Широкополосный
+/// всплеск и был главным источником дребезга (энергия до Найквиста).
+const PICK_DECAY: f32 = 220.0;
+const PICK_RAMP_SECS: f32 = 0.0015;
+const PICK_GAIN: f32 = 0.16;
+const PICK_CENTER_HZ: f32 = 1900.0;
+const PICK_Q: f32 = 0.85;
 
 #[derive(Clone, Default)]
 pub struct PluckVoice {
@@ -31,6 +42,9 @@ pub struct PluckVoice {
     phase_saw2: f32,
     phase_sub: f32,
     filter: Svf,
+    /// Мягкая полка после сатурации и полосовой фильтр щипка.
+    tone: Svf,
+    pick_filter: Svf,
     frequency: f32,
     gain: f32,
     t: f32,
@@ -68,6 +82,8 @@ impl Voice for PluckVoice {
         self.pick_env = ExpDecay::start(PICK_DECAY, self.sample_rate);
         self.noise = Noise::new(note_seed(note, 0x971C));
         self.filter.scrub_denormals();
+        self.tone.reset();
+        self.pick_filter.reset();
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -94,15 +110,23 @@ impl Voice for PluckVoice {
         let (low, _, _) = self
             .filter
             .process(saw + sub, cutoff, FILTER_Q, sample_rate);
+        // Сатурация до финальной полки: мягкое тело, но без гармоник,
+        // которые царапают 5–10 кГц. Раньше та же цепь звучала стерильно
+        // резко именно из-за неотфильтрованного щипка и открытого верха.
+        let driven = fast_tanh(low * 1.05);
+        let (voiced, _, _) = self.tone.process(driven, TONE_LP_HZ, TONE_Q, sample_rate);
 
-        // Щипок идёт МИМО мягкой S-атаки тела (своя рампа 0.5 мс):
-        // иначе 2 мс атака душит транзиент и щипка не слышно.
-        // Урок из баса: щелчок раньше тела, не внутри него.
+        // Щипок идёт МИМО мягкой S-атаки тела (своя рампа): иначе
+        // транзиент душится. Но это полосовой тик, а не белый клик:
+        // узкая полоса не рассыпается в «дребезг» на телефоне.
         let pick_ramp = (self.t / PICK_RAMP_SECS).min(1.0);
-        let pick = self.noise.sample() * self.pick_env.next() * PICK_GAIN * pick_ramp;
+        let (_, pick_band, _) =
+            self.pick_filter
+                .process(self.noise.sample(), PICK_CENTER_HZ, PICK_Q, sample_rate);
+        let pick = pick_band * self.pick_env.next() * PICK_GAIN * pick_ramp;
 
         self.t += 1.0 / sample_rate;
-        (fast_tanh(low * 1.3) * attack + pick) * self.gain * amp * fade * VOICE_GAIN
+        (voiced * attack + pick) * self.gain * amp * fade * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -114,13 +138,34 @@ impl Voice for PluckVoice {
         self.t = 0.0;
         self.gain = 0.0;
         self.filter.reset();
+        self.tone.reset();
+        self.pick_filter.reset();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Instrument, VoicePool};
+    use super::super::{band_ratio, Instrument, VoicePool};
     use super::*;
+
+    #[test]
+    fn pluck_stays_out_of_harsh_band() {
+        // Тембр плака: тело в 0.5–2 кГц, верх мягкий. Полоса 2–5 кГц —
+        // «резкость/дребезг» на телефоне; после реворка ее доля мала.
+        let sr = 44_100.0;
+        let mut pluck = VoicePool::plucks(6, 1);
+        pluck.set_sample_rate(sr);
+        pluck.trigger(&NoteEvent::new(6, 72, 1.0, 0.35));
+        let out: Vec<f32> = (0..(0.35 * sr) as usize)
+            .map(|_| pluck.next_sample())
+            .collect();
+        let harsh = band_ratio(&out, sr, 2000.0, 5000.0);
+        let air = band_ratio(&out, sr, 5000.0, 10_000.0);
+        let body = band_ratio(&out, sr, 500.0, 2000.0);
+        assert!(harsh < 0.02, "pluck harsh band: {harsh:.4}");
+        assert!(air < 0.005, "pluck air band: {air:.4}");
+        assert!(body > 0.3, "pluck lost its body: {body:.4}");
+    }
 
     #[test]
     fn pick_transient_leads_body() {

@@ -4,20 +4,28 @@ use super::{
 };
 use crate::core::midi_to_freq;
 
-/// Электрогитара: струна Карплуса-Стронга + кусачий burst + лёгкий
+/// Электрогитара: струна Карплуса-Стронга + мягкий burst + лёгкий
 /// драйв. Чёткая атака самой струны (не щелчок — это не акустика):
 /// яркое возбуждение, собранный фронт, верх умирает сам по ходу звона.
 /// От коротких чопов до длинных протяжных линий — диапазоном управляет
 /// длительность ноты: короткие идут одиночными ударами, длинные
 /// аккорды — веером. Для лоуфай-боя поверх Rhodes и рок-риффов.
-/// Длительность сустейна струны (открытые струны звенят, глушеные — нет).
-const RING_T60_SECS: f32 = 1.4;
-const RING_T60_MUTED_SECS: f32 = 0.12;
+///
+/// Тембр — кабинет, а не «сырой» пьезо: сначала узкая середина, потом
+/// сатурация, и только затем финальный срез верха. Гармоники драйва
+/// не остаются над кабинетом (именно они давали дребезг и резкость),
+/// а струна сохраняет атаку и сустейн.
+const RING_T60_SECS: f32 = 1.3;
+const RING_T60_MUTED_SECS: f32 = 0.11;
 const MAX_KS_LEN: usize = 2048;
-const LP_HZ: f32 = 3800.0;
-const LP_MUTED_HZ: f32 = 1800.0;
-const LP_Q: f32 = 0.7;
-const ATTACK_SECS: f32 = 0.006;
+const LP_HZ: f32 = 2500.0;
+const LP_MUTED_HZ: f32 = 1400.0;
+const LP_Q: f32 = 0.62;
+/// Кабинет после сатурации: 12 дБ/окт плюс ещё один мягкий срез.
+const CAB_HZ: f32 = 3800.0;
+const CAB_MUTED_HZ: f32 = 1900.0;
+const CAB_Q: f32 = 0.58;
+const ATTACK_SECS: f32 = 0.008;
 /// Тише этого — ghost-нота с приглушенными струнами.
 const MUTE_VELOCITY: f32 = 0.6;
 /// Расгеадо: сдвиги ударов и их акценты (сумма нормируется).
@@ -33,20 +41,22 @@ const FADE_SECS: f32 = 0.05;
 /// Струна — это рифф (в rock она ведет), поэтому уровень держим рядом
 /// со снейром: KS-усреднение гасит верх, и без компенсации рифф уезжал
 /// на 6 дБ под ударные.
-const VOICE_GAIN: f32 = 1.55;
+const VOICE_GAIN: f32 = 1.85;
 /// Характер соло: звон дольше (сустейн-линия), верх открыт (читаемость
 /// перебора), лёгкий драйв (поющая компрессия вместо плоского звона).
-/// Характер риффа: кусачий burst, собранный драйв чопов.
+/// Характер риффа: собранный burst, драйв чопов.
 const LEAD_RING_T60_SECS: f32 = 2.4;
-const LEAD_LP_HZ: f32 = 5200.0;
-const LEAD_DRIVE: f32 = 1.6;
+const LEAD_LP_HZ: f32 = 3200.0;
+const LEAD_CAB_HZ: f32 = 4700.0;
+const LEAD_DRIVE: f32 = 1.3;
 /// Потолок длины ноты соло: протяжные линии не обрываются на 1.5 с.
 const LEAD_MAX_RING_SECS: f32 = 3.0;
-const RIFF_DRIVE: f32 = 1.4;
-/// Яркость возбуждения (альфа однополюсника burst): было 0.5 —
-/// глухой удар без верхов. Рифф кусается, соло звенит.
-const RIFF_BURST_ALPHA: f32 = 0.7;
-const LEAD_BURST_ALPHA: f32 = 0.85;
+const RIFF_DRIVE: f32 = 1.12;
+/// Яркость возбуждения (альфа однополюсника burst). Было 0.7/0.85:
+/// шум доходил до 5 кГц и после драйва звенел. Теперь возбуждение
+/// темнее — верх струны рождается в KS-звоне, а не в шумовом клике.
+const RIFF_BURST_ALPHA: f32 = 0.5;
+const LEAD_BURST_ALPHA: f32 = 0.62;
 
 #[derive(Clone)]
 pub struct GuitarVoice {
@@ -56,6 +66,9 @@ pub struct GuitarVoice {
     ks_len: usize,
     damp: f32,
     filter: Svf,
+    /// Кабинет после сатурации: второй срез, который забирает
+    /// гармоники драйва выше 3.8–4.7 кГц.
+    cab: Svf,
     noise: Noise,
     frequency: f32,
     gain: f32,
@@ -68,6 +81,7 @@ pub struct GuitarVoice {
     /// сатурацией (поющая сустейн-линия вместо плоского звона).
     ring_t60: f32,
     lp_hz: f32,
+    cab_hz: f32,
     drive: f32,
     /// Яркость burst возбуждения (см. RIFF/LEAD_BURST_ALPHA).
     burst_alpha: f32,
@@ -86,6 +100,7 @@ impl GuitarVoice {
             ks_len: 0,
             damp: 0.0,
             filter: Svf::default(),
+            cab: Svf::default(),
             noise: Noise::default(),
             frequency: 0.0,
             gain: 0.0,
@@ -95,6 +110,7 @@ impl GuitarVoice {
             samples_left: 0,
             ring_t60: RING_T60_SECS,
             lp_hz: LP_HZ,
+            cab_hz: CAB_HZ,
             drive: RIFF_DRIVE,
             burst_alpha: RIFF_BURST_ALPHA,
             max_ring: MAX_RING_SECS,
@@ -106,6 +122,7 @@ impl GuitarVoice {
         let mut v = Self::riff();
         v.ring_t60 = LEAD_RING_T60_SECS;
         v.lp_hz = LEAD_LP_HZ;
+        v.cab_hz = LEAD_CAB_HZ;
         v.drive = LEAD_DRIVE;
         v.burst_alpha = LEAD_BURST_ALPHA;
         v.max_ring = LEAD_MAX_RING_SECS;
@@ -182,6 +199,7 @@ impl Voice for GuitarVoice {
         }
         self.ks_pos = 0;
         self.filter.reset();
+        self.cab.reset();
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -226,9 +244,19 @@ impl Voice for GuitarVoice {
 
         let cutoff = if self.muted { LP_MUTED_HZ } else { self.lp_hz };
         let (warm, _, _) = self.filter.process(cur, cutoff, LP_Q, sample_rate);
+        // Сатурация ДО кабинета: гармоники драйва рождаются, но сразу
+        // уходят под срез динамика. Раньше tanh стоял последним, и его
+        // верхние гармоники шли прямо в микс — отсюда резкость 2–5 кГц.
+        let driven = fast_tanh(warm * self.drive);
+        let cab_hz = if self.muted {
+            CAB_MUTED_HZ
+        } else {
+            self.cab_hz
+        };
+        let (voiced, _, _) = self.cab.process(driven, cab_hz, CAB_Q, sample_rate);
 
         self.t += 1.0 / sample_rate;
-        fast_tanh(warm * self.drive) * self.gain * attack * fade * strum * VOICE_GAIN
+        voiced * self.gain * attack * fade * strum * VOICE_GAIN
     }
 
     fn is_active(&self) -> bool {
@@ -240,13 +268,43 @@ impl Voice for GuitarVoice {
         self.t = 0.0;
         self.gain = 0.0;
         self.filter.reset();
+        self.cab.reset();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Instrument, VoicePool};
+    use super::super::{band_ratio, Instrument, VoicePool};
     use super::*;
+
+    #[test]
+    fn guitars_keep_harsh_band_down() {
+        // Гитара — кабинет, а не пьезо: рифф и соло живут в середине,
+        // 2–5 кГц не должны доминировать. Раньше именно эта полоса
+        // давала дребезг и резкость на телефоне.
+        let sr = 44_100.0;
+        let probe = |lead: bool, pitch: u8| -> Vec<f32> {
+            let mut pool = if lead {
+                VoicePool::guitar_leads(20, 1)
+            } else {
+                VoicePool::guitars(14, 1)
+            };
+            pool.set_sample_rate(sr);
+            pool.trigger(&NoteEvent::new(14, pitch, 0.9, 1.0));
+            (0..(1.0 * sr) as usize)
+                .map(|_| pool.next_sample())
+                .collect()
+        };
+        for (name, lead, pitch) in [("riff", false, 64u8), ("lead", true, 57u8)] {
+            let out = probe(lead, pitch);
+            let harsh = band_ratio(&out, sr, 2000.0, 5000.0);
+            let air = band_ratio(&out, sr, 5000.0, 10_000.0);
+            let body = band_ratio(&out, sr, 500.0, 2000.0);
+            assert!(harsh < 0.10, "{name} harsh band: {harsh:.4}");
+            assert!(air < 0.01, "{name} air band: {air:.4}");
+            assert!(body > 0.2, "{name} lost its body: {body:.4}");
+        }
+    }
 
     fn guitars() -> VoicePool {
         VoicePool::guitars(16, 6)

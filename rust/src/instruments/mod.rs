@@ -793,6 +793,49 @@ pub(crate) fn sane_sample_rate(sample_rate: f32) -> f32 {
     }
 }
 
+/// Тестовая спектральная метрика: доля энергии полосы `[lo, hi)` в
+/// диапазоне 100 Гц – 10 кГц. Goertzel по всем бинам окна 8192 с
+/// Hann-окном: без FFT-зависимости, но с настоящим разрешением по
+/// частоте — разреженная сетка врёт на гармониках.
+#[cfg(test)]
+pub(crate) fn band_ratio(samples: &[f32], sample_rate: f32, lo: f32, hi: f32) -> f32 {
+    let n = samples.len().min(8192);
+    if n < 16 {
+        return 0.0;
+    }
+    // Hann: транзиент не размазывается по всем бинам.
+    let windowed: Vec<f32> = samples[..n]
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos();
+            x * w
+        })
+        .collect();
+    let bin_hz = sample_rate / n as f32;
+    let first = (100.0 / bin_hz).ceil() as usize;
+    let last = ((10_000.0 / bin_hz).floor() as usize).min(n / 2);
+    let mut band = 0.0f32;
+    let mut total = 0.0f32;
+    for bin in first..=last {
+        let omega = 2.0 * std::f32::consts::PI * bin as f32 / n as f32;
+        let coeff = 2.0 * omega.cos();
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for &x in &windowed {
+            let s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        let p = (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0);
+        let hz = bin as f32 * bin_hz;
+        if hz >= lo && hz < hi {
+            band += p;
+        }
+        total += p;
+    }
+    band / total.max(1e-12)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
