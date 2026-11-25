@@ -1,13 +1,13 @@
-//! Генератор композиции: тактовый цикл, опрашивающий стиль.
+//! Composition generator: a bar-by-bar loop that queries the style.
 //!
-//! Петля не владеет музыкальными решениями: стиль дает направляющие,
-//! микшер — активные треки, темп — живую ручку BPM. Все три меняются
-//! на ходу без перезапуска потока.
+//! The loop owns no musical decisions: the style provides guidelines,
+//! the mixer provides active tracks, tempo provides the live BPM knob. All three change
+//! on the fly without restarting the stream.
 //!
-//! Иерархия голосов одна и живет в [`crate::styles::render_style`]:
-//! ведущий темы звучит в полную, остальные мелодические — поддержкой.
-//! Композер не выбирает второго лидера: иначе тема и баланс партий
-//! расходились бы.
+//! The voice hierarchy is single and lives in [`crate::styles::render_style`]:
+//! the theme's lead sounds at full level, the other melodic voices are support.
+//! The composer doesn't pick a second leader: otherwise the theme and the balance of parts
+//! would drift apart.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -26,85 +26,85 @@ use crate::instruments::{InstrumentRole, NoteEvent, Slot};
 use crate::mixer::MixerState;
 use crate::styles::{render_style, StepContext, Style};
 
-/// Живой темп: `None` = дефолт стиля, `Some(bpm)` = ручка фронта.
+/// Live tempo: `None` = style default, `Some(bpm)` = frontend knob.
 pub type LiveTempo = Arc<RwLock<Option<f32>>>;
 
-/// Живой снимок для кругового визуалайзера: секция, энергия,
-/// мотив сида и позиция в нем. Обновляется композером каждый шаг
-/// (дешево: маленький Copy-набор), читается UI по опросу.
+/// Live snapshot for the circular visualizer: section, energy,
+/// the seed's motif and the position within it. Updated by the composer every step
+/// (cheap: a small Copy bundle), polled by the UI.
 #[derive(Clone, Debug, Default)]
 pub struct VisualSnap {
     pub section: u8,
     pub energy: f32,
     pub motif: [u8; 16],
-    /// Позиция темы на этом шаге (индекс в motif).
+    /// Theme position at this step (index in `motif`).
     pub motif_pos: u8,
-    /// Доля такта 0..1 (стрелка круга).
+    /// Fraction of the bar 0..1 (wheel hand).
     pub step_phase: f32,
-    /// Маска звучавших долей такта (бит = 16-я доля): точки инструментов.
-    /// Сбрасывается на границе такта.
+    /// Mask of sounding beat positions (bit = 16th note): instrument dots.
+    /// Reset at the bar boundary.
     pub bar_hits: u16,
-    /// Маски по главным голосам (тот же бит = та же доля):
-    /// кик, снейр+хэт, бас, тема (лид/вокал/аккорды).
-    /// Колесо ставит точку голоса на его долях: барабан 6 раз
-    /// за такт — 6 точек голоса по кругу.
+    /// Masks for the main voices (the same bit = the same beat):
+    /// kick, snare+hat, bass, theme (lead/chords).
+    /// The wheel places a voice's dot on its beats: a drum 6 times
+    /// per bar — 6 dots of that voice around the circle.
     pub kick_hits: u16,
     pub snare_hits: u16,
     pub bass_hits: u16,
     pub theme_hits: u16,
-    /// Текущая фраза (бит = доля фразы, фраза = 2 такта):
-    /// рука делает оборот за фразу.
-    /// 32 бита = 2×16 шагов; встроенные стили 16-шаговые.
+    /// Current phrase (bit = phrase beat, phrase = 2 bars):
+    /// the hand makes one revolution per phrase.
+    /// 32 bits = 2×16 steps; built-in styles are 16-step.
     pub phrase_len: u8,
     pub phrase_pos: u8,
-    /// Точная фаза фразы 0..1 (целые шаги + доля текущего по часам):
-    /// якорь колеса без лесенки опросов.
+    /// Exact phrase phase 0..1 (whole steps + the current step's fraction from the clock):
+    /// the wheel's anchor without a polling staircase.
     pub phrase_phase: f32,
-    /// Фаза окна колеса 0..1 (окно = 4 такта): по ней идёт стрелка и
-    /// считается «возраст» точки. Окно шире фразы, поэтому след не
-    /// обрывается на границе фразы.
+    /// Wheel window phase 0..1 (window = 4 bars): the hand moves and
+    /// a dot's "age" is computed from it. The window is wider than the phrase, so the trace doesn't
+    /// break at the phrase boundary.
     pub window_phase: f32,
-    /// Ноты окна по голосам (бит = доля окна): кик, снейр+хэт,
-    /// бас, тема (лид/вокал/аккорды). Это настоящие ноты, а не план:
-    /// колесо показывает ровно то, что звучало, поэтому показа и звука
-    /// разойтись не могут.
+    /// Window notes by voice (bit = window beat): kick, snare+hat,
+    /// bass, theme (lead/chords). These are real notes, not a plan:
+    /// the wheel shows exactly what sounded, so the display and the sound
+    /// cannot diverge.
     pub pkick: u64,
     pub psnare: u64,
     pub pbass: u64,
     pub ptheme: u64,
-    /// Доли фразы, где что-то звучало (бит = доля фразы).
-    /// Сброс на старте фразы.
+    /// Phrase beats where something sounded (bit = phrase beat).
+    /// Reset at the start of a phrase.
     pub pplayed: u32,
 }
 
-/// Номер секции для снимка (порядок объявления SongSection).
+/// Section number for the snapshot (declaration order of SongSection).
 pub(crate) fn section_index(section: crate::arranger::SongSection) -> u8 {
     section as u8
 }
 
-/// Окно колеса: сколько шагов помнятся точки (4 такта = 64 шага).
-/// Шире музыкальной фразы (2 такта) — иначе на границе фразы маски
-/// обнулялись и радар очищался в тот момент, когда стрелка приходит
-/// вверх.
+/// Wheel window: how many steps dots are remembered for (4 bars = 64 steps).
+/// Wider than a musical phrase (2 bars) — otherwise at the phrase boundary the masks
+/// would reset and the radar would clear exactly when the hand arrives
+/// at the top.
 pub const WHEEL_WINDOW_STEPS: usize = 64;
 
-/// Метка шага: номер шага и его длительность в микросекундах.
+/// Step stamp: the step number and its duration in microseconds.
 ///
-/// Движок строит по меткам сетку времени. Ноты бывают не на каждом
-/// шаге (паузы формы, разреженные слои), а сетка нужна на каждом:
-/// пропуски, оценённые линейно по длине текущего шага, копят ошибку
-/// (при свинге длинный и короткий шаг отличаются на 20-50 мс, и через
-/// пару секунд ноты «опоздали» на полсекунды — ритм сбивался, а сетка
-/// пере-якоривалась). Метка — честная длина шага.
+/// The engine builds the time grid from the stamps. Notes aren't present on every
+/// step (form pauses, sparse layers), but the grid is needed on every one:
+/// gaps estimated linearly from the current step's length accumulate error
+/// (with swing a long and a short step differ by 20-50 ms, and after
+/// a couple of seconds notes are "late" by half a second — the rhythm stumbles and the grid
+/// re-anchors). A stamp is the honest step length.
 #[derive(Clone, Copy, Debug)]
 pub struct StepMark {
     pub step: u64,
     pub us: u32,
 }
 
-/// Тень перехода: следующий кусок, который поет поверх грува текущего
-/// в шве. Голос входит мягко (громкость растет к концу шва), грув
-/// остается один — иначе стык превратится в двух голосов.
+/// Transition shadow: the next chunk that sings over the current groove
+/// in the seam. The voice enters softly (volume grows toward the end of the seam), the groove
+/// stays single — otherwise the join turns into two voices.
 struct Shadow {
     arranger: Arranger,
     song: SongContext,
@@ -112,72 +112,72 @@ struct Shadow {
 
 pub struct Composer {
     queue: Arc<ArrayQueue<NoteEvent>>,
-    /// Метки шагов (длина каждого шага): движок строит по ним сетку
-    /// времени. Без них сетка строится по нотам, и пропуски оцениваются
-    /// линейно — тайминг уплывает (ритм сбивается).
+    /// Step stamps (length of each step): the engine builds the time
+    /// grid from them. Without them the grid is built from notes and gaps are estimated
+    /// linearly — timing drifts (the rhythm stumbles).
     marks: Arc<ArrayQueue<StepMark>>,
     style: Arc<RwLock<Box<dyn Style>>>,
     mixer: Arc<RwLock<MixerState>>,
     stop: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
-    /// Сид в shared-владении: Flutter меняет его наживую,
-    /// петля подхватывает изменение без перезапуска потока.
+    /// Seed in shared ownership: Flutter changes it live,
+    /// the loop picks up the change without restarting the stream.
     seed: Arc<RwLock<u64>>,
     tempo: LiveTempo,
-    /// Ручка intensity фронта (дефолт 1.0): читается каждый шаг.
+    /// Frontend intensity knob (default 1.0): read every step.
     intensity: Arc<RwLock<f32>>,
-    /// Сюда каждый шаг пишется эффективный BPM — движок строит
-    /// от него время темпового эха.
+    /// Each step the effective BPM is written here — the engine builds
+    /// the tempo echo's time from it.
     bpm_out: Arc<RwLock<f32>>,
-    /// Сюда каждый шаг пишется открытость фильтра формы (0..1) —
-    /// движок свистит срезом верхов к дропу.
+    /// Each step the form's filter openness (0..1) is written here —
+    /// the engine sweeps the high-cut toward the drop.
     filter_open: Arc<RwLock<f32>>,
-    /// Счетчик отданных в очередь нот (диагностика для UI).
+    /// Counter of notes pushed to the queue (diagnostics for UI).
     pushed: Arc<AtomicU64>,
-    /// Ноты, не влезшие в очередь (генератор обгоняет движок).
-    /// Ненулевой счетчик = ритм дырявит: пропадают доли.
+    /// Notes that didn't fit in the queue (the generator outruns the engine).
+    /// Nonzero counter = the rhythm has holes: beats go missing.
     dropped: Arc<AtomicU64>,
-    /// Живой снимок для визуалайзера (делится с сессией).
+    /// Live snapshot for the visualizer (shared with the session).
     visual: Arc<RwLock<VisualSnap>>,
-    /// Флаг «оборвать старые голоса»: ставится при смене сида или стиля.
+    /// "Cut old voices" flag: set on a seed or style change.
     voice_reset: Arc<AtomicBool>,
-    // Состояние генерации (бывшие локальные переменные run):
+    // Generation state (former local variables of `run`):
     rng: StdRng,
     arranger: Arranger,
     song: SongContext,
     current_seed: u64,
     step_count: usize,
     last_style_name: String,
-    /// Фраза, для которой собраны маски нот (монотонный индекс) и
-    /// глобальный шаг ее старта. Маски — по настоящим нотам фразы:
-    /// колесо показывает ровно то, что звучит.
+    /// The phrase for which note masks are collected (monotonic index) and
+    /// the global step of its start. Masks are from the phrase's real notes:
+    /// the wheel shows exactly what sounds.
     last_planned: usize,
     phrase_start: usize,
-    /// Маски нот фразы по голосам: кик, перкуссия, бас, мелодия.
+    /// Phrase note masks by voice: kick, percussion, bass, melody.
     plan: [u64; 4],
-    /// Партитура стиля (нужна тени перехода).
+    /// Style score (needed by the transition shadow).
     score: crate::arranger::Score,
-    /// Аранж стиля: кто играет в каждой секции.
+    /// Style arrangement: who plays in each section.
     layers: crate::piece::Layers,
-    /// Как стиль склеивает куски.
+    /// How the style glues chunks together.
     transition: crate::piece::Transition,
-    /// Тень: голос следующего куска, который поет поверх грува текущего
-    /// в шве. `None` — вне шва.
+    /// Shadow: the next chunk's voice, which sings over the current groove
+    /// in the seam. `None` — outside a seam.
     shadow: Option<Shadow>,
-    /// Отдельный RNG тени: общий поток сместил бы ноты основного.
+    /// Separate RNG for the shadow: a shared stream would shift the main voice's notes.
     shadow_rng: StdRng,
-    /// Момент старта текущего шага: точная фаза внутри шага
-    /// для якоря колеса (лесенки опросов больше нет).
+    /// Start moment of the current step: exact phase within the step
+    /// for the wheel's anchor (no polling staircase anymore).
     step_t0: Instant,
-    /// Последняя нота каждого слота: (высота, шаг, на котором она
-    /// перестанет звучать). Нужна лигам: повтор той же высоты, пока
-    /// нота еще звучит, продлевает ее, а не переатакует.
+    /// Last note of each slot: (pitch, the step on which it
+    /// stops sounding). Needed for ties: repeating the same pitch while the
+    /// note still sounds extends it rather than re-attacking.
     last_note: [Option<(u8, u64)>; Slot::COUNT],
 }
 
-/// Лига возможна, только если пришла та же высота, предыдущая нота
-/// еще звучит и детерминированный бросок ниже вероятности стиля.
-/// Разные высоты — не лига: моно-голос сам сольет их легато.
+/// A tie is possible only if the same pitch arrives, the previous note
+/// still sounds, and a deterministic roll falls below the style's probability.
+/// Different pitches aren't a tie: the mono voice will legato them itself.
 fn should_tie(
     tie_repeats: f32,
     last: Option<(u8, u64)>,
@@ -261,8 +261,8 @@ impl Composer {
                 )
             }
         };
-        // Первый кусок: форма конечна (30-60 с), дальше куски идут
-        // подряд, и каждый следующий пишется заранее (стык написан).
+        // First chunk: the form is finite (30-60 s), further chunks go
+        // back-to-back, and each next one is written in advance (the join is written).
         let plan =
             crate::piece::plan_piece(current_seed, bpm, score.cycle, 0, 0, transition, layers);
         let mut arranger = Arranger::with_plan(current_seed, bpm, score, plan, transition, layers);
@@ -288,8 +288,8 @@ impl Composer {
             song,
             current_seed,
             step_count: 0,
-            // Имя уже текущего стиля: первый шаг не должен приниматься
-            // за «смену стиля» и сбрасывать только что созданную форму.
+            // The name is already the current style's: the first step must not be treated
+            // as a "style change" and reset the freshly created form.
             last_style_name: style_name,
             last_planned: usize::MAX,
             phrase_start: 0,
@@ -305,12 +305,12 @@ impl Composer {
     }
 
     fn reset_form(&mut self, seed: u64) {
-        // Старая генерация обрывается: голоса и хвост комнаты гаснут,
-        // а не доигрывают поверх новой (слушатель сам сменил сид/стиль —
-        // резкий обрыв уместен).
+        // Old generation is cut off: voices and the room tail fade out,
+        // rather than playing over the new one (the listener changed seed/style themselves —
+        // an abrupt cut is appropriate).
         self.voice_reset.store(true, Ordering::Relaxed);
-        // Партитура — от текущего стиля и сида: каждый сид выбирает
-        // свой вариант формы, а не только тему внутри одной сетки.
+        // The score comes from the current style and seed: each seed picks
+        // its own form variant, not just a theme within one grid.
         let (score, bpm, transition, layers) = match self.style.read() {
             Ok(g) => (
                 g.arrangement_for_seed(seed),
@@ -328,8 +328,8 @@ impl Composer {
                 )
             }
         };
-        // Живая смена вступает с следующего такта: остаток текущего куска
-        // перепланируется под новый сид/стиль, отыгранное — не трогаем.
+        // A live change takes effect from the next bar: the remainder of the current chunk
+        // is re-planned for the new seed/style, what has played is left alone.
         let bar = self.arranger.piece_bar();
         let piece = self.arranger.piece();
         self.current_seed = seed;
@@ -337,55 +337,55 @@ impl Composer {
         self.score = score;
         self.transition = transition;
         self.layers = layers;
-        // Тень прошлого шва не переносится в новую форму.
+        // The previous seam's shadow isn't carried into the new form.
         self.shadow = None;
         let plan = crate::piece::plan_piece(seed, bpm, score.cycle, piece, bar, transition, layers);
         self.arranger = Arranger::with_plan(seed, bpm, score, plan, transition, layers);
         self.song = self.arranger.advance_measure();
         self.step_count = 0;
         self.last_planned = usize::MAX;
-        // Голоса погашены движком: запомненные ноты больше не звучат
-        // и не должны давать лигу через границу стиля/сида.
+        // Voices have been silenced by the engine: remembered notes no longer sound
+        // and must not produce a tie across the style/seed boundary.
         self.last_note = [None; Slot::COUNT];
     }
 
-    /// Один шаг генерации: ноты + длительность до следующего шага.
-    /// Чистая механика без сна — используется и петлей, и офлайн-рендером.
+    /// One generation step: notes + duration until the next step.
+    /// Pure mechanics without sleep — used by both the loop and the offline renderer.
     pub fn next_step(&mut self) -> (Vec<NoteEvent>, f32) {
-        // Часы шага: снимок пишется в его начале — точная фаза
-        // (доля внутри шага) едет колесу вместе с позицией.
+        // Step clock: the snapshot is written at its beginning — the exact phase
+        // (fraction within the step) goes to the wheel along with the position.
         self.step_t0 = Instant::now();
 
-        // Живая смена сида: пересоздаем RNG и форму,
-        // поток и очередь при этом не трогаем.
+        // Live seed change: recreate the RNG and the form,
+        // without touching the stream or the queue.
         let live_seed = snapshot(&self.seed);
         if live_seed != self.current_seed {
             self.reset_form(live_seed);
         }
 
-        // Имя стиля читаем коротким гардом, чтобы сброс формы
-        // (&mut self) не конфликтовал с чтением стиля.
+        // We read the style name with a short guard so the form reset
+        // (&mut self) doesn't conflict with reading the style.
         let style_name = match self.style.read() {
             Ok(g) => g.name().to_string(),
             Err(poisoned) => poisoned.into_inner().name().to_string(),
         };
         if self.last_style_name != style_name {
-            // Смена стиля начинает новую форму с чистого листа.
+            // A style change starts a new form from scratch.
             self.reset_form(self.current_seed);
             self.last_style_name = style_name;
         }
 
-        // Микс читаем после сбросов: живой seed/style мог сменить
-        // каст, и старый срез активных треков не должен попасть в
-        // первый шаг новой формы.
+        // We read the mix after the resets: a live seed/style may have changed
+        // the cast, and a stale slice of active tracks must not get into
+        // the first step of the new form.
         let mut active_tracks = [0usize; MAX_ACTIVE_TRACKS];
         let active_count = match self.mixer.read() {
             Ok(state) => state.active_ids(&mut active_tracks),
             Err(poisoned) => poisoned.into_inner().active_ids(&mut active_tracks),
         };
-        // active_ids уже сортирует — порядок детерминирован.
-        // Треки с громкостью 0 сюда не попадают: выключенные слоты
-        // не грузят ни генерацию, ни DSP.
+        // active_ids already sorts — order is deterministic.
+        // Tracks with volume 0 don't get here: muted slots
+        // load neither generation nor DSP.
         let active = &active_tracks[..active_count];
 
         let guard = match self.style.read() {
@@ -395,9 +395,9 @@ impl Composer {
         let style = &**guard;
 
         let steps_per_measure = style.steps_per_measure();
-        // Эффективный темп: ручка фронта перекрывает дефолт стиля.
-        // Валидация и clamp — тот же путь, что у UI и статуса
-        // (core::normalize_tempo): наружу не уезжает незвучащий BPM.
+        // Effective tempo: the frontend knob overrides the style default.
+        // Validation and clamping follow the same path as UI and status
+        // (core::normalize_tempo): a non-sounding BPM never goes out.
         let bpm = snapshot(&self.tempo)
             .and_then(normalize_tempo)
             .or_else(|| normalize_tempo(style.bpm()))
@@ -407,27 +407,30 @@ impl Composer {
         }
         let base_step_secs = base_step_secs(bpm, steps_per_measure);
         let step_in_measure = self.step_count % steps_per_measure;
-        // Один снимок на шаг: план и живой рендер видят одну интенсивность.
+        // One snapshot per step: the plan and the live render see the same intensity.
         let intensity = snapshot(&self.intensity).clamp(0.0, 2.0);
 
         if step_in_measure == 0 && self.step_count > 0 {
             self.song = self.arranger.advance_measure();
-            // Тень (следующий кусок) идет в ногу с основным: те же такты.
+            // The shadow (next chunk) keeps in step with the main one: the same bars.
             if let Some(shadow) = self.shadow.as_mut() {
                 shadow.song = shadow.arranger.advance_measure();
             }
         }
-        // Открытость фильтра — от свежей секции: движок свистит
-        // срезом верхов к дропу каждый шаг.
+        // Filter openness — from the fresh section: the engine sweeps
+        // the high-cut toward the drop every step.
         if let Ok(mut share) = self.filter_open.write() {
-            *share = crate::arranger::section_openness(self.song.section, self.song.progress);
+            // The form sets the base, the listener adds a constant offset.
+            *share = (crate::arranger::section_openness(self.song.section, self.song.progress)
+                + crate::core::tone_open_offset())
+            .clamp(0.0, 1.0);
         }
 
-        // Тень перехода: в шве (финале куска) голос следующего куска
-        // входит поверх грува текущего — стык не режет фразу. Тень
-        // строится, когда шов начался (план следующего куска к этому
-        // моменту уже написан), и поет только мелодические группы:
-        // грув остается один.
+        // Transition shadow: in the seam (chunk finale) the next chunk's voice
+        // enters over the current groove — the join doesn't cut the phrase. The shadow
+        // is built when the seam starts (the next chunk's plan is already
+        // written by then), and sings only melodic groups:
+        // the groove stays single.
         if self.shadow.is_none() && self.arranger.in_joint() {
             if let (Some(plan), crate::piece::Transition::Rolling { .. }) =
                 (self.arranger.next_plan().cloned(), self.transition)
@@ -441,17 +444,17 @@ impl Composer {
                 self.shadow_rng = StdRng::seed_from_u64(self.current_seed ^ 0x5A4D);
             }
         } else if !self.arranger.in_joint() {
-            // Шов кончился: голос следующего куска теперь поет сам
-            // арранжер — тень уходит, чтобы не было двух голосов.
+            // The seam ended: the next chunk's voice now sings on its own
+            // as the arranger — the shadow goes away so there aren't two voices.
             self.shadow = None;
         }
 
-        // Окно колеса: последние 64 шага (4 такта) настоящих нот.
-        // Точки на колесе — ровно то, что звучит: отдельного пре-рендера
-        // больше нет, поэтому показа и звука разойтись не может.
-        // Окно шире фразы (32 шага) специально: иначе на границе фразы
-        // маски обнулялись — и радар очищался как раз в тот момент, когда
-        // стрелка приходит в верхнюю точку.
+        // Wheel window: the last 64 steps (4 bars) of real notes.
+        // Dots on the wheel are exactly what sounds: there is no separate pre-render
+        // anymore, so display and sound cannot diverge.
+        // The window is wider than the phrase (32 steps) on purpose: otherwise at the phrase boundary
+        // the masks would reset — and the radar would clear exactly when the
+        // hand arrives at the top.
         let window_pos = self.step_count % WHEEL_WINDOW_STEPS;
         if window_pos == 0 {
             self.plan = [0u64; 4];
@@ -468,10 +471,10 @@ impl Composer {
         };
         let mut notes = render_style(&**guard, &mut sctx);
 
-        // Лиги на моно-слоях: повтор той же высоты, пришедший пока нота
-        // еще звучит, не переатакует, а продлевает ее. Это делает длину
-        // ноты слышимой: иначе следующий онсет режет бас до шага.
-        // Полифония накладывает голоса сама — лига нужна только басу.
+        // Ties on mono layers: a repeat of the same pitch arriving while the note
+        // still sounds doesn't re-attack but extends it. This makes the note's
+        // length audible: otherwise the next onset cuts the bass short of a step.
+        // Polyphony stacks voices by itself — ties are only needed for the bass.
         let due_now = self.step_count as u64;
         let guides = style.slot_guides();
         for note in notes.iter_mut() {
@@ -502,12 +505,12 @@ impl Composer {
             self.last_note[slot.index()] = Some((note.midi_pitch, end));
         }
 
-        // Тень перехода: голос следующего куска входит поверх грува
-        // текущего. Только мелодические группы (лид, вокал): грув и
-        // пампа остаются одни, иначе шов превратится в двух голосов.
-        // Громкость тени растёт к концу шва — вход слышен как событие,
-        // а не как фон из ниоткуда. Растёт по шагам, а не по тактам:
-        // голос поднимается плавно, без ступенек.
+        // Transition shadow: the next chunk's voice enters over the
+        // current groove. Only melodic groups (lead): the groove and
+        // the pump stay single, otherwise the seam turns into two voices.
+        // The shadow's volume grows toward the end of the seam — the entrance is heard as an event,
+        // not as background from nowhere. It grows per step, not per bar:
+        // the voice rises smoothly, without steps.
         let shadow_gain = self
             .arranger
             .joint_step_progress(steps_per_measure, step_in_measure)
@@ -527,7 +530,7 @@ impl Composer {
                 for mut n in render_style(&**guard, &mut shctx) {
                     let melodic = matches!(
                         Slot::from_id(n.instrument_id).map(Slot::role),
-                        Some(InstrumentRole::Lead) | Some(InstrumentRole::Vocal)
+                        Some(InstrumentRole::Lead)
                     );
                     if !melodic {
                         continue;
@@ -538,12 +541,12 @@ impl Composer {
             }
         }
 
-        // Свинг сида поверх стиля: у каждого сида свой кач.
-        // Считаем ДО снимка: длительность нужна и штампам, и точной
-        // фазе фразы для колеса.
+        // Seed swing on top of the style: every seed has its own bounce.
+        // We compute it BEFORE the snapshot: the duration is needed both for the stamps and for the
+        // wheel's exact phrase phase.
         let swing = style.swing_ratio() * crate::styles::swing_var(self.song.seed_hash);
         let duration = swing_step_secs(base_step_secs, swing, step_in_measure);
-        // Точная фаза фразы: целые шаги + доля текущего по часам.
+        // Exact phrase phase: whole steps + the current step's fraction from the clock.
         let phrase_len = (2 * steps_per_measure).min(32);
         let phrase_pos = self.step_count.saturating_sub(self.phrase_start).min(31);
         let step_frac = (Instant::now()
@@ -552,11 +555,11 @@ impl Composer {
             / duration.max(0.001))
         .clamp(0.0, 1.0);
         let phrase_phase = (phrase_pos as f32 + step_frac) / phrase_len.max(1) as f32;
-        // Фаза окна колеса: стрелка и «возраст» точки считаются по ней.
+        // Wheel window phase: the hand and a dot's "age" are computed from it.
         let window_phase = (window_pos as f32 + step_frac) / WHEEL_WINDOW_STEPS as f32;
 
-        // Маски окна — по настоящим нотам (включая голос тени): колесо
-        // и звук берут один и тот же источник, поэтому разойтись не могут.
+        // Window masks — from real notes (including the shadow voice): the wheel
+        // and the sound take the same source, so they cannot diverge.
         if !notes.is_empty() {
             let bit = 1u64 << window_pos.min(WHEEL_WINDOW_STEPS - 1);
             for n in notes.iter() {
@@ -564,18 +567,18 @@ impl Composer {
                     Some(InstrumentRole::Kick) => self.plan[0] |= bit,
                     Some(InstrumentRole::Snare | InstrumentRole::Hat) => self.plan[1] |= bit,
                     Some(InstrumentRole::Bass) => self.plan[2] |= bit,
-                    Some(InstrumentRole::Lead | InstrumentRole::Vocal | InstrumentRole::Chords) => {
+                    Some(InstrumentRole::Lead | InstrumentRole::Chords) => {
                         self.plan[3] |= bit
                     }
                     _ => {}
                 }
             }
         }
-        // Живой снимок для визуалайзера: доля такта + маски звучавших
-        // долей по главным голосам (бит = 16-я доля, сброс на границе
-        // такта) + план фразы (оборот руки — фраза, точки стоят сразу).
-        // Позиция темы — та же формула, что в play_guide: первая
-        // половина мотива в первом такте фразы, вторая — во втором.
+        // Live snapshot for the visualizer: bar fraction + masks of sounding
+        // beats for the main voices (bit = 16th note, reset at the bar
+        // boundary) + the phrase plan (one hand revolution = phrase, dots placed immediately).
+        // Theme position — the same formula as in `play_guide`: the first
+        // half of the motif in the first bar of the phrase, the second — in the second.
         if let Ok(mut snap) = self.visual.write() {
             let motif_len = self.song.motif.len().max(1);
             let bar_in_phrase = self.song.measure_index.saturating_sub(1) % 2;
@@ -607,15 +610,13 @@ impl Composer {
                         Some(InstrumentRole::Kick) => kick |= bit,
                         Some(InstrumentRole::Snare | InstrumentRole::Hat) => snare |= bit,
                         Some(InstrumentRole::Bass) => bass |= bit,
-                        Some(
-                            InstrumentRole::Lead | InstrumentRole::Vocal | InstrumentRole::Chords,
-                        ) => theme |= bit,
+                        Some(InstrumentRole::Lead | InstrumentRole::Chords) => theme |= bit,
                         _ => {}
                     }
                 }
             }
-            // Сыграно фразы: бит ставится, когда шаг отзвучал.
-            // Сброс на старте фразы.
+            // Phrase played: the bit is set when a step has finished sounding.
+            // Reset at the start of the phrase.
             let mut played = snap.pplayed;
             if phrase_pos == 0 {
                 played = 0;
@@ -647,9 +648,9 @@ impl Composer {
         }
 
         self.step_count += 1;
-        // Due-штамп: нота знает свой шаг и его длительность —
-        // насос выстрелит точно в медиакадр, когда бы ни разобрал
-        // очередь (фронт больше не владеет таймингом).
+        // Due stamp: a note knows its step and its duration —
+        // the pump will fire it exactly at its media frame, no matter when it
+        // drains the queue (the frontend no longer owns timing).
         let step_us = (duration.max(0.001) * 1_000_000.0) as u32;
         let due_step = self.step_count as u64 - 1;
         for note in notes.iter_mut() {
@@ -665,24 +666,24 @@ impl Composer {
         while !self.stop.load(Ordering::Relaxed) {
             if self.is_paused.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(100));
-                // Сдвигаем дедлайн, чтобы после паузы не было "догоняющей" очереди шагов.
+                // We shift the deadline so there's no "catch-up" queue of steps after a pause.
                 next_deadline = Instant::now();
                 continue;
             }
 
             let (notes, step_duration) = self.next_step();
-            // Метка шага — всегда, даже если на шаге нет нот: движок по
-            // ней знает честную длину шага и строит точную сетку времени.
-            // Без меток сетка строится по нотам, пропуски оцениваются
-            // линейно, и тайминг уплывает (ритм сбивается).
+            // A step stamp — always, even if the step has no notes: from it the engine
+            // knows the honest step length and builds an exact time grid.
+            // Without stamps the grid is built from notes, gaps are estimated
+            // linearly, and timing drifts (the rhythm stumbles).
             let step_us = (step_duration.max(0.001) * 1_000_000.0) as u32;
             let _ = self.marks.push(StepMark {
                 step: self.step_count.saturating_sub(1) as u64,
                 us: step_us,
             });
-            // Полная очередь: дропаем новейшую ноту, старые не трогаем.
-            // Считаем отдельно: молчаливый дроп — это «ритм сбился»,
-            // а по счетчику видно, что именно генератор не успевает.
+            // Full queue: we drop the newest note, leaving older ones alone.
+            // Counted separately: a silent drop means "the rhythm stumbled",
+            // while the counter shows that the generator specifically is falling behind.
             let mut ok = 0u64;
             let mut lost = 0u64;
             for note in notes {
@@ -699,9 +700,9 @@ impl Composer {
                 self.dropped.fetch_add(lost, Ordering::Relaxed);
             }
 
-            // Шагомер без дрейфа: спим до дедлайна, отставание не накапливаем.
-            // Кламп защищает от паники Duration::from_secs_f32 при кривом
-            // кастомном стиле (NaN/Inf/отрицательная длительность).
+            // Drift-free stepper: sleep until the deadline, don't accumulate lag.
+            // The clamp protects against a Duration::from_secs_f32 panic with a broken
+            // custom style (NaN/Inf/negative duration).
             let safe_step = step_duration.clamp(0.001, 4.0);
             next_deadline += Duration::from_secs_f32(safe_step);
             let now = Instant::now();
@@ -714,7 +715,7 @@ impl Composer {
     }
 }
 
-/// Совместимая обертка над [`Composer::run`].
+/// Compatibility wrapper over [`Composer::run`].
 pub fn start_composing(
     queue: Arc<ArrayQueue<NoteEvent>>,
     style_lock: Arc<RwLock<Box<dyn Style>>>,
@@ -733,11 +734,11 @@ mod tests {
     use crate::mixer::MixerState;
 
     #[test]
-    fn deep_bass_lengths_vary() {
-        // Интеграция длин: композитор реально отдает басу разные
-        // длительности, а не одну константу тембра.
+    fn bass_lengths_vary() {
+        // Integration of lengths: the composer really gives the bass different
+        // durations, not a single timbral constant.
         let style = Arc::new(RwLock::new(
-            crate::styles::make_style("deep").expect("deep style"),
+            crate::styles::make_style("club").expect("club style"),
         ));
         let mixer = Arc::new(RwLock::new(MixerState::new()));
         {

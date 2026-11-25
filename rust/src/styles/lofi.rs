@@ -1,18 +1,18 @@
 use super::riff::RiffKind;
 use super::transition::{Kind, Spec};
-use super::{RoleGuide, Style, StyleGroup, Voicing};
+use super::{Melody, RoleGuide, Style, StyleGroup, Voicing};
 use crate::instruments::Slot;
 
-/// Lo-fi: пыльно, тепло, криво. Якоря бум-бэпа (кик на 1 и синкопу,
-/// снейр на 2 и 4, глубокий бас, Rhodes) + виниловый треск.
-/// Никаких EDM-лидов, квантайза в ноль и взрывных дропов: энергия
-/// сплющена, свинг сильный, верх срезан.
-/// Мягкий минор без шестой ступени: пентатоника плюс девятая — джазовая
-/// подложка с открытым верхом, а не блюзовый квадрат. Шестая не звучит
-/// намеренно: на ней лоуфай теряет ленивую неопределенность.
+/// Lo-fi: dusty, warm, crooked. Boom-bap anchors (kick on 1 and syncopation,
+/// snare on 2 and 4, deep bass, Rhodes) + vinyl crackle.
+/// No EDM leads, zero quantise and explosive drops: energy
+/// flattened, swing strong, top cut off.
+/// Soft minor without sixth degree: pentatonic scale plus ninth - jazz
+/// an open top pad rather than a blues cell. The sixth doesn't sound
+/// deliberately: on it, lo-fi loses its lazy uncertainty.
 const SCALE: [u8; 6] = [48, 50, 51, 53, 55, 58];
 
-/// Лоуфайные ходы: ii–IV–i и плавные секвенции без резких скачков.
+/// Lo-fi moves: ii–IV–i and smooth sequences without sudden jumps.
 const PROGS: [[u8; 4]; 6] = [
     [0, 3, 4, 5],
     [0, 4, 3, 5],
@@ -21,7 +21,7 @@ const PROGS: [[u8; 4]; 6] = [
     [5, 3, 0, 4],
     [0, 5, 4, 3],
 ];
-/// Лоуфай не спешит: аккорд держится 4–8 тактов.
+/// Lo-fi is in no hurry: the chord lasts 4-8 bars.
 const HARMONY_BARS: [usize; 2] = [4, 8];
 
 const KICK_W: &[f32] = &[
@@ -31,45 +31,45 @@ const SNARE_W: &[f32] = &[
     0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.15,
 ];
 const HAT_W: &[f32] = &[
-    // Пыльные тики: акцент на оффбитах, ровные доли тише.
-    // Было наоборот (1.0 на каждой доле) — яркий металлический хэт
-    // доминировал в миксе (стем-аудит: самый ВЧ голос).
+    // Dusty ticks: emphasis on offbeats, even beats are quieter.
+    // It was the other way around (1.0 on each beat) - a bright metal hat
+    // dominated the mix (stem audit: most high-frequency voice).
     0.3, 0.0, 0.9, 0.0, 0.3, 0.0, 0.9, 0.0, 0.3, 0.0, 0.9, 0.0, 0.3, 0.0, 0.9, 0.4,
 ];
 const BASS_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
 const PAD_W: &[f32] = &[
-    // Пэд — фундамент: якорь на даунбите (дышит приоритетом 0.95),
-    // а не редкий гость. Без дрона lofi разваливается на точки.
+    // Pad - foundation: anchor on downbeat (breathes priority 0.95),
+    // not a rare guest. Without a drone, lofi falls apart into dots.
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
 const KEYS_W: &[f32] = &[
-    // Rhodes-компинг: даунбит-якорь + стабы внутри такта.
-    // Два хита на такт давали «раз в 3 секунды с обрывом» —
-    // пыльность держим редкостью фраз, а не пустотой такта.
+    // Rhodes comping: downbeat anchor + stabs inside the bar.
+    // Two hits per bar gave “once every 3 seconds with a break” -
+    // We keep dustiness with the rarity of phrases, and not with the emptiness of the bar.
     1.0, 0.0, 0.0, 0.45, 0.0, 0.0, 0.5, 0.0, 0.6, 0.0, 0.4, 0.0, 0.0, 0.0, 0.45, 0.0,
 ];
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-// Длинная гитара поверх Rhodes: редкие ноты с дыханием.
-// База боя — ровные восьмые (ref: Coming Home); даунстроуки на долях —
-// якоря (бой слышно всегда), апстроуки заполняют.
+// Long guitar over Rhodes: rare notes with breath.
+// The strum base is even eighths (ref: Coming Home); downstrokes on beats —
+// anchors (the strum is always audible), upstroke fills.
 const GUITAR_STRUM8_W: &[f32] = &[
     1.0, 0.0, 0.65, 0.0, 1.0, 0.0, 0.65, 0.0, 1.0, 0.0, 0.65, 0.0, 1.0, 0.0, 0.65, 0.4,
 ];
-// Второй бум-бэп: синкопа уехала с 7 на 6, ответ с 10 на 12.
+// Second boom-bap: syncopation went from 7 to 6, response from 10 to 12.
 const KICK_BOOM_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.35, 0.0, 0.2, 0.0, 0.0, 0.0,
 ];
-// Халф-тайм: бочка на 1 и 2, воздух вместо суеты.
+// Half-time: kick drum for 1 and 2, air instead of fuss.
 const KICK_HALF_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-// Синкопированный фанк-кик (ref: Redbone — без прямой бочки).
-// Разреженный и заякоренный на 1: бум-бэп, а не пулемет.
-// (7 частых кандидатов давали кашу на высокой энергии/интенсивности.)
+// Syncopated funk kick (ref: Redbone - no straight kick).
+// Sparse and anchored at 1: boom-bap, not machine gun.
+// (7 common candidates gave mush at high energy/intensity.)
 const KICK_SYNCOP_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.4, 0.0,
 ];
@@ -77,13 +77,13 @@ const KICK_POLES: &[&[f32]] = &[KICK_W, KICK_BOOM_W, KICK_SYNCOP_W, KICK_HALF_W]
 const HAT_EVEN_W: &[f32] = &[
     0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45, 0.7, 0.45,
 ];
-// Разреженные оффбиты (ref: Snowman, Redbone — только слабые доли,
-// никаких шестнадцатых тиков).
+// Sparse offbeats (ref: Snowman, Redbone - only weak beats,
+// no sixteenth ticks).
 const HAT_SPARSE_W: &[f32] = &[
     0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.4,
 ];
 const HAT_POLES: &[&[f32]] = &[HAT_W, HAT_EVEN_W, HAT_SPARSE_W];
-// Шейкер: пыльные оффбиты.
+// Shaker: dusty offbeats.
 const SHAKER_LOFI_W: &[f32] = &[
     0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0,
 ];
@@ -120,8 +120,8 @@ impl Style for LofiStyle {
     }
 
     fn swing_ratio(&self) -> f32 {
-        // Тяжелый свинг референсов (Coming Home 1.69, Autumn ~1.5):
-        // бой качается, а не тикает.
+        // Heavy reference swing (Coming Home 1.69, Autumn ~1.5):
+        // the combat swings, not ticks.
         1.55
     }
 
@@ -138,12 +138,25 @@ impl Style for LofiStyle {
     }
 
     fn key_shift(&self) -> i8 {
-        // D-минор: на тон выше клубного C, мягче по регистру.
+        // D minor: a tone higher than club C, softer in register.
         2
     }
 
     fn density(&self) -> f32 {
         0.78
+    }
+
+    /// Lo-fi sings lazily: syncopations instead of a smooth grid, the notes drag on,
+    /// the downbeats gently reach out to the chord. First cell of the theme
+    /// returns - the hook is heard, and does not dissolve in variations.
+    fn melody(&self) -> Melody {
+        Melody {
+            onsets: super::phrase_mask(0b1001_0010_1001_0110),
+            chord_snap: 0.6,
+            sustain: 1.3,
+            cells: [0, 2, 0, 3],
+            phrased: true,
+        }
     }
 
     fn arrangement(&self) -> crate::arranger::Score {
@@ -177,32 +190,32 @@ impl Style for LofiStyle {
         )
     }
 
-    /// Аранж лофай: пэд и Rhodes держат тему (тема не должна пустовать),
-    /// винил и дождь — ровный фон, вокал-чопы — только как гость в
-    /// передышке. Дроп у лофай — это не удар, а смена тембра.
+    /// Arrange lo-fi: pad and Rhodes hold the theme (the theme should not be empty),
+    /// vinyl and rain - smooth background
+    /// post-chorus. A lo-fi drop is not a hit, but a change in timbre.
     fn arrangement_layers(&self) -> crate::piece::Layers {
         use crate::piece::{default_layers, L_GROOVE, L_HARMONY, L_TEXTURE, L_THEME};
         let base = default_layers();
         [
-            // Тема: грув, бас, пампа, тема и текстура.
+            // Theme: groove, bass, pump, theme and texture.
             L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
-            // Разгон: добавляется вокал.
+            // Build-up: the theme develops.
             base[1],
-            // Удар: тот же состав, что в теме, — у лофай нет «удара».
+            // Drop: the same composition as the theme — lofi has no “hit”.
             L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
-            // Передышка: грув и текстура, голос отдыхает.
+            // Breathing: groove and texture, the voice rests.
             L_GROOVE | L_TEXTURE,
         ]
     }
 
     fn transition(&self) -> crate::piece::Transition {
-        // Тихий стык: кусок закрывается и следующий начинается с чистого
-        // такта. Нахлёт здесь звучал бы как заедание.
+        // Quiet junction: the piece closes and the next one starts clean
+        // measure. A crossfade here would sound like stuttering.
         crate::piece::Transition::Cut
     }
 
-    /// Lofi не бьет, а выдыхает: тихий пикап хэта в конце разгона и
-    /// два шага пыли после него. Никакого ролла — это не клуб.
+    /// Lofi doesn't hit, but exhales: a quiet pickup hat at the end of build-up and
+    /// two steps of dust after it. No roll - this is not a club.
     fn transition_gesture(&self) -> Option<Spec> {
         Some(Spec::new(
             Kind::BreathPickup,
@@ -226,25 +239,25 @@ impl Style for LofiStyle {
     }
 
     fn treble_cutoff(&self) -> f32 {
-        // Замер против референсов (Autumn 1557, Snowman 824, Redbone 798):
-        // наш был 2504 — ярче всех. Темним к середине референсов.
+        // Metering against references (Autumn 1557, Snowman 824, Redbone 798):
+        // ours was 2504 - the brightest. Darken towards the middle of the references.
         5200.0
     }
 
-    /// Пыльная полка: энергия 0.32..0.70 — ни взрывов, ни провалов.
+    /// Dusty shelf: energy 0.32..0.70 - no explosions, no failures.
     fn shape_energy(&self, energy: f32) -> f32 {
         0.32 + 0.38 * energy
     }
 
-    /// Сайдчейн едва дышит: lofi качает мягко, без EDM-пампа.
+    /// The sidechain is barely breathing: lofi pumps softly, without EDM pump.
     fn sidechain_depth(&self) -> f32 {
         0.5
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Классика: барабаны + бас + Rhodes + гитара + винил + вокал-чопы.
-        // Нарезок-плака нет: поверх Rhodes и гитары они дают кашу —
-        // включить можно вручную, дефолт чистый.
+        // Classics: drums + bass + Rhodes + guitar + pad + vinyl +
+        // The guitar is the signature of the style: it’s plucked and Rhodes sings
+        // one theme in different voices (with a shifted echo grid).
         &[
             Slot::Bass,
             Slot::Kick,
@@ -253,25 +266,25 @@ impl Style for LofiStyle {
             Slot::Hat,
             Slot::Keys,
             Slot::Vinyl,
-            Slot::Vocal,
             Slot::Guitar,
+            Slot::Piano,
         ]
     }
 
     fn signature_slots(&self) -> &'static [Slot] {
-        // Rhodes и перебор гитары — лицо lofi; пэд и винил — краски.
+        // Rhodes and guitar picking - the face of lofi; The pad holds the harmony.
         &[Slot::Keys, Slot::Guitar]
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
-        // Саб-ковер: мягко и длинно, без резких атак. Тише драйва —
-        // акцент на гитаре и клавишах, бас только держит низ.
-        // Легато вместо чмоканья: длинные ноты (6 шагов) + частичный
-        // саб-перекос против дребезга презенса. Тепло оставлено (0.4,
-        // не 1.0) — глухой синус вместо баса не нужен.
-        // Уровень ниже гитары: замер спектра (Coming Home) — у нас доля
-        // низа 0.38 против 0.25 у референса.
-        // Пыльный бас ходит корнями (джиттер 1 — соседние ступени).
+        // Sub-carpet: soft and long, without sharp attacks. Quieter than the drive -
+        // the emphasis is on the guitar and keys, the bass only holds the bottom.
+        // Legato instead of smacking: long notes (6 steps) + partial
+        // sub-skew versus presence bounce. Heat left (0.4,
+        // not 1.0) - a dull sine instead of bass is not needed.
+        // Level below the guitar: spectrum measurement (Coming Home) - we have a share
+        // bottom 0.38 versus 0.25 for the reference.
+        // Dusty bass moves with roots (jitter 1 - adjacent stages).
         let bass = RoleGuide {
             energy_response: 0.8,
             gates: &[4.0, 6.0, 8.0],
@@ -316,11 +329,11 @@ impl Style for LofiStyle {
             vel_energy: 0.15,
             vel_jitter: 0.08,
             poles: Some(HAT_POLES),
-            // Хэт держит сетку полюсов: пульс вместо сетки сбивал ритм.
+            // Hat holds the grid of poles: the pulse, instead of the grid, knocked down the rhythm.
             ..RoleGuide::kit(HAT_W, 42, 0.34)
         };
-        // Нарезки гитары: тот же план боя, что у гитары (общий скелет
-        // роли), своим тембром и своим броском гейта. Гетерофония.
+        // Guitar cuts: the same strum plan as the guitar (shared skeleton
+        // roles), its timbre and its gate roll. Heterophony.
         let pluck = RoleGuide {
             gates: &[1.5, 2.0, 3.0],
             vel_base: 0.5,
@@ -334,6 +347,9 @@ impl Style for LofiStyle {
             phrase_rest: 0.2,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, &[1.5, 2.0, 3.0], 0.5)
         };
+        // Rhodes - lofi harmony: comping with wandering under the melody
+        // guitars. Does not duplicate the theme: two carriers shared the density and
+        // took the chord layer below the contract.
         let keys = RoleGuide {
             gates: &[4.0, 6.0, 8.0],
             vel_base: 0.6,
@@ -345,10 +361,10 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(KEYS_W, 0, 1, 2, &[4.0, 6.0, 8.0], 0.6)
         };
-        // Чужие слоты: приглушенные рабочие направляющие — включаются
-        // только ручкой фронта, дефолтный характер не ломают.
-        // Гость-808 в lofi — саб-дроп на 1, а не дабл паттерна кика:
-        // удвоение давало flam и наслоение низа.
+        // Alien slots: muted working guides - turned on
+        // only with the front handle, the default character is not broken.
+        // Guest-808 in lofi - sub-drop on 1, not a double kick pattern:
+        // doubling gave flam and layering bottom.
         const SUB_DROP_W: &[f32] = &[
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ];
@@ -356,34 +372,22 @@ impl Style for LofiStyle {
             vel_base: 0.8,
             ..RoleGuide::kit(SUB_DROP_W, 36, 0.8)
         };
-        // Пыль тише музыки: стем-аудит показал винил самым ярким
-        // после тёмных клавиш — убавляем подложку, не музыку.
+        // Dust is quieter than music: stem audit found vinyl to be the brightest
+        // after the dark keys, we turn down the background, not the music.
         let vinyl = RoleGuide {
             gates: &[300.0],
             vel_base: 0.15,
             vel_jitter: 0.05,
             ..RoleGuide::pitched(BED_W, 0, 0, 0, &[300.0], 0.15)
         };
-        let vocal = RoleGuide {
-            energy_response: 1.2,
-            gates: &[1.0, 1.5, 2.0],
-            vel_base: 0.45,
-            voice: Voicing::Scale {
-                degree: 2,
-                octave: 1,
-                jitter: 2,
-            },
-            ..RoleGuide::pitched(KEYS_W, 2, 1, 2, &[1.0, 1.5, 2.0], 0.45)
-        };
-        // Гитара поверх Rhodes: мотив сида длинными нотами с дыханием.
-        // База — ровные восьмые (бой слышно), апстроуки заполняют.
-        // Ведущий голос lofi — чуть громче саба.
-        // Громкость выше порога открытых струн (0.6): в теме звонко,
-        // в интро глухие ghost-удары. Трезвучие вместо одиночных щипков:
-        // уют открытых струн, атака мягкая (голос).
+        // Guitar - picking on the theme: one interval per hit, in a circle
+        // triad. Together with Rhodes keeps the melody lofi, but its grid
+        // shifted to an eighth note is an echo imitation, not a unison.
         const STRUM_IV: &[i8] = &[0, 2, 4];
         let guitar = RoleGuide {
-            energy_response: 1.0,
+            // Too much - lofi voice: it should not disappear in quiet
+            // verses, so the energy response is higher than neutral.
+            energy_response: 1.6,
             gates: &[1.5, 2.0, 3.0],
             vel_base: 0.85,
             vel_jitter: 0.08,
@@ -398,8 +402,8 @@ impl Style for LofiStyle {
             arp: true,
             ..RoleGuide::pitched(GUITAR_STRUM8_W, 0, 1, 0, &[1.5, 2.0, 3.0], 0.85)
         };
-        // Шейкер вне club: пыльные оффбиты для ручки фронта.
-        // Дождь: ровная пелена во все фразы (тише винила и музыки).
+        // Shaker outside club: dusty offbeats for the front handle.
+        // Rain: an even veil in all phrases (quieter than vinyl and music).
         let rain = RoleGuide {
             gates: &[150.0],
             vel_base: 0.35,
@@ -412,8 +416,8 @@ impl Style for LofiStyle {
             vel_jitter: 0.06,
             ..RoleGuide::kit(SHAKER_LOFI_W, 60, 0.25)
         };
-        // Соло-гитара вне автомикса: тихий перебор для ручки фронта.
-        // Дефолт lofi не тронут (там своя гитара-фингерпикинг).
+        // Lead guitar outside the automix: quiet fingerpicking for the front knob.
+        // The default lofi is not touched (it has its own fingerpicking guitar).
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
             gates: &[1.0, 1.5, 2.0],
@@ -425,6 +429,13 @@ impl Style for LofiStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 1, 2, &[1.0, 1.5, 2.0], 0.25)
         };
+        // Piano next to Rhodes: soft chord stabs, quieter than the theme.
+        let piano = RoleGuide {
+            energy_response: 0.8,
+            gates: &[3.0, 4.0, 6.0],
+            vel_base: 0.35,
+            ..RoleGuide::pitched(KEYS_W, 0, 0, 1, &[3.0, 4.0, 6.0], 0.35)
+        };
         [
             bass,
             kick,
@@ -435,11 +446,11 @@ impl Style for LofiStyle {
             keys,
             kick808,
             vinyl,
-            vocal,
             guitar,
             rain,
             shaker,
             guitar_lead,
+            piano,
         ]
     }
 }

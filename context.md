@@ -1,230 +1,157 @@
-# Continuum2 — контекст проекта
+# Continuum — Project Context
 
-## Что это
+## What it is
 
-Continuum2 — музыкальный генератор: Flutter-фронтенд + Rust-движок синтеза.
-Генерирует 30–60-секундные куски с написанной формой, финалом и швом в
-следующий кусок. Качество достигается только синтезом, без сэмплов.
+Continuum is a generative music engine: a Flutter frontend on top of a Rust
+synthesis engine. It produces endless 30–60 second pieces with a written form,
+a finale, and a seam into the next piece. All sound is synthesized — no samples.
 
-Ключевая цель: генерация **стиль-узнаваемая, живая и насыщенная** не за счёт
-количества нот, а за счёт контракта ансамбля (якоря, карманы, бюджет,
-исполнение), одного рифф-фундамента на сид, стилевых переходов на швах,
-каста инструментов из палитры стиля и нескольких написанных вариантов формы.
+The goal is music that is **style-recognizable, alive, and dense** not by note
+count but through an ensemble contract (anchors, pockets, budget, performance),
+one riff foundation per seed, style transitions at seams, an instrument cast
+from the style palette, and several written form variants.
 
-## Структура
+## Structure
 
-- `lib/`, `android/`, `ios/`, `linux/`, `macos/`, `windows/` — Flutter-приложение.
-- `rust/` — аудиодвижок.
-  - `rust/src/styles/` — стили и генерация партитуры:
-    - `mod.rs` — трейт `Style`, `RoleGuide`, общий `render_style`,
-      `play_guide_with_riff`, полюса грува, дыхание фраз, `Style::cast`,
-      `signature_slots`, `arrangement_for_seed`, тесты;
-    - `cast.rs` — детерминированный каст сида из палитры стиля;
-    - `contract.rs` — `StyleContract` (interlock баса/кика, бюджет
-      мелодических онсетов, регистровый потолок, velocity-арка фразы);
-    - `riff.rs` — `RiffCell`/`RiffKind`: один рифф-фундамент на сид;
-    - `transition.rs` — стилевые переходы со шва «разгон → удар»;
-    - `deephouse.rs`, `club.rs`, `rock.rs`, `phonk.rs`, `protoclub.rs`,
-      `lofi.rs` — направляющие, палитры, варианты формы, переходы и вид риффа.
-  - `rust/src/piece.rs` — написанная форма 30–60 с: полная арка, слои,
-    пропорциональная подгонка длин, шов кусков (`piece::Transition` — склейка
-    кусков, не путать со стилевым переходом).
-  - `rust/src/arranger.rs` — форма, секции, энергия, мотив, контекст такта
-    (`section_measure_index`, `previous_section`), выбор варианта формы по сиду.
-  - `rust/src/composer.rs` — тактовый цикл, тайминг, лиги, визуальный снимок.
-  - `rust/src/instruments/` — синтезаторы и `NoteEvent`.
-  - `rust/src/engine.rs` — микшер, sidechain, лимитер.
-  - `rust/src/space.rs` — реверб/пространство.
-  - `rust/src/playback.rs` — рендер, экспорт PCM16, пересборка каста на лету.
-- `build/` — артефакты и звуки (`build/sounds/`).
-- `context.md` — этот файл.
+- `lib/`, `android/`, `ios/`, `linux/`, `macos/`, `windows/` — Flutter app.
+- `rust/` — audio engine.
+  - `rust/src/styles/` — styles and score generation:
+    - `mod.rs` — `Style` trait, `RoleGuide`, shared `render_style`,
+      `play_guide_with_riff`, groove poles, phrase breath, `Style::cast`,
+      `signature_slots`, `arrangement_for_seed`, tests;
+    - `cast.rs` — deterministic seed cast from the style palette;
+    - `contract.rs` — `StyleContract` (bass/kick interlock, melodic onset budget,
+      register ceiling, phrase velocity arc);
+    - `riff.rs` — `RiffCell`/`RiffKind`: one riff foundation per seed;
+    - `transition.rs` — style transitions at the "build → drop" seam;
+    - `club.rs`, `lofi.rs` — guides, palettes, form variants, transitions, riff kind.
+  - `rust/src/piece.rs` — written 30–60 s form: full arc, layers, proportional
+    bar fitting, and the piece joint (`piece::Transition`; not to be confused
+    with a style transition).
+  - `rust/src/arranger.rs` — form, sections, energy, motif, measure context
+    (`section_measure_index`, `previous_section`), per-seed form variant.
+  - `rust/src/composer.rs` — bar cycle, timing, ties, visual snapshot.
+  - `rust/src/instruments/` — synthesizers, DSP primitives, and `NoteEvent`.
+  - `rust/src/engine.rs` — mixer, sidechain, reverb, limiter.
+  - `rust/src/space.rs` — reverb/space.
+  - `rust/src/playback.rs` — rendering, PCM16 export, live cast rebuild.
+  - `rust/src/api/` — public FFI surface for Dart.
+- `build/`, `rust/build/` — regenerable build artifacts (gitignored).
+- `context.md` — this file.
 
-## Git
+## Design invariants
 
-- Базовая линия: `f6c072f` — «один сид — один рифф-фундамент + стилевые
-  переходы».
-- Шаг «каст сида + варианты формы» закоммичен локально (`cfefb64`);
-  пуш не выполнялся.
-- Текущий шаг (стилевая гармония/тональность/плотность + тембры лидов) —
-  закоммичен локально; пуш не выполнялся.
-- Отклонённая riff-грамматика сохранена в локальной ветке
-  `backup/riff-grammar` (указывает на `a9dc665`). Текущий подход её не
-  использует: `RiffCell` по-прежнему окрашивает существующие инструменты.
+- Do not regress the sound approved at `f6c072f`: no timbre or mixer changes
+  without A/B listening.
+- One seed = one style riff foundation. The riff is a mask over existing voices,
+  not a new layer. Do not restore the rejected separate lead.
+- `Style::ensemble()` is a palette, not a whitelist. A cast must keep the
+  foundation, signature slots, and transition slots.
+- Every piece is a full `MainMotif → BuildUp → Drop → PostChorus` arc within
+  30–60 s; sections are never truncated into fragments.
+- Loudness comes only from `Slot::base_volume`, manual listener edits, and group
+  faders. No generated loudness automation.
+- Note length is a composition decision: it depends on instrument, style, and seed.
+- A transition is a gesture at the seam, not a permanent section pad; the tail
+  decays and slots are never duplicated.
+- Live changes take effect from the next bar; a manually edited mixer list
+  survives seed/style changes until reset.
+- Phone-safe: bass/kick stay centered, no excessive low-end widening, CPU bounded.
+- No samples: synthesis only.
 
-## Что сделано в текущем шаге
+## Current behavior
 
-### 1. Стилевая гармония, тональность и плотность
+### Generation
 
-- `styles::Harmony` — гармонический почерк стиля на сид: лад стиля,
-  пул прогрессий, гармонический ритм, сдвиг тональности и множитель
-  плотности. `render_style` строит `Harmony` и передает его в
-  `play_guide_with_riff` и `transition::render`. Общий `song.prog`
-  остался фолбэком и опорой тестов.
-- Новые хуки `Style`: `progressions`, `harmonic_rhythm`, `key_shift`,
-  `density`.
-- Стили:
-  - club — C-минор, ходы i–VI–iv–v, аккорд 2–4 такта, key 0, density 1.0;
-  - deep — F-дорийский (дорийский лад + key +5), мягкие ii–IV-ходы,
-    4–8 тактов, density 0.9;
-  - lofi — D-минор без шестой ступени (пентатоника + девятая),
-    плавные ходы, 4–8 тактов, density 0.78;
-  - rock — E-минорная пентатоника (key +4), квинтовые ходы, 2–4 такта,
-    density 1.12;
-  - phonk — A-фригийский (малая секунда), тёмные i–II–VII-ходы,
-    4 такта, density 0.86;
-  - proto — A-минор, редкие сдвиги, 4–8 тактов, density 0.92.
-- `modal_tone` больше не ломает выбранный стилем лад: сид-альтерации
-  (дорийская секста/фригийская секунда/блюзовая нота) включаются только
-  в натуральном миноре и пентатонике. Дорийский deep и фригийский phonk
-  остаются собой на всех сидах.
-- Переходы (`bass_root`, `scale_pitch`) используют тот же `Harmony`:
-  шов не выпадает из тональности стиля.
-- Сиды остаются разными: прогрессия и гармонический ритм выбираются
-  независимыми солями `splitmix64`, поэтому комбинации не ходят парами.
+- `styles::Harmony` defines per-seed mode, progression pool, harmonic rhythm,
+  key shift, and density. `render_style` passes it to `play_guide_with_riff`
+  and `transition::render`. The global `song.prog` remains a fallback.
+- `Melody` is a data-driven phrase grid: onset accents rotate by section/visit,
+  cell order is permuted/sequenced, echo voices are shifted by 1–2 eighths,
+  and the cadence sounds even with an empty mask.
+- `arranger::remix_for_cycle` varies `motif_b` and progression order per cycle.
+- The riff has three seed mutations plus a pickup; chord snap can reach the
+  7th/9th degree while cadences still resolve to the tonic.
+- The Lead group (`Pluck`, `Guitar`, `GuitarLead`) is disabled in the product:
+  forced to zero in `apply_style_mix`, hidden from `tracks()`/`groups()`, and
+  rejected by `set_track`.
+- Only two styles remain: **Club** (C minor, i–VI–iv–v, density 1.0) and
+  **Lo-Fi** (D minor without the sixth, 4–8 bar chords, density 0.78).
 
-### 2. Тембры лидов
+### Sound
 
-- Pluck: sub 0.22, detune 1.0025, фильтр Q 0.9 (срез 360–2760 Гц),
-  финальная полка 6.2 кГц, полосовой щипок 1.9 кГц вместо белого клика.
-- Guitar: burst темнее (alpha 0.5/0.62), drive 1.12/1.3, LP 2.5/3.2 кГц,
-  кабинет 3.8/4.7 кГц после сатурации, `VOICE_GAIN` 1.85.
-- Спектральные тесты-регрессии: pluck 2–5 кГц <2%, 5–10 кГц <0.5%;
-  guitar riff/lead 2–5 кГц <10%, 5–10 кГц <1%, тело 0.5–2 кГц >20%.
-- Замеры сольных стемов (20 с, seed 42): pluck centroid 305 Гц,
-  2–5 кГц 0.8%; guitar riff 1050 Гц / 10.2%; guitar lead 962 Гц / 12.0%;
-  lofi guitar 841 Гц / 6.6%. До реворка у гитар было 31–34% в 2–5 кГц.
-- Guitar RMS после реворка ~0.028 (riff) и ~0.051 (lead) — на 1–2 дБ ниже
-  прежнего, но не тонет под снейром (0.034) и ведет в рок-миксе.
+- Hat: classic 808-metal ratios (205/304/370/523/540/800 Hz) through a 10 kHz
+  band-pass at 2× oversampling and a 7 kHz high-pass.
+- Snare/clap: three body modes and a three-pulse 909 clap.
+- Bass: no second-harmonic interference, independent filter envelope,
+  keytracking, 15% saw in the presence path.
+- Guitar: fractional Karplus–Strong delay plus allpass, pick-position comb,
+  velocity from `to_bits()`, deterministic stereo. Pluck: 1.0 s tail and pitch envelope.
+- Pad/Keys: per-voice LFO/detune, soft electronic key transient for Rhodes.
+- Piano: ported from the earlier Continuum backend — three detuned strings,
+  nine inharmonic partials with individual decay, hammer/key transients,
+  a 34 Hz high-pass soundboard, and 9/820/0.18/1100 ms ADSR. New slot `Piano = 23`.
+- Engine: PCG32 noise, 3 ms lookahead limiter, table `fast_tanh`, TPDF dither,
+  sidechain driven by an 180 Hz low-passed kick envelope, `retune()` without
+  a reverb tail drop, O(1) volume lookup.
+- Space: cross-feedback, 20 ms predelay, modulated allpass.
+- Two-point BLEP was measurably better than four-point at Nyquist; 2×
+  oversampling is used only for hat metal.
 
-## Предыдущий шаг (`cfefb64`): каст, форма, микс
+### Live controls and UI
 
-### 1. Палитра и каст сида
+- Public API in `rust/src/api/playback.rs`: `playback_set_master_fx`,
+  `playback_reset_master_fx`, `playback_set_tone_open`. `PlaybackStatus`
+  carries current values (`reverb_wet`, `reverb_size`, `treble_hz`,
+  `sidechain`, `tone_open`). Manual swing was removed; the style/seed swing
+  is still used.
+- Master FX live above style defaults and survive seed/style/session changes;
+  reset also clears filter openness. Openness is a process-global atomic in
+  `core.rs`; neutral value 0 keeps the authored path and test determinism.
+- `ENGINE_VERSION = 2` (audible changes).
+- The Dart bridge is regenerated with:
+  `flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml`.
+  FRB cannot parse array lengths declared through `const`, so `VinylVoice`
+  uses literal `[f32; 3]` / `[usize; 3]`.
+- Mixer is available before Play; instrument volume is absolute 0–100%;
+  the debug journal and manual swing control were removed; tempo/energy/sound
+  reset buttons exist; the two reverb sliders were merged into one "Echo".
 
-- `Style::ensemble()` теперь означает **палитру красок**, а не жёсткий
-  дефолтный состав.
-- `Style::cast(seed)` собирает подмножество палитры через `styles/cast.rs`.
-  Всегда остаются:
-  - фундамент: бас, кик, снейр;
-  - подписные инструменты стиля (`Style::signature_slots`);
-  - слоты стилевого перехода (fill + tail), иначе жест на шве остался бы
-    без инструмента;
-  - хотя бы один носитель пульса (хэт/шейкер), гармонии и темы.
-- Остальные краски (вокал, текстуры, второй лид, 808, пэд, клавиши) сид
-  выбирает рейтингом при плотности 35–85%: редкий сид берёт только главное,
-  плотный — почти всё, но не выходит за палитру.
-- Палитры расширены правдоподобными красками: club `+Pad +Vocal`;
-  rock `+Keys`; phonk `+Pluck`; proto `+Keys +Pad +Kick808 +Shaker`.
-- Подписи: club `Pluck/Keys/Shaker`; deep `Pad/Pluck`; lofi `Keys/Guitar`;
-  rock `Guitar`; phonk `Keys/Kick808`; proto `Pluck`.
-
-### 2. Варианты формы по сиду
-
-- У каждого стиля 3 написанных варианта формы; выбор —
-  `arranger::pick_score(seed, salt, variants)` в `Style::arrangement_for_seed`.
-- Все варианты проходят `MainMotif → BuildUp → Drop → PostChorus`;
-  `CALM_SCORE` больше не пропускает удар: у lofi это смена тембра, а после
-  удара тема возвращается.
-- `Composer::new_shared` и `reset_form` берут форму через
-  `arrangement_for_seed`, поэтому сид меняет драматургию, а не только мотив.
-
-### 3. `plan_piece`: полная арка без обрезки
-
-- Куски планируются полным проходом скелета: все секции сохраняются.
-- Длины секций подгоняются пропорционально под окно 30–60 с
-  (`TARGET_PIECE_SECS = 54`, сид сдвигает цель на ±4 такта).
-- Секция — целая фраза: минимум 2 такта, шаг 2 такта. Сжатие не режет
-  последнюю секцию и не оставляет огрызков.
-- Короткий скелет повторяется вторым проходом только если без него кусок
-  не дотягивает до нижней границы; длинный — сжимается целиком.
-- Шов остаётся написанным финалом: у `Rolling` — грув + текстура,
-  у `Cut` — короткий хвост в полном составе.
-
-### 4. Микс и живые изменения
-
-- `apply_style_mix(style, seed, mixer)` ставит канонические громкости
-  выбранного каста, остальное — в ноль.
-- `set_seed`, `set_style_live`, `start` и `reset_instruments` пересобирают
-  каст под текущий сид.
-- Если слушатель правил список инструментов (`list_edited`), смена сида и
-  стиля его не трогает; сброс возвращает каст стиля/сида.
-- Живые изменения вступают со следующего такта.
-
-### 5. Сохранено из предыдущего шага
-
-- `RoleGuide` описывает исполнение, а не форму: без жёстких флагов
-  «играть каждый N-й такт».
-- `RiffCell` — один рифф-фундамент на сид; он не добавляет голос, а
-  окрашивает вероятности, артикуляцию, акценты и гармонические корни
-  баса/аккордов.
-- Стилевые переходы — короткий жест в последнем такте разгона с хвостом
-  на первых шагах следующей секции.
-- Кроссфейд полюсов секций: первый такт новой секции смешивает палитры.
-- `StyleContract` держит interlock баса/кика, бюджет онсетов и регистровые
-  потолки; velocity-арка фраз не копит громкость к клипу.
-
-## Проверка
-
-- `cargo test`: **243 теста** (237 lib + 6 bin), 0 падений.
-- `cargo build`: успешен.
-- `cargo clippy --all-targets`: одно давнее предупреждение
-  `should_implement_trait` в `instruments/dsp.rs`, новых нет.
-- 60-секундный соук: 6 стилей × сиды `1`, `2`, `3`, `42`, `777` —
-  30 прогонов, `non-finite: 0`, пик 0.649–0.848, RMS 0.102–0.207.
-- Плотность стилей слышна и стабильна (нот за 60 с): lofi 285–387,
-  rock 806–851, club 806–946, deep 593–892, phonk 665–748, proto 414–607.
-- Новые тесты:
-  - спектральные полосы лидов (pluck/guitar riff/lead);
-  - стилевые прогрессии диатоничны своему ладу, key/density/ритм заданы,
-    сиды выбирают разные ходы внутри стиля;
-  - deep остается дорийским, phonk — фригийским на всех сидах;
-  - касты различаются по сиду и держат фундамент/подписи/переходы;
-  - формы различаются по сиду, но всегда дают полную арку;
-  - любой стиль/сид укладывается в 30–60 с без обрезанных секций;
-  - `set_seed` пересобирает каст, пока список не правил слушатель.
-
-## Что дальше
-
-- Субъективное прослушивание WAV на телефоне и в наушниках: сравнить
-  несколько сидов внутри каждого стиля, проверить, что стиль узнается
-  по гармонии и плотности, а сиды звучат как разные композиции.
-- Сравнить лиды до/после: pluck и guitar должны быть мягче, но не
-  потеряться в миксе; при необходимости — ±1–2 дБ `VOICE_GAIN`.
-- После прослушивания: локальный коммит. Пуш — только с разрешения.
-
-## Как запускать проверку
+## Verification
 
 ```sh
 cd rust
 cargo test
-cargo build
 cargo clippy --all-targets
-
-# офлайн-метрики без аудиоустройства
-cargo run -- deep 424242 --soak 20
-cargo run -- club 424242 --render 64
-
-# WAV для прослушивания
+cargo run -- club 42 --soak 12
 cargo run -- lofi 7 --wav lofi.wav --secs 30
-cargo run -- club 42 --wav club42.wav --secs 50
 ```
 
-## Важные инварианты
+From the repository root:
 
-- Не регрессировать звук, одобренный на `f6c072f`: тембры и микшер не
-  трогать без A/B.
-- Один сид — один стилевой рифф-фундамент; рифф не новый слой, а маска
-  существующих носителей. Отклонённый отдельный лид не возвращать.
-- `Style::ensemble()` — палитра, а не вайтлист. Каст обязан держать
-  фундамент, подписи и слоты перехода.
-- Каждый кусок — полная арка `MainMotif → BuildUp → Drop → PostChorus`
-  в окне 30–60 с; секции не обрезаются до огрызков.
-- Громкость — только `Slot::base_volume`, ручные правки слушателя и
-  групповые фейдеры. Никакой сгенерированной loudness-автоматики.
-- Длина ноты — решение композиции: зависит от инструмента, стиля и сида.
-- Переход — жест на шве, а не постоянная секционная заливка; хвост
-  затухает, слоты не дублируются.
-- Живые изменения — со следующего такта; ручной список микшера переживает
-  смену сида/стиля до сброса.
-- Phone-safe: бас/кик по центру, без чрезмерного расширения низа, CPU в
-  рамках.
-- Без сэмплов: только синтез. `demo/` не трогать.
+```sh
+flutter analyze
+flutter test
+flutter build apk --debug
+```
+
+Latest results: `cargo test` 247 lib + 6 bin (0 failures),
+`cargo clippy --all-targets` 0 warnings, `flutter analyze` 0 issues,
+`flutter test` 4/4, `flutter build apk --debug` successful.
+Offline soak for Club/Lo-Fi: peak 0.595 / 0.558, `non-finite: 0`.
+
+## Git and naming
+
+- The Flutter package, Rust crate, Android application id, iOS/macOS bundle id,
+  and displayed app name are all **Continuum**.
+- Generated FFI files (`lib/src/rust/frb_generated*.dart`,
+  `rust/src/frb_generated.rs`) are committed and must be regenerated whenever
+  the public Rust API changes.
+- Build outputs, caches, local properties, signing keys, and logs are ignored
+  by `.gitignore`.
+- The motif wheel visualizer was removed from the UI. Polling masks at 10 Hz
+  made dots late and made every window wrap repaint the whole dial; a proper
+  version needs note events streamed from Rust with timestamps. The backend
+  `LiveVisual` snapshot remains inert and can support a future implementation.
+- The rejected riff grammar is kept in the local branch `backup/riff-grammar`
+  (pointing at `a9dc665`); the current approach does not use it.

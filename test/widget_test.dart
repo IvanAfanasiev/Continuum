@@ -1,30 +1,34 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Smoke tests for the player's pure Dart helpers. They don't start Rust and don't
+// require an audio device — they run in a plain `flutter test`.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:cont/main.dart';
+import 'package:continuum/src/player_controller.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('seedCodeToBigInt', () {
+    test('XXX-XXX code — a number in base 36', () {
+      expect(seedCodeToBigInt('000000'), BigInt.zero);
+      expect(seedCodeToBigInt('000001'), BigInt.one);
+      expect(seedCodeToBigInt('00000Z'), BigInt.from(35));
+      expect(seedCodeToBigInt('000010'), BigInt.from(36));
+    });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    test('case does not matter, garbage is skipped', () {
+      expect(seedCodeToBigInt('ab-c!d'), seedCodeToBigInt('ABCD'));
+      expect(seedCodeToBigInt(''), BigInt.zero);
+    });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    test('full code fits in CODE_SPACE = 36^6', () {
+      final max = seedCodeToBigInt('ZZZZZZ');
+      expect(max, BigInt.from(36).pow(6) - BigInt.one);
+    });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    test('code and number are inverse conversions', () {
+      for (final n in [BigInt.zero, BigInt.from(42), BigInt.from(424242)]) {
+        expect(seedCodeToBigInt(seedCodeFromBigInt(n)), n);
+      }
+      expect(seedCodeFromBigInt(BigInt.from(424242)), '0093CI');
+    });
   });
 }

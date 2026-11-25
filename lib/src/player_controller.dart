@@ -3,62 +3,85 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
-import 'package:cont/src/rust/api/playback.dart';
-import 'package:cont/src/rust/playback.dart';
+import 'package:continuum/src/rust/api/playback.dart';
+import 'package:continuum/src/rust/playback.dart';
 
-/// Состояние плеера: снимки из бэкенда + локальные выборы фронта.
-/// Все управляющие вызовы идут в бэкенд и возвращают свежий статус —
-/// UI всегда показывает факт, а не предположение.
+/// Player state: snapshots from the backend + local frontend choices.
+/// All control calls go to the backend and return fresh status —
+/// the UI always shows facts, not guesses.
 class PlayerController extends ChangeNotifier {
   PlaybackStatus? status;
   List<TrackInfo> tracks = const [];
   List<GroupInfo> groups = const [];
   List<String> styles = const [];
 
-  /// Стили с полками каталога (`club`/`rock`/`chill`).
+  /// Styles with catalog shelves (`club`/`rock`/`chill`).
   List<StyleMeta> stylesMeta = const [];
 
-  /// Режим списка стилей: `group` (по полкам) или `alpha` (по алфавиту).
+  /// Style list mode: `group` (by shelf) or `alpha` (alphabetically).
   String styleSortMode = 'group';
 
-  /// Диагностика живого тракта (кадры/ноты/очередь) для баннера.
+  /// Live audio-path diagnostics (frames/notes/queue) for the banner.
   EngineStats? stats;
 
-  /// Кадры прошлого опроса: если при игре счетчик стоит —
-  /// поток встал (оборванный маршрут без ошибки), чинит сторожок движка.
+  /// Frame count from the previous poll: if it stays put while playing —
+  /// the thread has stalled (a broken route without an error); the engine's
+  /// watchdog fixes it.
   BigInt? _lastFrames;
 
-  /// Поток встал, хотя должен играть. Сбрасывается сам, как только
-  /// кадры снова растут (сторожок пересоздал поток).
+  /// Thread stalled although it should be playing. Resets itself as soon as
+  /// frames start growing again (the watchdog recreated the thread).
   bool streamStalled = false;
 
-  /// Момент последнего старта: тишина в первые секунды — норма
-  /// (открывается устройство), баннер ждёт 6 секунд.
+  /// Time of the last start: silence in the first seconds is normal
+  /// (the device is opening), the banner waits 6 seconds.
   DateTime? startedAt;
 
-  /// Выбранный стиль и сид для следующего старта.
+  /// Selected style and seed for the next start.
   String currentStyle = 'club';
   BigInt currentSeed = BigInt.from(424242);
 
-  /// 6 символов для ячеек ввода (без дефиса). Синхронизируется
-  /// со статусом после действий с бэкендом.
-  String boxCode = '000000';
+  /// Seed history for the "back" button (A/B comparison without retyping).
+  final List<BigInt> _seedHistory = [BigInt.from(424242)];
+  int _seedIndex = 0;
+
+  bool get canGoBackSeed => _seedIndex > 0;
+
+  void _rememberSeed(BigInt seed) {
+    if (seed == _seedHistory[_seedIndex]) return;
+    if (_seedIndex < _seedHistory.length - 1) {
+      _seedHistory.removeRange(_seedIndex + 1, _seedHistory.length);
+    }
+    _seedHistory.add(seed);
+    _seedIndex = _seedHistory.length - 1;
+    if (_seedHistory.length > 32) {
+      _seedHistory.removeAt(0);
+      _seedIndex--;
+    }
+  }
+
+  /// 6 characters for the input boxes (without the dash). Synced
+  /// with status after backend actions.
+  String boxCode = seedCodeFromBigInt(BigInt.from(424242));
 
   bool get running => status?.running ?? false;
   bool get paused => status?.paused ?? false;
   String get styleName => status?.styleName ?? currentStyle;
   String get seedCode => status?.seedCode ?? '';
 
-  /// Первичная загрузка: статус, списки, без автозапуска звука.
+  /// Initial load: status and lists, without auto-starting sound.
   Future<void> init() async {
     stylesMeta = await playbackStyles();
     styles = [for (final s in stylesMeta) s.name];
-    // Стиль обязан быть выбран: чиним протухший выбор первым из списка,
-    // иначе панели пустые, а кнопки молчат.
+    // A style must be selected: fix a stale choice with the first in the list,
+    // otherwise panels are empty and buttons do nothing.
     if (!styles.contains(currentStyle)) {
       currentStyle = styles.isNotEmpty ? styles.first : currentStyle;
     }
     await refresh();
+    // The mixer must be visible before the first Play press: otherwise the
+    // instrument panel is empty and the lineup can't be set up in advance.
+    await refreshMix();
     if (status != null) {
       if (!styles.contains(status!.styleName) && styles.isNotEmpty) {
         currentStyle = styles.first;
@@ -66,12 +89,13 @@ class PlayerController extends ChangeNotifier {
         currentStyle = status!.styleName;
       }
       currentSeed = status!.seed;
+      _rememberSeed(currentSeed);
       boxCode = status!.seedCode.replaceAll('-', '');
     }
     notifyListeners();
   }
 
-  /// Полка стиля (`club`/`rock`/`chill`, '' если неизвестно).
+  /// A style's shelf (`club`/`rock`/`chill`, '' if unknown).
   String styleGroupOf(String name) {
     for (final s in stylesMeta) {
       if (s.name == name) return s.group;
@@ -79,9 +103,9 @@ class PlayerController extends ChangeNotifier {
     return '';
   }
 
-  /// Стили в порядке панели: по полкам (порядок первого появления
-  /// полки в списке бэкенда, внутри — по алфавиту) или все по алфавиту.
-  /// Никаких зашитых списков полок во фронте — порядок задает бэкенд.
+  /// Styles in panel order: by shelf (order of the shelf's first appearance
+  /// in the backend list, alphabetical within) or all alphabetically.
+  /// No hardcoded shelf lists in the frontend — the backend sets the order.
   List<String> sortedStyles() {
     final names = styles.toList();
     if (styleSortMode == 'alpha') {
@@ -111,10 +135,10 @@ class PlayerController extends ChangeNotifier {
       try {
         stats = await playbackEngineStats();
       } catch (_) {
-        // Статистика — необязательна, статус уже есть.
+        // Stats are optional; we already have status.
       }
-      // Ступор потока: играем не на паузе, прошло 6+ секунд со старта,
-      // а счетчик кадров стоит на месте прошлого опроса.
+      // Stalled thread: playing, not paused, 6+ seconds since start,
+      // but the frame counter is unchanged from the previous poll.
       final s = stats;
       final started = startedAt;
       if (s != null &&
@@ -144,8 +168,8 @@ class PlayerController extends ChangeNotifier {
   Future<void> togglePlay() async {
     final s = status;
     if (s == null || !s.running) {
-      // Android играет сам (pull через AudioTrack): бэкенд только
-      // рендерит, без cpal-потока. Остальные платформы — как раньше.
+      // Android plays on its own (pull via AudioTrack): the backend only
+      // renders, without a cpal thread. Other platforms — as before.
       status = Platform.isAndroid
           ? await playbackPullStart(styleName: currentStyle, seed: currentSeed)
           : await playbackStart(styleName: currentStyle, seed: currentSeed);
@@ -153,6 +177,7 @@ class PlayerController extends ChangeNotifier {
       groups = await playbackGroups();
       currentStyle = status?.styleName ?? currentStyle;
       currentSeed = status?.seed ?? currentSeed;
+      _rememberSeed(currentSeed);
       startedAt = DateTime.now();
     } else {
       status = await playbackSetPaused(paused: !s.paused);
@@ -160,7 +185,7 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Гарантированно играет (для системных кнопок и прерываний наоборот).
+  /// Guaranteed to be playing (for system buttons; conversely, for interruptions).
   Future<void> ensurePlaying() async {
     final s = status;
     if (s == null || !s.running) {
@@ -171,7 +196,7 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
-  /// Гарантированно на паузе. Вызывается и прерыванием аудиофокуса.
+  /// Guaranteed to be paused. Also called by audio-focus interruption.
   Future<void> ensurePaused() async {
     await setPausedExternal(true);
   }
@@ -196,13 +221,15 @@ class PlayerController extends ChangeNotifier {
     if (running) {
       status = await playbackSetSeedCode(code: code);
       currentSeed = status?.seed ?? currentSeed;
+      _rememberSeed(currentSeed);
       boxCode = status?.seedCode.replaceAll('-', '') ?? boxCode;
-      // Сид меняет состав (гости из пула): обновляем панели фактом.
+      // A seed changes the lineup (guests from the pool): update panels with facts.
       tracks = await playbackTracks();
       groups = await playbackGroups();
     } else {
-      // Бэкенд спит — запоминаем локально, применится на старте.
+      // Backend asleep — remember locally, applied on start.
       currentSeed = seedCodeToBigInt(code);
+      _rememberSeed(currentSeed);
       boxCode = code.toUpperCase();
     }
     notifyListeners();
@@ -212,6 +239,7 @@ class PlayerController extends ChangeNotifier {
     if (running) {
       status = await playbackRandomSeed();
       currentSeed = status?.seed ?? currentSeed;
+      _rememberSeed(currentSeed);
       boxCode = status?.seedCode.replaceAll('-', '') ?? boxCode;
       tracks = await playbackTracks();
       groups = await playbackGroups();
@@ -222,6 +250,25 @@ class PlayerController extends ChangeNotifier {
           List.generate(6, (_) => alphabet[rnd.nextInt(36)]).join();
       boxCode = chars;
       currentSeed = seedCodeToBigInt(chars);
+      _rememberSeed(currentSeed);
+    }
+    notifyListeners();
+  }
+
+  /// One step back in seed history: cheap A/B comparison of two ideas.
+  Future<void> previousSeed() async {
+    if (!canGoBackSeed) return;
+    _seedIndex--;
+    final seed = _seedHistory[_seedIndex];
+    if (running) {
+      status = await playbackSetSeed(seed: seed);
+      tracks = await playbackTracks();
+      groups = await playbackGroups();
+      currentSeed = status?.seed ?? seed;
+      boxCode = status?.seedCode.replaceAll('-', '') ?? seedCodeFromBigInt(seed);
+    } else {
+      currentSeed = seed;
+      boxCode = seedCodeFromBigInt(seed);
     }
     notifyListeners();
   }
@@ -233,17 +280,17 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Ручка отдельного инструмента (0..1 абсолютных). Ноль исключает слот
-  /// из генерации и DSP; бэкенд отклоняет глушение последнего слышимого
-  /// (статус вернет факт — ползунок откатится сам).
+  /// An individual instrument's fader (0..1 absolute). Zero excludes the slot
+  /// from generation and DSP; the backend rejects muting the last audible one
+  /// (status returns the fact — the slider rolls back on its own).
   Future<void> setTrackVolume(BigInt id, double volume) async {
     status = await playbackSetTrack(instrumentId: id, volume: volume);
     tracks = await playbackTracks();
     notifyListeners();
   }
 
-  /// Сброс списка инструментов на дефолты стиля: снимает пометку
-  /// «правил слушатель», и стиль снова влияет на состав.
+  /// Reset the instrument list to the style defaults: clears the
+  /// "edited by listener" flag so the style affects the lineup again.
   Future<void> resetInstruments() async {
     status = await playbackResetInstruments();
     tracks = await playbackTracks();
@@ -259,10 +306,62 @@ class PlayerController extends ChangeNotifier {
     status = await playbackSetIntensity(intensity: intensity);
     notifyListeners();
   }
+
+  Future<void> resetTempo() async {
+    status = await playbackSetTempoBpm(bpm: 0);
+    notifyListeners();
+  }
+
+  Future<void> resetIntensity() async {
+    status = await playbackSetIntensity(intensity: 1.0);
+    notifyListeners();
+  }
+
+  /// Master effects: reverb room, treble cutoff, sidechain.
+  Future<void> setMasterFx({
+    required double reverbWet,
+    required double reverbSize,
+    required double trebleHz,
+    required double sidechain,
+  }) async {
+    status = await playbackSetMasterFx(
+      reverbWet: reverbWet,
+      reverbSize: reverbSize,
+      trebleHz: trebleHz,
+      sidechain: sidechain,
+    );
+    notifyListeners();
+  }
+
+  Future<void> resetMasterFx() async {
+    status = await playbackResetMasterFx();
+    notifyListeners();
+  }
+
+  /// Filter openness: an offset on top of the section envelope.
+  Future<void> setToneOpen(double offset) async {
+    status = await playbackSetToneOpen(offset: offset);
+    notifyListeners();
+  }
 }
 
-/// `XXX-XXX` (0-9A-Z) в число для старта. Мусор пропускаем —
-/// бэкенд при приеме все равно санитизирует.
+/// Seed number to canonical code `XXX-XXX` (0-9A-Z, 6 characters).
+/// Used for the initial state before the backend responds.
+String seedCodeFromBigInt(BigInt value) {
+  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  final space = BigInt.from(36).pow(6);
+  var v = value % space;
+  if (v.isNegative) v += space;
+  final chars = List<String>.filled(6, '0');
+  for (var i = 5; i >= 0; i--) {
+    chars[i] = alphabet[(v % BigInt.from(36)).toInt()];
+    v ~/= BigInt.from(36);
+  }
+  return chars.join();
+}
+
+/// `XXX-XXX` (0-9A-Z) to a number for startup. Garbage is skipped —
+/// the backend sanitizes it on receipt anyway.
 BigInt seedCodeToBigInt(String code) {
   const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   var value = BigInt.zero;

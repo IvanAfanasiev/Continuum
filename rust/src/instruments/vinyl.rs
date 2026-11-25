@@ -3,18 +3,18 @@ use super::{
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
-/// Виниловый треск + шипение пленки: приглушенный шумовой слой
-/// с медленным дыханием громкости и редкими щелчками-пылинками.
-/// Играет длинными нотами-фразами; сид треска от ноты (velocity
-/// хуманизирована — каждая фраза трещит по-своему, повтор детерминирован).
+/// Vinyl crackle + tape hiss: a muffled noise layer with slow volume
+/// breathing and rare dust pops.
+/// Plays long phrase-notes; the crackle seed comes from the note (velocity
+/// is humanized — each phrase crackles its own way, repeats are deterministic).
 const HISS_LP_HZ: f32 = 4500.0;
 const HISS_GAIN: f32 = 0.5;
 const WANDER_HZ: f32 = 0.1;
 const WANDER_DEPTH: f32 = 0.3;
 const POP_THRESH: f32 = 0.9999;
 const POP_DECAY: f32 = 120.0;
-/// Щелчки идут мимо фильтра — широкополосные, потому тише шипения:
-/// пыль, а не треск костра (замер: наш lofi был ярче всех референсов).
+/// Pops bypass the filter — they're broadband, so quieter than the hiss:
+/// dust, not a crackling fire (measured: our lofi was brighter than all references).
 const POP_GAIN: f32 = 0.5;
 const ATTACK_SECS: f32 = 0.05;
 const FADE_SECS: f32 = 0.1;
@@ -26,7 +26,7 @@ struct VinylVoice {
     t: f32,
     wander_phase: f32,
     pop_env: f32,
-    /// Коэффициент спада пылинки: посчитан раз, а не `exp` на сэмпл.
+    /// Dust decay coefficient: computed once, not `exp` per sample.
     pop_coeff: f32,
     samples_left: usize,
     noise: Noise,
@@ -40,8 +40,8 @@ impl Voice for VinylVoice {
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
-        // Длинная нота-текстура; длительность ограничиваем парой фраз,
-        // чтобы зависшая нота не пережила выключение слота.
+        // Long texture note; limit duration to a couple of phrases so a
+        // stuck note doesn't outlive the slot being switched off.
         let len = note.duration_secs.clamp(1.0, 32.0);
         self.samples_left = (len * self.sample_rate) as usize;
         self.gain = note.velocity;
@@ -62,13 +62,13 @@ impl Voice for VinylVoice {
         let attack = a * a * (3.0 - 2.0 * a);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
-        // Шипение с дыханием.
+        // Breathing hiss.
         let raw = self.noise.sample();
         let (hiss, _, _) = self.hiss_lp.process(raw, HISS_LP_HZ, 0.7, sample_rate);
         self.wander_phase = (self.wander_phase + WANDER_HZ / sample_rate) % 1.0;
         let wander = 1.0 + WANDER_DEPTH * sin01(self.wander_phase);
 
-        // Пылинка: выброс шума включает быстрый спад.
+        // Dust speck: a noise spike triggers a fast decay.
         if raw > POP_THRESH {
             self.pop_env = raw;
         }
@@ -90,7 +90,7 @@ impl Voice for VinylVoice {
     }
 }
 
-/// Публичный инструмент: моно-текстура с кроссфейдом фраз.
+/// Public instrument: monophonic texture with phrase crossfade.
 pub struct Vinyl(Mono<VinylVoice>);
 
 impl Vinyl {
@@ -153,15 +153,15 @@ mod tests {
             }
         }
         let rms = (sum_sq / n as f32).sqrt();
-        // Слышимый слой, но не громкий шум.
+        // Audible layer, but not loud noise.
         assert!(rms > 0.005 && rms < 0.2, "bed level wrong: rms={rms}");
-        // Щелчки-пылинки пробиваются поверх шипения.
+        // Dust pops break through the hiss.
         assert!(loud > 5, "no crackle pops: peak={peak} rms={rms}");
     }
 
     #[test]
     fn same_note_same_crackle() {
-        // Детерминизм текстуры: повтор фразы трещит так же.
+        // Texture determinism: repeating a phrase crackles the same way.
         let sr = 44_100.0;
         let render = |vel: f32| {
             let mut vinyl = Vinyl::new(10);

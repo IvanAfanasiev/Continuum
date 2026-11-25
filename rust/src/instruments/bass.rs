@@ -1,48 +1,62 @@
 use super::{
-    dsp::{fast_tanh, release_fade, sin01, ExpDecay, Noise, Svf},
+    dsp::{fast_tanh, release_fade, saw_blep, sin01, ExpDecay, Noise, Svf},
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 use crate::core::midi_to_freq;
 
-/// Глубокий саб-бас: один синусный осциллятор, два тракта.
-/// Чистый саб дает глубину (синус не умеет дребезжать и алиасить),
-/// мягкое насыщение той же волны — теплое присутствие на мелких
-/// динамиках (мозг восстанавливает фундамент по гармоникам).
-/// Четная октава (+12 полутонов, ~0.3 от фундамента) — ламповая
-/// теплота как в референсах: нечетный tanh в одиночку дает
-/// только «пустой» квадратный тембр.
-/// Никаких расстроенных пил и резонанса: именно они давали
-/// «клавишный» дребезг прошлой версии.
+/// Deep sub-bass: one sine oscillator, two paths.
+/// A pure sub gives depth (a sine can't buzz or alias), gentle saturation
+/// of the same wave gives warm presence on small speakers
+/// (the brain reconstructs the fundamental from harmonics).
+/// The even octave (+12 semitones, ~0.3 of the fundamental) is tube
+/// warmth as in the references: odd tanh alone gives only a "hollow"
+/// square timbre. No detuned saws or resonance: those produced the
+/// "keyboard" rasp in the previous version.
 const SUB_GAIN: f32 = 0.9;
 const OCTAVE_GAIN: f32 = 0.5;
-/// Вторая гармоника баса: держит низ на телефоне, где чистый синус
-/// пропадает. Не зависит от саб-перекоса стиля — это «железный» слой,
-/// а не окраска.
+/// The bass's second harmonic: holds the low end on phones, where a pure
+/// sine disappears. Independent of the style's sub bias — it's an "iron"
+/// layer, not a color tint.
 const SECOND_HARMONIC_GAIN: f32 = 0.26;
 const PRESENCE_GAIN: f32 = 0.45;
-/// Драйв волны. Было 1.5 + 2.5·velocity (до 3.75): такая перегрузка
-/// давала почти квадратный тембр — грубый «хрип» на самом низу.
-/// Теперь мягкое насыщение: тепло есть, скрежета нет.
+/// A small saw addition for presence: 15% of the layer. Gives upper harmonics
+/// on small speakers without turning the bass into a buzzing synth. The layer
+/// goes through the same keytracked filter, so high notes don't buzz.
+const SAW_PRESENCE_GAIN: f32 = 0.15;
+/// Wave drive. It used to be 1.5 + 2.5·velocity (up to 3.75): such overload
+/// gave an almost square timbre — a coarse "rasp" at the very bottom.
+/// Now it's gentle saturation: warmth remains, no grinding.
 const DRIVE_BASE: f32 = 1.2;
 const DRIVE_VEL: f32 = 1.3;
-/// Нормировка выхода. Сумма слоев баса (саб + октава + презенс + щипок)
-/// доходила до 1.7, и бас сам клиппил в движке: пик 1.35 при 2675
-/// срезанных сэмплах — это и есть хрип на низу. Нормируем так, чтобы
-/// одна нота и перекрытие с хвостом оставались в единице.
+/// Output normalization. The sum of bass layers (sub + octave + presence + pick)
+/// reached 1.7, and the bass clipped by itself in the engine: peak 1.35 with
+/// 2675 clipped samples — that is the rasp in the low end. Normalize so that
+/// one note and its overlap with the tail stay within unity.
 const OUT_GAIN: f32 = 0.38;
 const PRESENCE_Q: f32 = 0.7;
-/// Щипок медиатора: короткий шумовой транзиент. Его слышно
-/// в picked-басу референса; без него атака безликая.
+/// Pick transient: a short noise burst. It's audible in the reference's
+/// picked bass; without it the attack is faceless.
 const PICK_DECAY: f32 = 120.0;
 const PICK_GAIN: f32 = 0.12;
 const PITCH_DROP: f32 = 0.025;
 const PITCH_DROP_RATE: f32 = 80.0;
-/// Атака с фейдом вместо щелчка: 10 мс + мягкость сида сверху.
-/// Релиз длинный (35 мс): бас допевает, а не чмокает.
+/// Attack with a fade instead of a click: 10 ms + seed softness on top.
+/// Long release (35 ms): the bass sings through, it doesn't smack.
 const ATTACK_SECS: f32 = 0.010;
 const AMP_DECAY_RATE: f32 = 8.0;
 const SUSTAIN_LEVEL: f32 = 0.85;
 const FADE_SECS: f32 = 0.035;
+/// Its own filter envelope: 8 ms attack → peak, then a fall to half at 300 Hz
+/// over ~300 ms. The cutoff used to simply drop from 680 Hz from the first
+/// sample, and the attack was "open" without a real pick. Now the filter
+/// breathes independently of the amplitude envelope.
+const FILTER_ATTACK_SECS: f32 = 0.008;
+const FILTER_PEAK_HZ: f32 = 680.0;
+const FILTER_FLOOR_HZ: f32 = 300.0;
+const FILTER_DECAY_SECS: f32 = 0.3;
+/// Cutoff keytracking: higher note — higher filter peak. Bass stays deep,
+/// but presence doesn't drop out in the upper register of a bassline.
+const KEYTRACK_REF_HZ: f32 = 55.0;
 
 #[derive(Clone, Default)]
 struct BassVoice {
@@ -59,12 +73,12 @@ struct BassVoice {
     release_mul: f32,
     sub_bias: f32,
     noise: Noise,
-    /// Живая высота и громкость: легато скользит к цели (~30/5 мс),
-    /// а не прыгает — шагающая бас-линия течет, а не рубится.
+    /// Live pitch and loudness: legato glides to the target (~30/5 ms)
+    /// rather than jumping — a walking bassline flows instead of being chopped.
     freq_now: f32,
     gain_target: f32,
-    /// Рекуррентные огибающие и коэффициенты скольжения: посчитаны
-    /// в `trigger`/`set_sample_rate`, дальше без единого `exp`/`sin`.
+    /// Recursive envelopes and glide coefficients: computed in
+    /// `trigger`/`set_sample_rate`, then not a single `exp`/`sin`.
     amp_env: ExpDecay,
     drop_env: ExpDecay,
     cutoff_env: ExpDecay,
@@ -94,8 +108,8 @@ impl Voice for BassVoice {
         self.gain = note.velocity;
         self.gain_target = note.velocity;
         self.velocity = note.velocity;
-        // Небольшое сид-зависимое смещение фазы: бас не начинается бит-в-бит
-        // одинаково, но высота и огибающая сохраняются.
+        // Small seed-dependent phase offset: the bass doesn't start bit-for-bit
+        // identically, but pitch and envelope are preserved.
         self.phase = (super::dsp::note_seed(note, 0x8A55) as f32 / u32::MAX as f32) * 0.05;
         self.elapsed = 0;
         self.attack_mul = note.attack_mul;
@@ -104,7 +118,7 @@ impl Voice for BassVoice {
         self.noise = Noise::new(super::dsp::note_seed(note, 0x8A55));
         self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
         self.drop_env = ExpDecay::start(PITCH_DROP_RATE, self.sample_rate);
-        self.cutoff_env = ExpDecay::start(1.0 / 0.3, self.sample_rate);
+        self.cutoff_env = ExpDecay::start(1.0 / FILTER_DECAY_SECS, self.sample_rate);
         self.pick_env = ExpDecay::start(PICK_DECAY, self.sample_rate);
         self.update_rate_ks();
         self.presence_lp.reset();
@@ -116,9 +130,9 @@ impl Voice for BassVoice {
     }
 
     fn legato(&mut self, note: &NoteEvent) {
-        // Новая высота без перезапуска: фаза и огибающая текут,
-        // щипок не пересеивается (уже отзвучал), фильтры не рвутся.
-        // Только цель скольжения, продление и свежая артикуляция сида.
+        // New pitch without a restart: phase and envelopes keep flowing,
+        // the pick isn't reseeded (it has already rung out), filters don't break.
+        // Only the glide target, extension and fresh seed articulation change.
         self.frequency = midi_to_freq(note.midi_pitch);
         let want = (note.duration_secs * self.sample_rate).max(1.0) as usize;
         self.samples_left = self.samples_left.max(want);
@@ -130,8 +144,8 @@ impl Voice for BassVoice {
     }
 
     fn extend(&mut self, note: &NoteEvent) {
-        // Лига — продолжение той же ноты: фазу, атаку и тембр не трогаем,
-        // только продлеваем хвост и плавно ведем динамику к новой.
+        // A tie is a continuation of the same note: don't touch phase, attack
+        // or timbre — only extend the tail and smoothly move dynamics to the new one.
         if self.samples_left == 0 {
             self.trigger(note);
             return;
@@ -151,14 +165,14 @@ impl Voice for BassVoice {
         let t = self.elapsed as f32 / sample_rate;
         self.elapsed += 1;
 
-        // Легато-скольжение: высота едет к цели ~30 мс, громкость ~5 мс.
-        // Фаза не рвется (интегратор тот же), атака не перезапускается.
-        // Коэффициенты посчитаны заранее (см. trigger).
+        // Legato glide: pitch moves to the target in ~30 ms, loudness in ~5 ms.
+        // The phase doesn't break (same integrator), the attack doesn't restart.
+        // Coefficients are precomputed (see `trigger`).
         self.freq_now += (self.frequency - self.freq_now) * self.glide_k;
         self.gain += (self.gain_target - self.gain) * self.gain_k;
 
-        // Мягкая S-атака вместо линейной: ни щелчка, ни ватности.
-        // Длина атаки — от сида: одни сиды punchier, другие ватнее.
+        // Soft S-attack instead of linear: no click, no mush.
+        // Attack length comes from the seed: some seeds are punchier, others softer.
         let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
         let a = (t / attack_secs).min(1.0);
         let attack = a * a * (3.0 - 2.0 * a);
@@ -170,39 +184,53 @@ impl Voice for BassVoice {
             self.freq_now * (1.0 - PITCH_DROP * (1.0 - 0.7 * self.sub_bias) * self.drop_env.next());
         self.phase = (self.phase + freq / sample_rate) % 1.0;
         let wave = sin01(self.phase);
-        // Четная октава строго в фазе с фундаментом (та же фаза ×2):
-        // тепло без биений — гармоники совпадают, а не спорят.
+        // The even octave is exactly in phase with the fundamental (same phase ×2):
+        // warmth without beating — harmonics coincide instead of arguing.
         let octave = sin01(self.phase * 2.0) * OCTAVE_GAIN;
-        // Вторая гармоника — отдельный слой, НЕ зависит от саб-перекоса
-        // стиля. Чистый синус на телефоне не слышен: низ уходит, и бас
-        // пропадает совсем. 808 так и устроен — основной тон плюс
-        // вторая гармоника; она и держит бас на телефоне.
-        let second = sin01(self.phase * 2.0 + 0.15) * SECOND_HARMONIC_GAIN;
+        // The second harmonic is a separate layer, NOT dependent on the style's
+        // sub bias. A pure sine is inaudible on a phone: the low end drops out and
+        // the bass vanishes entirely. An 808 is built exactly this way — fundamental
+        // plus second harmonic; that's what holds the bass on a phone.
+        // PHASE 0: there used to be a 0.15 offset here, which made the second
+        // harmonic beat against the octave layer (interference → "rasp"
+        // and volume dips every period). The layers are coherent.
+        let second = sin01(self.phase * 2.0) * SECOND_HARMONIC_GAIN;
 
         let sub = wave * SUB_GAIN;
-        // Та же волна через драйв: гармоники идеально когерентны
-        // фундаменту — тепло без биений и хоруса.
-        // Саб-перекос стиля гасит презенс-цепь (край «струны») в пользу
-        // чистого синуса: club глубокий и ровный, рок струнный (0.0).
-        // Конверт среза (deep house): tanh-гармоники ныряют 680→300 Гц
-        // за ~300 мс (щипок в атаке), а четная октава идет МИМО фильтра —
-        // ламповое тепло стабильно весь сустейн, а не гаснет с нырком.
+        // The same wave through drive: harmonics are perfectly coherent with
+        // the fundamental — warmth without beating or chorus.
+        // The style's sub bias tames the presence chain (the "string" edge) in
+        // favor of a pure sine: club is deep and even, rock is stringy (0.0).
+        // Cutoff envelope (deep house): tanh harmonics dive 680→300 Hz
+        // over ~300 ms (a pick in the attack), while the even octave BYPASSES
+        // the filter — tube warmth stays steady throughout the sustain.
         let drive = DRIVE_BASE + DRIVE_VEL * self.velocity;
-        let cutoff = 300.0 + 380.0 * self.cutoff_env.next();
+        // Its own filter attack: 8 ms up, then a ~300 ms fall.
+        // Keytracking raises the cutoff for high bass notes.
+        let fa = (t / FILTER_ATTACK_SECS).min(1.0);
+        let filter_attack = fa * fa * (3.0 - 2.0 * fa);
+        let key = (freq / KEYTRACK_REF_HZ).clamp(0.75, 2.2);
+        let cutoff = (FILTER_FLOOR_HZ
+            + (FILTER_PEAK_HZ - FILTER_FLOOR_HZ) * filter_attack * self.cutoff_env.next())
+            * key;
+        // The saw goes through the same filter as the tanh layer: presence
+        // appears only in the attack and leaves with the cutoff.
+        let src = fast_tanh(wave * drive)
+            + saw_blep(self.phase, freq, sample_rate) * SAW_PRESENCE_GAIN;
         let (presence, _, _) =
             self.presence_lp
-                .process(fast_tanh(wave * drive), cutoff, PRESENCE_Q, sample_rate);
-        // Второй каскад (24 дБ/окт суммарно): одиночный пропускал
-        // tanh-гармоники далеко вверх — нырка не было слышно.
+                .process(src, cutoff, PRESENCE_Q, sample_rate);
+        // Second cascade (24 dB/oct total): a single one let tanh harmonics
+        // through far up — the dive wasn't audible.
         let (presence, _, _) = self
             .presence_lp2
             .process(presence, cutoff, PRESENCE_Q, sample_rate);
 
         let keep = 1.0 - 0.85 * self.sub_bias;
-        // Щипок: широкополосный транзиент только в атаке (8 мс).
-        // С перекосом тише, но не исчезает: picked-суб тоже щиплет.
-        // Своя быстрая рампа (2 мс): щелчок идет раньше мягкого тела,
-        // иначе 10 мс атака его душит.
+        // Pick: a broadband transient only in the attack (8 ms).
+        // With sub bias it's quieter but doesn't vanish: a picked sub picks too.
+        // Its own fast ramp (2 ms): the click comes before the soft body,
+        // otherwise the 10 ms attack suffocates it.
         let pa = (t / 0.002).min(1.0);
         let pick = self.noise.sample()
             * self.pick_env.next()
@@ -230,8 +258,8 @@ impl Voice for BassVoice {
     }
 }
 
-/// Публичный инструмент: моно-голос с кроссфейдом хвоста.
-/// Ретриггер на 16-х дропа не рубит сустейн ступенькой.
+/// Public instrument: monophonic voice with tail crossfade.
+/// Retriggering on 16th-note drops doesn't chop the sustain with a step.
 pub struct BassGuitar(Mono<BassVoice>);
 
 impl BassGuitar {
@@ -300,9 +328,9 @@ mod tests {
 
     #[test]
     fn filter_dives_from_pick_to_sub() {
-        // Конверт среза: первые 100 мс ярче (щипок), 400–500 мс темнее.
-        // Меряем энергию первой разности (ВЧ) во временной области —
-        // без утечек прямоугольного окна гёртцеля.
+        // Cutoff envelope: brighter in the first 100 ms (pick), darker at 400–500 ms.
+        // Measure the energy of the first difference (HF) in the time domain —
+        // without leakage from the rectangular window of Goertzel.
         fn hf_share(from_ms: f32, to_ms: f32) -> f32 {
             let sr = 44_100.0;
             let out = render_bass(40, 1.0, 1.0);
@@ -344,8 +372,8 @@ mod tests {
 
     #[test]
     fn low_c2_root_is_loud() {
-        // Регрессия «в басу нет басов»: корень C2 (65 Гц) обязан давать
-        // весомый сустейн, а не шепот.
+        // Regression "no bass in the bass": the C2 root (65 Hz) must give
+        // substantial sustain, not a whisper.
         let sr = 44_100.0;
         let out = render_bass(36, 1.0, 1.0);
         let mut sum_sq = 0.0;
@@ -363,8 +391,8 @@ mod tests {
 
     #[test]
     fn sub_fundamental_dominates_spectrum() {
-        // A2 = ровно 110 Гц (целая корзина гёртцеля 1 Гц): энергия
-        // фундамента обязана кратно превышать верхнюю середину.
+        // A2 is exactly 110 Hz (a whole-bin Goertzel bin at 1 Hz): the
+        // fundamental's energy must exceed the upper mids by a multiple.
         let sr = 44_100.0;
         let out = render_bass(45, 1.0, 1.2);
         let sub = goertzel(&out, 110.0, sr);
@@ -377,9 +405,9 @@ mod tests {
 
     #[test]
     fn sub_bias_pushes_bass_toward_pure_sine() {
-        // Перекос 1.0 гасит презенс-цепь (гармоники драйва): вторая
-        // гармоника слабеет. Но базовая вторая гармоника остается — на
-        // телефоне чистый синус пропадает совсем, и баса не слышно.
+        // A bias of 1.0 tames the presence chain (drive harmonics): the
+        // second harmonic weakens. But the baseline second harmonic remains —
+        // on a phone a pure sine disappears entirely and the bass is inaudible.
         fn second_ratio(bias: f32) -> (f32, f32) {
             let sr = 44_100.0;
             let mut bass = BassGuitar::new(1);
@@ -396,11 +424,11 @@ mod tests {
         assert!(second0 > fund0 * 0.15, "baseline warmth lost");
         assert!(
             second1 < second0 * 0.7,
-            "презенс не загас: {second0} -> {second1}"
+            "presence didn't die out: {second0} -> {second1}"
         );
         assert!(
             second1 > fund1 * 0.12,
-            "бас стал чистым синусом: 2nd={second1} fund={fund1}"
+            "bass became a pure sine: 2nd={second1} fund={fund1}"
         );
         assert!(
             fund1 > fund0 * 0.5,
@@ -410,9 +438,9 @@ mod tests {
 
     #[test]
     fn even_harmonic_adds_tube_warmth() {
-        // Референс (Bad Angel, C2 65 Гц): 2-я гармоника ~0.3 от фундамента.
-        // Чистый синус + tanh дают только нечетные — отсюда «плоскость».
-        // Меряем на A2 (110 Гц, целая корзина): 2-я = ровно 220 Гц.
+        // Reference (Bad Angel, C2 65 Hz): 2nd harmonic ~0.3 of the fundamental.
+        // A pure sine + tanh give only odd ones — hence the "flatness".
+        // Measured at A2 (110 Hz, whole bin): 2nd is exactly 220 Hz.
         let sr = 44_100.0;
         let out = render_bass(45, 1.0, 1.0);
         let fund = goertzel(&out, 110.0, sr);
@@ -426,9 +454,9 @@ mod tests {
 
     #[test]
     fn no_buzzy_harmonics() {
-        // A2 = ровно 110 Гц: третья гармоника (330 Гц, тоже целый бин)
-        // обязана быть умеренной. У пилы она 0.33 от фундамента —
-        // отсюда и дребезг; у мягкого насыщения кратно меньше.
+        // A2 is exactly 110 Hz: the third harmonic (330 Hz, also a whole bin)
+        // must be moderate. For a saw it's 0.33 of the fundamental —
+        // that's the buzz; for gentle saturation it's many times less.
         let sr = 44_100.0;
         let out = render_bass(45, 1.0, 1.0);
         let fund = goertzel(&out, 110.0, sr);
@@ -450,8 +478,8 @@ mod tests {
 
     #[test]
     fn seed_articulation_softens_attack() {
-        // Мягкий сид (длинная атака) дает меньше энергии в первые 20 мс,
-        // чем резкий — артикуляция реально работает, а не игнорируется.
+        // A soft seed (long attack) gives less energy in the first 20 ms
+        // than a sharp one — articulation actually works, not ignored.
         fn early_energy(atk: f32, rel: f32) -> f32 {
             let sr = 44_100.0;
             let mut bass = BassGuitar::new(1);
@@ -475,13 +503,13 @@ mod tests {
 
     #[test]
     fn legato_glides_without_restart() {
-        // Длинная линия не перебивает сама себя: вторая высота берется
-        // без перезапуска атаки — энергия не падает в ноль, высота
-        // доезжает до новой ноты.
+        // A long line doesn't interrupt itself: the second pitch is taken
+        // without restarting the attack — energy doesn't fall to zero, the
+        // pitch arrives at the new note.
         let sr = 44_100.0;
         let rms30 =
             |buf: &[f32]| (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
-        // Свежая атака: первые 30 мс тише сустейна (рампа с нуля).
+        // Fresh attack: the first 30 ms are quieter than the sustain (ramp from zero).
         let mut fresh = BassGuitar::new(1);
         fresh.set_sample_rate(sr);
         fresh.trigger(&NoteEvent::new(1, 33, 0.8, 1.0));
@@ -489,7 +517,7 @@ mod tests {
         for _ in 0..(0.03 * sr) as usize {
             fresh_buf.push(fresh.next_sample());
         }
-        // Сустейн перед переходом.
+        // Sustain before the transition.
         let mut sus_buf = Vec::new();
         for _ in 0..(0.17 * sr) as usize {
             sus_buf.push(fresh.next_sample());
@@ -497,7 +525,7 @@ mod tests {
         let sus = rms30(&sus_buf);
         let fresh_start = rms30(&fresh_buf);
         assert!(fresh_start < sus * 0.9, "attack does not ramp?");
-        // Легато на другую высоту: провала нет, ступеньки нет.
+        // Legato to another pitch: no dip, no step.
         let mut leg = BassGuitar::new(1);
         leg.set_sample_rate(sr);
         leg.trigger(&NoteEvent::new(1, 33, 0.8, 1.0));
@@ -521,7 +549,7 @@ mod tests {
             "legato dips: {leg_start} vs sustain {sus}"
         );
         assert!(max_step < 0.5, "legato step: {max_step}");
-        // Высота доехала: late — уже новая нота (C2 ~65 Гц ± допуск).
+        // Pitch has arrived: "late" is already the new note (C2 ~65 Hz ± tolerance).
         let mut late = Vec::new();
         for _ in 0..(0.3 * sr) as usize {
             late.push(leg.next_sample());
@@ -548,8 +576,8 @@ mod tests {
 
     #[test]
     fn retrigger_has_no_audible_step() {
-        // Ретриггер в громкий сустейн (16-е дропа) не должен давать
-        // ступеньку: хвост гаснет кроссфейдом поверх новой атаки.
+        // Retriggering into a loud sustain (16th-note drops) must not give
+        // a step: the tail fades out via crossfade over the new attack.
         let sr = 44_100.0;
         let mut bass = BassGuitar::new(1);
         bass.set_sample_rate(sr);

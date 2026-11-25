@@ -1,20 +1,20 @@
-//! RiffCell — общая идентичность сида, а не четвертый слой.
+//! RiffCell is the overall identity of the seed, not the fourth layer.
 //!
-//! Один сид дает один стилевой рифф-фундамент: маску акцентов на
-//! 1–2 такта, повторяемую фразами и вариативную A/B. Маска не звучит
-//! сама: она окрашивает уже существующие носители — вероятность,
-//! артикуляцию, акценты и гармонические корни баса/аккордов. Поэтому
-//! рифф слышно и в басу, и в аккордах, и в мелодии, но нового голоса
-//! в ансамбле не появляется.
+//! One seed gives one style riff-foundation: a mask of accents on
+//! 1-2 measures, repeated phrases and variable A/B. The mask doesn't sound
+//! itself: it colors already existing media - probability,
+//! articulation, accents and harmonic roots of bass/chords. That's why
+//! the riff can be heard in the bass, chords and melody, but no new voice
+//! appears in the ensemble.
 //!
-//! Грамматика рисунка — стилевая (deep качает оффбитами, club —
-//! быстрыми долями, rock — даунстроуками, phonk — разреженным
-//! half-time, proto — гипнотическими четвертями, lofi — ленивыми
-//! восьмыми). Сид выбирает мутацию, но не жанр.
+//! The pattern grammar is style-specific (deep swings on offbeats, club —
+//! fast beats, rock - downstroke, phonk - sparse
+//! half-time, proto - hypnotic quarters, lofi - lazy
+//! eighths). seed chooses a mutation, but not a genre.
 
 use crate::arranger::{splitmix64, SongContext};
 
-/// Два такта максимум: больше — уже не рифф, а форма.
+/// Two bars maximum: more is no longer a riff, but a form.
 const MAX_STEPS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,9 +41,9 @@ impl RiffKind {
         }
     }
 
-    /// A и B — два характера одной грамматики, не два разных риффа.
+    /// A and B are two characters of the same grammar, not two different riffs.
     fn patterns(self) -> &'static [f32; 16] {
-        // Для стиля с 16 шагами в такте: маска на такт.
+        // For a style with 16 steps per measure: mask per measure.
         match self {
             RiffKind::None => &EMPTY,
             RiffKind::Deep => &DEEP_A,
@@ -67,8 +67,8 @@ impl RiffKind {
         }
     }
 
-    /// Гармонические интервалы в ступенях лада: риффовый фундамент
-    /// баса и аккордов. Первый всегда 0 — якорь не уезжает.
+    /// Harmonic intervals in scale degrees: riff foundation
+    /// bass and chords. The first one is always 0 - the anchor does not move away.
     fn root_intervals(self) -> &'static [u8] {
         match self {
             RiffKind::None => &[0],
@@ -81,9 +81,9 @@ impl RiffKind {
         }
     }
 
-    /// Через сколько шагов корень может смениться. Deep/rock/phonk
-    /// держат его полтакта, club — долю: движение слышно, но бас
-    /// не превращается в мелодию.
+    /// After how many steps can the root change? Deep/rock/phonk
+    /// hold it for half a beat, club - beat: the movement is audible, but the bass
+    /// doesn't turn into a melody.
     fn root_hold(self) -> usize {
         match self {
             RiffKind::Club => 4,
@@ -92,7 +92,7 @@ impl RiffKind {
     }
 }
 
-/// Скомпилированная маска риффа на текущую фразу.
+/// A compiled riff mask for the current phrase.
 #[derive(Clone, Copy, Debug)]
 pub struct RiffCell {
     kind: RiffKind,
@@ -105,7 +105,7 @@ pub struct RiffCell {
 
 const EMPTY: [f32; 16] = [0.0; 16];
 
-// Deep: мягкие оффбитные толчки, рисунок сдвинут с четвертей.
+// Deep: soft offbeat pushes, the pattern is shifted from the quarters.
 const DEEP_A: [f32; 16] = [
     0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.85, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.9, 0.0,
 ];
@@ -113,7 +113,7 @@ const DEEP_B: [f32; 16] = [
     0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.85, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.25, 0.9, 0.0,
 ];
 
-// Club: сильные четверти и быстрые ходы между ними.
+// Club: strong quarters and fast moves in between.
 const CLUB_A: [f32; 16] = [
     1.0, 0.0, 0.7, 0.0, 0.9, 0.0, 0.7, 0.0, 1.0, 0.0, 0.7, 0.0, 0.9, 0.0, 0.8, 0.35,
 ];
@@ -121,7 +121,7 @@ const CLUB_B: [f32; 16] = [
     1.0, 0.0, 0.0, 0.7, 0.9, 0.0, 0.65, 0.0, 1.0, 0.0, 0.8, 0.0, 0.0, 0.6, 0.9, 0.0,
 ];
 
-// Rock: даунстроуки по четвертям, ответ между ними.
+// Rock: downstroke by quarter, answer in between.
 const ROCK_A: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.7, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.7, 0.0,
 ];
@@ -129,7 +129,7 @@ const ROCK_B: [f32; 16] = [
     1.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.9, 0.0, 0.0, 0.6, 0.0, 0.0, 1.0, 0.0, 0.7, 0.0,
 ];
 
-// Phonk: half-time, разреженные удары, воздух между ними.
+// Phonk: half-time, sparse beats, air between them.
 const PHONK_A: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.85, 0.0, 1.0, 0.0, 0.7, 0.0,
 ];
@@ -137,7 +137,7 @@ const PHONK_B: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.8, 0.0,
 ];
 
-// Proto: гипнотические четверти; B добавляет короткий пикап.
+// Proto: hypnotic quarters; B adds a short pickup.
 const PROTO_A: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0,
 ];
@@ -145,7 +145,7 @@ const PROTO_B: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.5, 0.0,
 ];
 
-// Lofi: ленивые восьмые, синкопа на второй половине.
+// Lofi: Lazy eighth notes, syncopation on the second half.
 const LOFI_A: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0,
 ];
@@ -154,7 +154,7 @@ const LOFI_B: [f32; 16] = [
 ];
 
 impl RiffCell {
-    /// Пустая маска: обычный путь направляющей, без риффа.
+    /// Empty Mask: Normal guide path, no riff.
     pub const NONE: Self = Self {
         kind: RiffKind::None,
         variant: 0,
@@ -164,15 +164,15 @@ impl RiffCell {
         roots: [0; MAX_STEPS],
     };
 
-    /// Построить маску фразы. Детерминирована (стиль, сид, фраза):
-    /// тот же сид — тот же рифф, другая фраза — A/B-вариация.
+    /// Construct a phrase mask. Determined (style, seed, phrase):
+    /// same seed - same riff, different phrase - A/B variation.
     pub fn generate(kind: RiffKind, song: &SongContext, steps_per_measure: usize) -> Self {
         if kind == RiffKind::None || steps_per_measure == 0 {
             return Self::NONE;
         }
         let spm = steps_per_measure.min(16);
         let seed = splitmix64(song.seed_hash ^ kind.salt());
-        // A/B держится всю фразу (два такта), а не мерцает по тактам.
+        // A/B lasts the entire phrase (two bars), rather than flickering across bars.
         let variant = (song.phrase_index & 1) as u8;
         let bars = if spm * 2 <= MAX_STEPS && splitmix64(seed ^ 0xBA25) & 1 == 0 {
             2
@@ -192,11 +192,14 @@ impl RiffCell {
             accents: [0.0; MAX_STEPS],
             roots: [0; MAX_STEPS],
         };
-        // Сид-подпись: одна добавленная и одна смягченная доля. Этого
-        // хватает, чтобы сиды различались риффом, но грамматика стиля
-        // не размывалась случайными акцентами.
+        // Seed signature: one added and one softened share. This
+        // enough for the seeds to differ in riff, but the grammar of the style
+        // was not blurred by random accents.
         let lift = (splitmix64(seed ^ 0x51A7) % spm as u64) as usize;
         let soften = (splitmix64(seed ^ 0x50F7) % spm as u64) as usize;
+        // The third mutation of the seed is a short response in the second half of the measure:
+        // An A/B riff has 3-5 edits rather than just one.
+        let echo = spm / 2 + (splitmix64(seed ^ 0xECA0) % (spm as u64 / 2).max(1)) as usize;
         let turn = if spm > 4 {
             4 + (splitmix64(seed ^ 0xC0DE) % (spm as u64 - 4)) as usize
         } else {
@@ -211,15 +214,18 @@ impl RiffCell {
                 if step == soften && w > 0.0 {
                     w *= 0.82;
                 }
-                // Второй такт — не копия: короткий пикап в конце.
+                if step == echo && w < 0.3 {
+                    w = 0.45;
+                }
+                // The second bar is not a copy: a short pickup at the end.
                 if bar == 1 && step == turn && w < 0.2 {
                     w = 0.35;
                 }
                 cell.accents[bar * spm + step] = w.clamp(0.0, 1.0);
             }
         }
-        // Гармонический фундамент: первый шаг клетки — всегда корень,
-        // дальше интервалы выбираются сидом и держатся полтакта/долю.
+        // Harmonic foundation: the first step of a cell is always the root,
+        // Then the intervals are selected by the seed and last half a beat/beat.
         let intervals = kind.root_intervals();
         let hold = kind.root_hold().min(spm).max(1);
         for bar in 0..bars as usize {
@@ -256,9 +262,9 @@ impl RiffCell {
         self.bars
     }
 
-    /// Акцент риффа на шаге 0..1. Фраза держит рисунок, такт клетки
-    /// выбирается глобальным тактом: 2-тактовая клетка не сбивается
-    /// на границах секций.
+    /// Riff accent at step 0..1. The phrase holds the pattern, the measure of the cell
+    /// selected by global measure: 2-measure cell is not confused
+    /// at the boundaries of sections.
     pub fn accent(&self, song: &SongContext, step_in_measure: usize) -> f32 {
         if !self.is_active() {
             return 0.0;
@@ -266,7 +272,7 @@ impl RiffCell {
         self.accents[self.index(song, step_in_measure)]
     }
 
-    /// Гармонический интервал (ступени лада) на этом шаге.
+    /// Harmonic interval (scale degrees) in this step.
     pub fn root(&self, song: &SongContext, step_in_measure: usize) -> u8 {
         if !self.is_active() {
             return 0;
@@ -283,18 +289,18 @@ impl RiffCell {
         (bar * self.steps_per_measure + step_in_measure.min(self.steps_per_measure - 1)) % MAX_STEPS
     }
 
-    /// Вероятностный вес: риффовые доли звучат чаще, пустые — реже.
+    /// Probability weight: riff beats sound more often, empty beats sound less often.
     pub fn probability(accent: f32) -> f32 {
         0.90 + 0.25 * accent.clamp(0.0, 1.0)
     }
 
-    /// Акцент громкости: рифф слышно, но он не перекрывает метр.
+    /// Volume emphasis: The riff is audible, but it doesn't overwhelm the meter.
     pub fn velocity(accent: f32) -> f32 {
         1.0 + 0.10 * accent.clamp(0.0, 1.0)
     }
 
-    /// Сдвиг выбора длины ноты: на акценте нота тянется, в пустоте —
-    /// короче. Это артикуляция, а не множитель.
+    /// Shift in the choice of note length: in the accent the note stretches, in the void -
+    /// Briefly speaking. This is an articulation, not a multiplier.
     pub fn gate_bias(accent: f32) -> f32 {
         0.10 * accent.clamp(0.0, 1.0) - 0.03
     }

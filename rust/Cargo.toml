@@ -1,10 +1,16 @@
 [package]
-name = "rust_lib_cont"
+name = "rust_lib_continuum"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
+
+# The CLI binary has its own name so it does not collide with the library
+# output (both would otherwise produce rust_lib_continuum.* files).
+[[bin]]
+name = "continuum_cli"
+path = "src/main.rs"
 
 [dependencies]
 flutter_rust_bridge = "=2.13.0"
@@ -12,8 +18,8 @@ cpal = "0.15"
 rand = "0.8"
 crossbeam = "0.8"
 
-# Только Android: JavaVM для ndk-context (cpal/Oboe без него падают),
-# JNI-мост в AudioTrack для нативного аудио-потока (без участия Dart).
+# Android only: JavaVM for ndk-context (cpal/Oboe crash without it),
+# plus a JNI bridge to AudioTrack for the native audio stream (no Dart).
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-context = "0.1"
 jni = "0.22"
@@ -21,10 +27,10 @@ jni = "0.22"
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 
-# Debug на устройстве обязан играть без затыков: чистый opt-level=0
-# даёт ~в 5–7 раз медленнее release (замер soak), и мобильному ядру
-# этого не хватает в плотных местах (дроп). Как в v1: dev = opt-level 2
-# (компиляция чуть дольше, звук как в релизе).
+# Debug builds on a device must play without dropouts: plain opt-level=0
+# is roughly 5–7x slower than release (soak measurement), which the mobile
+# core cannot afford in dense sections (drops). As in v1: dev = opt-level 2
+# (slightly slower to compile, sound identical to release).
 [profile.dev]
 opt-level = 2
 

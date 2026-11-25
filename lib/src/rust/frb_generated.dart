@@ -68,11 +68,11 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 857012167;
+  int get rustContentHash => -1419638576;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-        stem: 'rust_lib_cont',
+        stem: 'rust_lib_continuum',
         ioDirectory: 'rust/target/release/',
         webPrefix: 'pkg/',
         wasmBindgenName: 'wasm_bindgen',
@@ -117,6 +117,8 @@ abstract class RustLibApi extends BaseApi {
 
   Future<PlaybackStatus> crateApiPlaybackPlaybackResetInstruments();
 
+  Future<PlaybackStatus> crateApiPlaybackPlaybackResetMasterFx();
+
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetGroupVolume({
     required String groupName,
     required double volume,
@@ -124,6 +126,13 @@ abstract class RustLibApi extends BaseApi {
 
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetIntensity({
     required double intensity,
+  });
+
+  Future<PlaybackStatus> crateApiPlaybackPlaybackSetMasterFx({
+    required double reverbWet,
+    required double reverbSize,
+    required double trebleHz,
+    required double sidechain,
   });
 
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetPaused({
@@ -144,6 +153,10 @@ abstract class RustLibApi extends BaseApi {
 
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetTempoBpm({
     required double bpm,
+  });
+
+  Future<PlaybackStatus> crateApiPlaybackPlaybackSetToneOpen({
+    required double offset,
   });
 
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetTrack({
@@ -581,6 +594,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<PlaybackStatus> crateApiPlaybackPlaybackResetMasterFx() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_playback_status,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiPlaybackPlaybackResetMasterFxConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPlaybackPlaybackResetMasterFxConstMeta =>
+      const TaskConstMeta(debugName: "playback_reset_master_fx", argNames: []);
+
+  @override
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetGroupVolume({
     required String groupName,
     required double volume,
@@ -594,7 +634,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -627,7 +667,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -649,6 +689,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<PlaybackStatus> crateApiPlaybackPlaybackSetMasterFx({
+    required double reverbWet,
+    required double reverbSize,
+    required double trebleHz,
+    required double sidechain,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_f_32(reverbWet, serializer);
+          sse_encode_f_32(reverbSize, serializer);
+          sse_encode_f_32(trebleHz, serializer);
+          sse_encode_f_32(sidechain, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_playback_status,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiPlaybackPlaybackSetMasterFxConstMeta,
+        argValues: [reverbWet, reverbSize, trebleHz, sidechain],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPlaybackPlaybackSetMasterFxConstMeta =>
+      const TaskConstMeta(
+        debugName: "playback_set_master_fx",
+        argNames: ["reverbWet", "reverbSize", "trebleHz", "sidechain"],
+      );
+
+  @override
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetPaused({
     required bool paused,
   }) {
@@ -660,7 +739,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 19,
             port: port_,
           );
         },
@@ -693,7 +772,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 20,
             port: port_,
           );
         },
@@ -723,7 +802,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 21,
             port: port_,
           );
         },
@@ -756,7 +835,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 22,
             port: port_,
           );
         },
@@ -789,7 +868,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 23,
             port: port_,
           );
         },
@@ -811,6 +890,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<PlaybackStatus> crateApiPlaybackPlaybackSetToneOpen({
+    required double offset,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_f_32(offset, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 24,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_playback_status,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiPlaybackPlaybackSetToneOpenConstMeta,
+        argValues: [offset],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPlaybackPlaybackSetToneOpenConstMeta =>
+      const TaskConstMeta(
+        debugName: "playback_set_tone_open",
+        argNames: ["offset"],
+      );
+
+  @override
   Future<PlaybackStatus> crateApiPlaybackPlaybackSetTrack({
     required BigInt instrumentId,
     required double volume,
@@ -824,7 +936,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 25,
             port: port_,
           );
         },
@@ -859,7 +971,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 26,
             port: port_,
           );
         },
@@ -889,7 +1001,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 27,
             port: port_,
           );
         },
@@ -916,7 +1028,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 28,
             port: port_,
           );
         },
@@ -943,7 +1055,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 29,
             port: port_,
           );
         },
@@ -970,7 +1082,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 30,
             port: port_,
           );
         },
@@ -997,7 +1109,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1140,8 +1252,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PlaybackStatus dco_decode_playback_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 15)
+      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return PlaybackStatus(
       running: dco_decode_bool(arr[0]),
       paused: dco_decode_bool(arr[1]),
@@ -1153,6 +1265,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       engineError: dco_decode_opt_String(arr[7]),
       engineVersion: dco_decode_u_32(arr[8]),
       instrumentListEdited: dco_decode_bool(arr[9]),
+      reverbWet: dco_decode_f_32(arr[10]),
+      reverbSize: dco_decode_f_32(arr[11]),
+      trebleHz: dco_decode_f_32(arr[12]),
+      sidechain: dco_decode_f_32(arr[13]),
+      toneOpen: dco_decode_f_32(arr[14]),
     );
   }
 
@@ -1399,6 +1516,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_engineError = sse_decode_opt_String(deserializer);
     var var_engineVersion = sse_decode_u_32(deserializer);
     var var_instrumentListEdited = sse_decode_bool(deserializer);
+    var var_reverbWet = sse_decode_f_32(deserializer);
+    var var_reverbSize = sse_decode_f_32(deserializer);
+    var var_trebleHz = sse_decode_f_32(deserializer);
+    var var_sidechain = sse_decode_f_32(deserializer);
+    var var_toneOpen = sse_decode_f_32(deserializer);
     return PlaybackStatus(
       running: var_running,
       paused: var_paused,
@@ -1410,6 +1532,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       engineError: var_engineError,
       engineVersion: var_engineVersion,
       instrumentListEdited: var_instrumentListEdited,
+      reverbWet: var_reverbWet,
+      reverbSize: var_reverbSize,
+      trebleHz: var_trebleHz,
+      sidechain: var_sidechain,
+      toneOpen: var_toneOpen,
     );
   }
 
@@ -1630,6 +1757,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.engineError, serializer);
     sse_encode_u_32(self.engineVersion, serializer);
     sse_encode_bool(self.instrumentListEdited, serializer);
+    sse_encode_f_32(self.reverbWet, serializer);
+    sse_encode_f_32(self.reverbSize, serializer);
+    sse_encode_f_32(self.trebleHz, serializer);
+    sse_encode_f_32(self.sidechain, serializer);
+    sse_encode_f_32(self.toneOpen, serializer);
   }
 
   @protected

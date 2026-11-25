@@ -4,9 +4,9 @@ use super::{
 };
 use crate::core::midi_to_freq;
 
-/// 808-кик: низкий спад с длинным круглым хвостом, сустейн на высоте
-/// ноты (мелодический 808 для трэп-баслайнов) и портаменто между нотами
-/// (фирменные слайды). Тихий щелчок, никакого панча в грудь.
+/// 808 kick: low decay with a long round tail, sustaining at the note's pitch
+/// (melodic 808 for trap basslines) and portamento between notes (the
+/// signature slides). Quiet click, no chest-punch.
 const LEN_SECS: f32 = 0.7;
 const FREQ_START_HZ: f32 = 120.0;
 const TARGET_MIN_HZ: f32 = 32.0;
@@ -15,7 +15,7 @@ const AMP_DECAY: f32 = 5.0;
 const CLICK_DECAY: f32 = 300.0;
 const CLICK_GAIN: f32 = 0.3;
 const GLIDE_SECS: f32 = 0.045;
-/// Драйв сдержанный: перегруженный 808 пердит, а не гудит.
+/// Drive is restrained: an overloaded 808 farts rather than booms.
 const DRIVE: f32 = 1.15;
 const ATTACK_SECS: f32 = 0.0015;
 const FADE_SECS: f32 = 0.02;
@@ -31,10 +31,10 @@ struct Kick808Voice {
     glide_coeff: f32,
     samples_left: usize,
     noise: Noise,
-    /// Первый удар после тишины: слайдить не с чего — стартуем с ноты.
-    /// Иначе первый хит чирикает снизу вверх.
+    /// First hit after silence: nothing to slide from — start at the note.
+    /// Otherwise the first hit chirps upward from below.
     snap: bool,
-    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    /// Recursive envelopes instead of per-sample `exp`.
     body_env: ExpDecay,
     sweep_env: ExpDecay,
     click_env: ExpDecay,
@@ -47,8 +47,8 @@ impl Voice for Kick808Voice {
     }
 
     fn set_glide_start(&mut self, freq_hz: f32) {
-        // Слайд стартует с высоты прошлой ноты (ставит обертка).
-        // Прошлой нет (тишина) — флаг: trigger поставит базу на ноту.
+        // The slide starts from the previous note's pitch (set by the wrapper).
+        // No previous note (silence) — a flag: trigger will set the base to the note.
         if freq_hz <= 0.0 {
             self.snap = true;
         } else {
@@ -81,8 +81,8 @@ impl Voice for Kick808Voice {
 
         let sample_rate = self.sample_rate;
         let body_env = self.body_env.next();
-        // База ползет к ноте (слайд), свип — от фиксированной атаки:
-        // панч сохранен, сустейн мелодический.
+        // The base creeps toward the note (slide), the sweep starts from a fixed attack:
+        // punch is preserved, the sustain is melodic.
         self.base_smooth += (self.target - self.base_smooth) * self.glide_coeff;
         let freq = self.base_smooth + (FREQ_START_HZ - self.base_smooth) * self.sweep_env.next();
         self.phase = (self.phase + freq / sample_rate) % 1.0;
@@ -109,8 +109,8 @@ impl Voice for Kick808Voice {
     }
 }
 
-/// Публичный инструмент: моно-голос с кроссфейдом хвоста + слайды
-/// между нотами (высота прошлой ноты переживает своп в `last_freq`).
+/// Public instrument: monophonic voice with tail crossfade + slides
+/// between notes (the previous note's pitch survives the swap in `last_freq`).
 pub struct Kick808(Mono<Kick808Voice>, f32);
 
 impl Kick808 {
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn first_hit_starts_in_tune() {
-        // Первый удар после тишины: база = нота сразу, без чирика снизу.
+        // First hit after silence: base = note immediately, no chirp from below.
         let sr = 44_100.0;
         let mut v = Kick808Voice::default();
         v.set_sample_rate(sr);
@@ -171,7 +171,7 @@ mod tests {
             "chirp: {}",
             v.base_smooth
         );
-        // Второй удар слайдится с прошлого, а не снэпается.
+        // The second hit slides from the previous note rather than snapping.
         v.set_glide_start(40.0);
         v.trigger(&NoteEvent::new(8, 43, 1.0, 0.5));
         assert!((v.base_smooth - 40.0).abs() < 0.01, "glide broken");
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn slides_between_notes_without_step() {
-        // Слайд 65 → 98 Гц: высота ползет, ступеньки нет.
+        // Slide 65 → 98 Hz: the pitch creeps, with no step.
         let sr = 44_100.0;
         let mut kick = Kick808::new(8);
         kick.set_sample_rate(sr);

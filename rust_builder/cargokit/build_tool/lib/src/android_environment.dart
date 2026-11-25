@@ -204,13 +204,14 @@ class AndroidEnvironment {
     } else {
       rustFlags = '$rustFlags-L\x1f$workaroundDir';
     }
-    // C++ STL — статически в наш .so: cpal тянет Oboe (C++), а отдельный
-    // libc++_shared.so в APK не пакуется и DT_NEEDED на него нет — на
-    // телефоне dlopen падал с "cannot locate symbol _cxa_pure_virtual".
-    // (config.toml здесь не помогает: этот env перебивает rustflags
-    // из конфигов.) Важно: линкер здесь — C-драйвер clang, который
-    // игнорирует -static-libstdc++, поэтому линкуем явные архивы.
-    // FFI-граница — чистый C ABI, статик безопасен.
+    // Link the C++ STL statically into our .so: cpal pulls in Oboe (C++),
+    // but a separate libc++_shared.so is not packaged into the APK and has no
+    // DT_NEEDED entry, so dlopen failed on the device with
+    // "cannot locate symbol _cxa_pure_virtual".
+    // (config.toml does not help here: this env overrides rustflags from
+    // config files.) Note: the linker is the clang C driver, which ignores
+    // -static-libstdc++, so explicit archives are linked instead.
+    // The FFI boundary is plain C ABI, so static linking is safe.
     const staticStlArgs = ['-C', 'link-arg=-lc++_static', '-C', 'link-arg=-lc++abi'];
     final staticStlString = staticStlArgs.join('\x1f');
     if (!rustFlags.endsWith('\x1f')) {

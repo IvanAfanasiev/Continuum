@@ -1,9 +1,9 @@
-//! Одна нота на инструмент: пик, крест-фактор, искажения (THD).
-//! Отвечает на вопрос «хрипит ли инструмент» числами, а не слухом.
-//! Временный инструмент.
+//! One note per instrument: peak, crest factor, distortion (THD).
+//! Answers "does the instrument sound harsh?" with numbers, not by ear.
+//! Temporary diagnostic tool.
 
-use rust_lib_cont::instruments::{NoteEvent, Slot};
-use rust_lib_cont::playback::build_instruments;
+use rust_lib_continuum::instruments::{NoteEvent, Slot};
+use rust_lib_continuum::playback::build_instruments;
 
 fn main() {
     let sr = 44_100.0f32;
@@ -24,15 +24,15 @@ fn main() {
         let n = (sr * 0.4) as usize;
         let mut buf = Vec::with_capacity(n);
         for i in 0..n {
-            // Перекрытие: вторая нота через 100 мс (хвост первой + новая).
+            // Overlap: the second note after 100 ms (first tail + new note).
             if i == (sr * 0.1) as usize {
                 inst.trigger(&NoteEvent::new(id, pitch, vel, 0.4));
             }
             buf.push(inst.next_sample());
         }
         let peak = buf.iter().fold(0.0f32, |a, v| a.max(v.abs()));
-        // RMS по активной части (выше -40 дБ от пика): тишина в хвосте
-        // не должна съедать средний уровень.
+        // RMS over the active part (above -40 dB from peak): tail silence
+        // must not dilute the average level.
         let thr = peak * 0.01;
         let active: Vec<f32> = buf.iter().copied().filter(|v| v.abs() > thr).collect();
         let rms = if active.is_empty() {
@@ -41,9 +41,9 @@ fn main() {
             (active.iter().map(|v| v * v).sum::<f32>() / active.len() as f32).sqrt()
         };
         let clipped = buf.iter().filter(|v| v.abs() > 0.999).count();
-        // Огибающая: время до пика (в первой половине ноты — до
-        // наложения второй), уровень сустейна, спад после пика.
-        // До второй ноты (она на 100 мс) — иначе пик измеряет наложение.
+        // Envelope: time to peak (in the first half of the note — before
+        // the second note overlaps), sustain level, decay after the peak.
+        // Before the second note (at 100 ms) — otherwise the peak measures the overlap.
         let first_half = (buf.len() as f32 * 0.22) as usize;
         let mut peak_i = 0usize;
         for (i, v) in buf[..first_half].iter().enumerate() {
@@ -67,8 +67,8 @@ fn main() {
                 break;
             }
         }
-        // Разрывы: отклонение от линейного предсказания. Щелчок — это
-        // скачок, который сигнал не «предсказывал».
+        // Jumps: deviation from linear prediction. A click is
+        // a jump the signal did not "predict".
         let jump_at = |from: usize, to: usize| -> (f32, usize) {
             let mut worst = (0.0f32, 0usize);
             for i in from.max(2)..to.min(buf.len()) {
@@ -84,7 +84,7 @@ fn main() {
         let release = jump_at(buf.len() - (sr * 0.01) as usize, buf.len());
         let (thd_db, _f0_hz) = thd(&buf, sr);
         println!(
-            "{:<12} пик={:6.3} крест={:5.1}дБ клип={:4} | атака {:6.1}мс, спад {:6.0}мс, сустейн {:5.3} ({:5.1}дБ) | разрыв атаки={:6.4} спад={:6.4}",
+            "{:<12} peak={:6.3} crest={:5.1}dB clip={:4} | attack {:6.1}ms, decay {:6.0}ms, sustain {:5.3} ({:5.1}dB) | attack jump={:6.4} decay={:6.4}",
             name,
             peak,
             20.0 * (peak / rms.max(1e-6)).log10(),
@@ -100,7 +100,7 @@ fn main() {
     }
 }
 
-/// Энергия гармоник против основной: спектр одной ноты.
+/// Harmonic energy versus the fundamental: single-note spectrum.
 fn thd(buf: &[f32], sr: f32) -> (f32, f32) {
     let size = 16384usize;
     let n = buf.len().min(size);

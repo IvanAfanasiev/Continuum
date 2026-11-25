@@ -1,12 +1,12 @@
-//! Сид-коды для фронта: формат `XXX-XXX`, алфавит `[0-9A-Z]`.
+//! Seed codes for the frontend: format `XXX-XXX`, alphabet `[0-9A-Z]`.
 //!
-//! Обычному пользователю u64 не нужен: код из 6 символов (36^6 ≈ 2.2 млрд
-//! вариантов) вводится, показывается и шарится. Бакенд хранит u64;
-//! код — его каноническое отображение (младшие 36^6).
-//! Ввод мусора санитизируется: регистр выравнивается, левые символы
-//! выбрасываются; короче 6 значимых — отклоняется (фронт держит старый).
+//! A regular user doesn't need a u64: a 6-character code (36^6 ≈ 2.2 billion
+//! variants) can be typed, shown and shared. The backend stores the u64;
+//! the code is its canonical representation (the low 36^6 values).
+//! Garbage input is sanitized: case is normalized, stray characters
+//! are discarded; fewer than 6 significant characters is rejected (the frontend keeps the old value).
 
-/// Число разных кодов: 36^6.
+/// Number of distinct codes: 36^6.
 pub const CODE_SPACE: u64 = 36 * 36 * 36 * 36 * 36 * 36;
 
 const ALPHABET: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -16,7 +16,7 @@ fn digit_value(byte: u8) -> Option<u64> {
     ALPHABET.iter().position(|&d| d == upper).map(|i| i as u64)
 }
 
-/// Канонический код сида: `XXX-XXX` в верхнем регистре.
+/// Canonical seed code: uppercase `XXX-XXX`.
 pub fn format_seed_code(seed: u64) -> String {
     let mut value = seed % CODE_SPACE;
     let mut digits = [0u8; 6];
@@ -29,8 +29,8 @@ pub fn format_seed_code(seed: u64) -> String {
     format!("{left}-{right}")
 }
 
-/// Разбор кода: дефисы/пробелы/мусор игнорируются, регистр — нет разницы.
-/// Нужно ровно 6 значимых символов, иначе `None` (ничего не меняем).
+/// Code parsing: dashes/spaces/garbage are ignored, case makes no difference.
+/// Exactly 6 significant characters are required, otherwise `None` (nothing changes).
 pub fn parse_seed_code(code: &str) -> Option<u64> {
     let mut value: u64 = 0;
     let mut count = 0;
@@ -52,7 +52,7 @@ pub fn parse_seed_code(code: &str) -> Option<u64> {
     }
 }
 
-/// Случайный код для кнопки «кубик» во фронте.
+/// Random code for the frontend's "dice" button.
 pub fn random_seed_code() -> String {
     use rand::Rng;
     let seed: u64 = rand::thread_rng().gen();
@@ -76,8 +76,8 @@ mod tests {
 
     #[test]
     fn sanitizes_input() {
-        assert_eq!(parse_seed_code("ab12c"), None); // коротко: 5 символов
-        assert!(parse_seed_code("ab12-cd").is_some()); // дефис не в счет
+        assert_eq!(parse_seed_code("ab12c"), None); // short: 5 characters
+        assert!(parse_seed_code("ab12-cd").is_some()); // the dash doesn't count
         assert_eq!(parse_seed_code("ab12cd34"), parse_seed_code("AB12CD"));
         assert_eq!(parse_seed_code("  aB-12-cD\n"), parse_seed_code("AB12CD"));
         assert_eq!(parse_seed_code("AB!@#12CD"), parse_seed_code("AB12CD"));

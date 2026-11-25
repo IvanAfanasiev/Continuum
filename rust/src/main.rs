@@ -1,14 +1,14 @@
-//! Настольный раннер: CLI поверх [`rust_lib_cont::playback::PlaybackController`].
+//! Desktop runner: a CLI on top of [`rust_lib_continuum::playback::PlaybackController`].
 //!
-//! Использование (двойной дефис — синтаксис самого cargo, он отделяет
-//! аргументы программы от аргументов cargo и убрать его нельзя):
+//! Usage (the double dash is cargo's own syntax; it separates
+//! program arguments from cargo arguments and cannot be removed):
 //! ```text
-//! cargo run -- lofi            # стиль lofi, сид по умолчанию
-//! cargo run -- 1234            # сид 1234, стиль club
-//! cargo run -- 1234 lofi       # сид + стиль (порядок свободный)
+//! cargo run -- lofi            # lofi style, default seed
+//! cargo run -- 1234            # seed 1234, club style
+//! cargo run -- 1234 lofi       # seed + style (order is free)
 //! cargo run -- --style=lofi --seed=7
-//! cargo run -- lofi --render 64  # офлайн-проверка без аудиоустройства
-//! cargo run -- club --soak 60    # прогон всего тракта 60 секунд аудио
+//! cargo run -- lofi --render 64  # offline check without an audio device
+//! cargo run -- club --soak 60    # soak the whole pipeline for 60 seconds of audio
 //! ```
 
 use std::{
@@ -16,11 +16,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rust_lib_cont::core::DEFAULT_SEED;
-use rust_lib_cont::playback::{
+use rust_lib_continuum::core::DEFAULT_SEED;
+use rust_lib_continuum::playback::{
     render_offline, render_wav, soak_render, PlaybackController, RenderReport, SoakReport,
 };
-use rust_lib_cont::{proto, styles};
+use rust_lib_continuum::{proto, styles};
 
 const DEFAULT_RENDER_STEPS: usize = 64;
 const DEFAULT_SOAK_SECS: f32 = 60.0;
@@ -34,13 +34,13 @@ struct Cli {
     soak_secs: Option<f32>,
     wav_path: Option<String>,
     wav_secs: Option<f32>,
-    /// Режим прототипа: pure-formula движок вместо основного.
+    /// Prototype mode: pure-formula engine instead of the main one.
     proto: bool,
-    /// Добавочные слоты в микс рендера (`--with 19`): прослушка
-    /// ручных голосов поверх дефолта стиля.
+    /// Extra slots in the render mix (`--with 19`): audition
+    /// manual voices on top of the style defaults.
     with: Vec<usize>,
-    /// Соло-слоты рендера (`--solo 6`): звучат только они, дефолт
-    /// стиля не применяется. Спотлайт для саунд-дизайна.
+    /// Solo render slots (`--solo 6`): only they sound, the style
+    /// default is not applied. A spotlight for sound design.
     solo: Vec<usize>,
 }
 
@@ -60,8 +60,8 @@ impl Cli {
     }
 }
 
-/// Разбор аргументов: число = сид, остальное = имя стиля.
-/// Неизвестные имена НЕ падают и НЕ молчат — о них сообщает вызывающий.
+/// Argument parsing: a number = seed, everything else = style name.
+/// Unknown names do NOT fail and do NOT stay silent — the caller is notified.
 fn parse_cli(args: &[String]) -> Cli {
     let mut cli = Cli::new();
     let mut i = 1;
@@ -74,7 +74,7 @@ fn parse_cli(args: &[String]) -> Cli {
                         cli.render_steps = Some(n);
                         i += 1;
                     } else {
-                        // Следом идет стиль/сид — рендерим дефолтное число шагов.
+                        // A style/seed follows — render the default number of steps.
                         cli.render_steps = Some(DEFAULT_RENDER_STEPS);
                     }
                 }
@@ -218,7 +218,7 @@ fn print_report(report: &RenderReport) {
 fn main() {
     let cli = parse_cli(&env::args().collect::<Vec<_>>());
 
-    // Прототип: тот же seed/wav/soak, но pure-formula движок.
+    // Prototype: same seed/wav/soak, but with the pure-formula engine.
     if cli.proto {
         if let Some(path) = cli.wav_path {
             let secs = cli.wav_secs.unwrap_or(DEFAULT_WAV_SECS);
@@ -267,8 +267,8 @@ fn main() {
         return;
     }
 
-    // Имя нормализуем через реестр: "Club", " LOFI " и т.п. тоже находятся.
-    // Неизвестное имя — предупреждение + club, а не тихий чужой стиль.
+    // Normalize the name via the registry: "Club", " LOFI ", etc. are found too.
+    // An unknown name is a warning + club, not a silent foreign style.
     let style_name = match styles::make_style(&cli.style) {
         Some(s) => s.name().to_string(),
         None => {
@@ -326,7 +326,7 @@ fn main() {
         status.style_name, status.seed
     );
 
-    // Главная петля CLI: просто ждет. Выход — только по ошибке движка.
+    // The CLI main loop: just waits. Exit only on an engine error.
     loop {
         thread::sleep(Duration::from_secs(1));
         let status = controller.status();
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(cli.wav_secs, None);
         let cli = parse_cli(&args(&["--secs=10", "--wav", "y.wav"]));
         assert_eq!(cli.wav_secs, Some(10.0));
-        // Без пути --wav игнорируется, secs живет отдельно.
+        // Without a --wav path it is ignored; secs lives separately.
         let cli = parse_cli(&args(&["--secs", "10"]));
         assert_eq!(cli.wav_path, None);
         assert_eq!(cli.wav_secs, Some(10.0));

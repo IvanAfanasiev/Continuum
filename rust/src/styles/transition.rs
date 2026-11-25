@@ -1,49 +1,49 @@
-//! Переходы стилей — короткий жест, а не правило формы.
+//! Style transitions are a short gesture, not a rule of form.
 //!
-//! Переход срабатывает в последнем такте `BuildUp` и оставляет
-//! затухающий хвост на первых шагах следующей секции. Жест владеет
-//! своим слотом на этих шагах: обычная направляющая не дублирует удар.
-//! Словарь жестов у каждого стиля свой (шейкерный вихрь, ролл, филл,
-//! слайд 808, стаб-пикап, дыхание), поэтому стык звучит как стиль,
-//! а не как общий метроном.
+//! The transition fires in the last measure of `BuildUp` and leaves
+//! a fading tail over the first steps of the next section. The gesture owns
+//! its slot on those steps: the regular guide does not duplicate the hit.
+//! Each style has its own vocabulary of gestures (shaker spiral, roll, fill,
+//! 808 slide, stab pickup, breath), so the seam sounds like its style,
+//! and not as a general metronome.
 //!
-//! Это не `piece::Transition`: тот отвечает за склейку кусков, этот —
-//! за музыкальный вход из разгона в удар.
+//! This is not `piece::Transition`: that one is responsible for gluing the pieces together, this one is
+//! for the musical entry from build-up into the drop.
 
 use super::Harmony;
 use crate::arranger::{SongContext, SongSection};
 use crate::instruments::{NoteEvent, Slot};
 
-/// Словарь перехода. Вид задает рисунок и инструмент, а не громкость:
-/// громкость — дело секции и стадии.
+/// Transition vocabulary. A kind defines its pattern and instrument, not its volume:
+/// volume is a matter of section and stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Deep: шейкерный вихрь, плотность и сила растут к дропу.
+    /// Deep: shaker spiral; density and force grow towards the drop.
     ShakerSpiral,
-    /// Club: снейр-ролл 16-ми с хвостом после удара.
+    /// Club: 16th-note snare roll with a tail after the hit.
     SnareRoll,
-    /// Rock: филл бочка/снейр, как томы, с мягким хвостом.
+    /// Rock: kick/snare fill like toms, with a soft tail.
     TomFill,
-    /// Phonk: слайд 808 через квинту в корень дропа.
+    /// Phonk: 808 slide through the fifth into the drop root.
     Slide808,
-    /// Proto: короткий стаб-пикап щипка в последней четверти.
+    /// Proto: short stab-pickup pluck in the last quarter.
     StabPickup,
-    /// Lofi: тихое дыхание хэта, без удара.
+    /// Lofi: quiet hi-hat breath, no hit.
     BreathPickup,
 }
 
-/// Описание перехода стиля.
+/// Description of the style transition.
 #[derive(Clone, Copy, Debug)]
 pub struct Spec {
     pub kind: Kind,
-    /// Слоты, которые жест занимает в последнем такте разгона.
+    /// Slots that the gesture occupies in the last build-up measure.
     pub fill_slots: &'static [Slot],
-    /// Слоты, которые жест занимает на первых шагах следующей секции.
-    /// Хвост может быть уже филла: бочка дропа остается на месте.
+    /// The slots that the gesture occupies in the first steps of the next section.
+    /// The tail may be narrower: the drop kick remains in place.
     pub tail_slots: &'static [Slot],
-    /// Длина хвоста в шагах (считая с даунбита новой секции).
+    /// Tail length in steps (counting from the downbeat of the new section).
     pub tail_steps: usize,
-    /// Питч для ударных жестов; питчевые виды считают высоту сами.
+    /// Pitch for percussion gestures; pitched kinds determine their own pitch.
     pub pitch: u8,
 }
 
@@ -65,7 +65,7 @@ impl Spec {
     }
 }
 
-/// Что переход делает на одном шаге.
+/// What the transition does in one step.
 pub struct Step {
     owned: [bool; Slot::COUNT],
     pub notes: Vec<NoteEvent>,
@@ -79,16 +79,16 @@ impl Step {
         }
     }
 
-    /// Занимает ли переход этот слот на данном шаге. Обычная
-    /// направляющая слота в этом случае молчит: один удар, не два.
+    /// Whether the transition owns this slot at this step. The slot's regular
+    /// guide is silent in this case: one hit, not two.
     pub fn owns(&self, slot: Slot) -> bool {
         self.owned[slot.index()]
     }
 }
 
-/// Отрисовать шаг перехода. `None` — стиль без перехода или шаг вне
-/// зоны жеста. Слоты, выключенные пользователем или отсутствующие в
-/// аранже секции, не занимаются: переход не обходит микшер.
+/// Render a transition step. `None` — style without a transition, or a step outside
+/// the gesture zone. Slots disabled by the user or missing from the
+/// section arrangement are not owned: the transition does not bypass the mixer.
 pub(crate) fn render(
     spec: Option<Spec>,
     song: &SongContext,
@@ -150,9 +150,9 @@ pub(crate) fn render(
             );
         }
         Kind::TomFill => {
-            // Филл чередует низ (бочка) и верх (снейр): томы в этом
-            // движке живут питчем снейра/бочки, а не отдельным слотом.
-            // Хвост — только снейр: даунбит дропа остается за бочкой.
+            // The fill alternates between the bottom (kick) and the top (snare): the toms in this
+            // in the engine they live by the pitch of the snare/kick, and not by a separate slot.
+            // The tail is only a snare: the downbeat drop remains behind the kick drum.
             if phase == Phase::Fill {
                 let (slot, pitch) = if step_in_measure.is_multiple_of(2) {
                     (Slot::Kick, spec.pitch)
@@ -184,8 +184,8 @@ pub(crate) fn render(
             let root = bass_root(harmony.scale, song, harmony);
             match phase {
                 Phase::Fill => {
-                    // Квинта в середине и корень к трем четвертям:
-                    // моно-808 сам тянет глисс между нотами.
+                    // Fifth in the middle and root to three quarters:
+                    // Mono-808 itself pulls gliss between notes.
                     if step_in_measure == steps_per_measure / 2 {
                         push(
                             &mut out,
@@ -274,8 +274,8 @@ enum Phase {
     Tail,
 }
 
-/// Где и с какой силой звучит жест. Заполнение — последний такт
-/// `BuildUp`; хвост — первые шаги раздела, вошедшего после разгона.
+/// Where and with what force the gesture sounds. Fill - last measure
+/// `BuildUp`; tail - the first steps of the section that entered after build-up.
 fn phase(
     spec: Spec,
     song: &SongContext,
@@ -298,8 +298,8 @@ fn phase(
     None
 }
 
-/// С какого шага последнего такта начинается жест. Поздние виды
-/// (стаб, дыхание) оставляют больше места обычному груву.
+/// From what step of the last measure does the gesture begin? Late species
+/// (stab, breath) leave more room for the regular groove.
 fn fill_start(kind: Kind, steps_per_measure: usize) -> usize {
     match kind {
         Kind::ShakerSpiral | Kind::SnareRoll | Kind::TomFill | Kind::Slide808 => {
@@ -338,8 +338,8 @@ fn push(
     ));
 }
 
-/// Корень текущей гармонии в суб-регистре: 808 не уезжает в лид.
-/// Прогрессия, темп гармонии и тональность — стиля, а не общие.
+/// The root of the current harmony is in the sub-register: 808 does not go into the lead.
+/// Progression, harmony tempo and tonality are style, not general.
 fn bass_root(scale: &[u8], song: &SongContext, harmony: &Harmony) -> u8 {
     if scale.is_empty() {
         return 36;
@@ -359,7 +359,7 @@ fn bass_root(scale: &[u8], song: &SongContext, harmony: &Harmony) -> u8 {
     pitch.clamp(0, 127) as u8
 }
 
-/// Ступень лада в верхнем регистре для стаб-пикапа.
+/// Upper register scale level for stab pickup.
 fn scale_pitch(
     scale: &[u8],
     degree: usize,
@@ -424,8 +424,8 @@ mod tests {
 
     #[test]
     fn club_roll_fills_last_bar_and_tails_after() {
-        // Ролл занимает последний такт разгона целиком и оставляет
-        // короткий хвост после удара, а не обрывается на даунбите.
+        // The roll takes up the entire last build-up measure and leaves
+        // short tail after hit, rather than breaking off on the downbeat.
         let spec = Some(Spec::new(
             Kind::SnareRoll,
             &[Slot::Snare],
@@ -467,8 +467,8 @@ mod tests {
 
     #[test]
     fn rock_fill_takes_both_but_tail_leaves_kick() {
-        // Филл владеет и бочкой, и снейром, но хвост — только снейр:
-        // даунбит дропа остается за бочкой.
+        // Phill has both a kick drum and a snare, but the tail is only a snare:
+        // the downbeat drop remains behind the kick drum.
         let spec = Some(Spec::new(
             Kind::TomFill,
             &[Slot::Kick, Slot::Snare],
@@ -497,8 +497,8 @@ mod tests {
 
     #[test]
     fn transition_does_not_fire_inside_a_section() {
-        // Жест живет только на шве: последний такт разгона и первые
-        // шаги следующего раздела. Внутри секции обычный грув.
+        // The gesture lives only at the seam: the last stroke of build-up and the first
+        // steps in the next section. Inside the section there is a regular groove.
         let spec = Some(Spec::new(
             Kind::ShakerSpiral,
             &[Slot::Shaker],
@@ -513,7 +513,7 @@ mod tests {
             assert!(out.notes.is_empty(), "transition leaked at step {step}");
             assert!(!out.owns(Slot::Shaker));
         }
-        // Секция после BuildUp, но не первая — хвоста уже нет.
+        // The section after BuildUp, but not the first - the tail is no longer there.
         let later = song(SongSection::Drop, false, 2, SongSection::BuildUp);
         assert!(
             render(spec, &later, 0, 16, 0.1, &active, &h(&later))

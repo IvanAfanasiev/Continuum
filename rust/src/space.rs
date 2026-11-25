@@ -1,22 +1,34 @@
-//! Мастер-пространство: компактный стерео-реверб (Freeverb-лайт)
-//! плюс темповый дилэй для вокала.
+//! Master space: a compact stereo reverb (light Freeverb)
+//! plus an optional tempo-synced delay.
 //!
-//! Реверб к темпу не привязан (глубина без ритмического риска),
-//! дилэй — dotted-8th от живого BPM (эхо вокала в сетке).
-//! Кик в send не входит (highpass): низ остается сухим и читаемым.
-//! Все структуры конкретные, без generic — безопасно для FFI-парсера.
+//! The reverb is not tempo-locked (depth without rhythmic risk),
+//! the delay is a dotted 8th of the live BPM.
+//! The kick is not sent (highpass): the lows stay dry and readable.
+//! All structs are concrete, with no generics — safe for the FFI parser.
+
+use crate::instruments::dsp::sin01;
 
 const COMB_TUNINGS_L: [f32; 4] = [1116.0, 1188.0, 1277.0, 1356.0];
 const COMB_TUNINGS_R: [f32; 4] = [1139.0, 1211.0, 1300.0, 1379.0];
 const AP_TUNINGS_L: [f32; 2] = [556.0, 441.0];
 const AP_TUNINGS_R: [f32; 2] = [579.0, 464.0];
 const AP_FEEDBACK: f32 = 0.5;
-/// Send highpass: все ниже 400 Гц в реверб не идет.
+/// Send highpass: nothing below 650 Hz goes into the reverb.
 const SEND_HP_HZ: f32 = 650.0;
-/// Пол анти-денормала: линии реверба живут вечно и без этого сползают
-/// в субнормальный диапазон, где арифметика x86 в десятки раз медленнее
-/// (редкие всплески нагрузки = хрип/прерывания). 1e-18 — обычный float,
-/// на −360 дБ неслышимый, но держит всю обратную связь в норме.
+/// Predelay: 20 ms before the combs — so the direct sound and early reflections
+/// don't merge, the room reads as space rather than as a chorus.
+const PREDELAY_SECS: f32 = 0.020;
+const PREDELAY_CAP: usize = 2048;
+/// Cross-feedback between banks: the left comb hears the right
+/// tail and vice versa. Without this, two independent mono banks gave
+/// "two monos" instead of one stereo space.
+const CROSS_FEEDBACK: f32 = 0.16;
+/// Allpass modulation: it jitters the fixed delays, killing the
+/// metallic ringing of static combs.
+const AP_LFO_HZ: f32 = 0.32;
+const AP_LFO_DEPTH: f32 = 0.38;
+/// Anti-denormal floor: reverb lines live forever and without this drift
+/// into the subnormal range, where x86 arithmetic is dozens of times slower.
 const FEED_GUARD: f32 = 1e-18;
 
 struct Comb {
@@ -56,11 +68,16 @@ impl Allpass {
         }
     }
 
-    fn process(&mut self, x: f32) -> f32 {
-        let delayed = self.buf[self.idx];
+    /// `frac` — fractional addition to the delay [0,1). Interpolation between
+    /// adjacent samples of the line: the delay breathes without a step click.
+    fn process(&mut self, x: f32, frac: f32) -> f32 {
+        let n = self.buf.len();
+        let d0 = self.buf[self.idx];
+        let d1 = self.buf[(self.idx + 1) % n];
+        let delayed = d0 + (d1 - d0) * frac;
         let out = -x + delayed;
         self.buf[self.idx] = x + delayed * AP_FEEDBACK;
-        self.idx = (self.idx + 1) % self.buf.len();
+        self.idx = (self.idx + 1) % n;
         out
     }
 }
@@ -70,6 +87,17 @@ pub struct SpaceBus {
     combs_r: [Comb; 4],
     ap_l: [Allpass; 2],
     ap_r: [Allpass; 2],
+    /// Predelay line: one per channel.
+    pre_l: [f32; PREDELAY_CAP],
+    pre_r: [f32; PREDELAY_CAP],
+    pre_write: usize,
+    pre_delay: usize,
+    /// Sample period — needed for the allpass LFO.
+    sample_dt: f32,
+    /// One sample of cross-feedback (loop delay = 1 sample).
+    cross_l: f32,
+    cross_r: f32,
+    ap_lfo: f32,
     hp_a: f32,
     hp_y_l: f32,
     hp_y_r: f32,
@@ -85,14 +113,20 @@ impl SpaceBus {
         let scale = sample_rate / 44_100.0;
         let comb_len = |t: f32| (t * scale).round() as usize;
         let ap_len = |t: f32| (t * scale).round() as usize;
-        let rc = 1.0 / (std::f32::consts::TAU * SEND_HP_HZ);
-        let dt = 1.0 / sample_rate;
-        Self {
+        let mut bus = Self {
             combs_l: std::array::from_fn(|i| Comb::with_len(comb_len(COMB_TUNINGS_L[i]))),
             combs_r: std::array::from_fn(|i| Comb::with_len(comb_len(COMB_TUNINGS_R[i]))),
             ap_l: std::array::from_fn(|i| Allpass::with_len(ap_len(AP_TUNINGS_L[i]))),
             ap_r: std::array::from_fn(|i| Allpass::with_len(ap_len(AP_TUNINGS_R[i]))),
-            hp_a: rc / (rc + dt),
+            pre_l: [0.0; PREDELAY_CAP],
+            pre_r: [0.0; PREDELAY_CAP],
+            pre_write: 0,
+            pre_delay: 0,
+            sample_dt: 1.0 / 44_100.0,
+            cross_l: 0.0,
+            cross_r: 0.0,
+            ap_lfo: 0.0,
+            hp_a: 0.0,
             hp_y_l: 0.0,
             hp_y_r: 0.0,
             hp_x_l: 0.0,
@@ -100,16 +134,34 @@ impl SpaceBus {
             wet: 0.16,
             feedback: 0.82,
             damp: 0.45,
-        }
+        };
+        bus.retune(sample_rate);
+        bus
     }
 
-    /// Размер комнаты от стиля: wet 0..0.8, size 0..1 (комната → собор).
-    /// Большая комната дольше и темнее.
+    /// Sample-rate change WITHOUT losing the tail: the delay lines
+    /// stay in place (their length in samples changes by <10% between
+    /// 44.1 and 48 kHz — audibly the same tail); only predelay and
+    /// the send-HP coefficient are recalculated.
+    pub fn retune(&mut self, sample_rate: f32) {
+        let sr = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            44_100.0
+        };
+        let rc = 1.0 / (std::f32::consts::TAU * SEND_HP_HZ);
+        let dt = 1.0 / sr;
+        self.hp_a = rc / (rc + dt);
+        self.pre_delay = ((sr * PREDELAY_SECS) as usize)
+            .clamp(1, PREDELAY_CAP - 1);
+        self.sample_dt = 1.0 / sr;
+    }
+
+    /// Room size from style: wet 0..0.8, size 0..1 (room → cathedral).
+    /// A bigger room is longer and darker.
     pub fn set_room(&mut self, wet: f32, size: f32) {
         let size = size.clamp(0.0, 1.0);
         self.wet = wet.clamp(0.0, 0.8);
-        // Комната плотнее и темнее: длинный светлый хвост читался как
-        // «пустая комната» — инструменты тонули в эхе.
         self.feedback = 0.62 + 0.20 * size;
         self.damp = 0.45 + 0.25 * size;
     }
@@ -134,9 +186,9 @@ impl SpaceBus {
         y
     }
 
-    /// Полный сброс линий (защита от залипшего NaN — реверб с обратной
-    /// связью иначе звенел бы им вечно). Также глушит хвост комнаты
-    /// при смене сида или стиля: старая генерация не доигрывает.
+    /// Full reset of the lines (guard against a stuck NaN — a feedback
+    /// reverb would otherwise ring forever). Also mutes the room tail
+    /// on a seed or style change: old generation doesn't keep playing.
     pub fn reset(&mut self) {
         self.reset_all();
     }
@@ -149,35 +201,58 @@ impl SpaceBus {
         for ap in self.ap_l.iter_mut().chain(self.ap_r.iter_mut()) {
             ap.buf.fill(0.0);
         }
+        self.pre_l.fill(0.0);
+        self.pre_r.fill(0.0);
+        self.pre_write = 0;
+        self.cross_l = 0.0;
+        self.cross_r = 0.0;
         self.hp_y_l = 0.0;
         self.hp_y_r = 0.0;
         self.hp_x_l = 0.0;
         self.hp_x_r = 0.0;
     }
 
-    /// Стерео вход → сухой + темный мокрый хвост.
+    /// Stereo input → dry + wet tail with predelay and cross-links.
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        // Predelay: write now, read `pre_delay` back.
+        self.pre_l[self.pre_write] = l;
+        self.pre_r[self.pre_write] = r;
+        let pre_read = (self.pre_write + PREDELAY_CAP - self.pre_delay) % PREDELAY_CAP;
+        let delayed_l = self.pre_l[pre_read];
+        let delayed_r = self.pre_r[pre_read];
+        self.pre_write = (self.pre_write + 1) % PREDELAY_CAP;
+
         let (fb, damp, wet) = (self.feedback, self.damp, self.wet);
+        let send_l = self.send_hp(delayed_l, true) + FEED_GUARD + self.cross_r * CROSS_FEEDBACK;
+        let send_r = self.send_hp(delayed_r, false) + FEED_GUARD + self.cross_l * CROSS_FEEDBACK;
+
         let mut wet_l = 0.0;
-        let send_l = self.send_hp(l, true) + FEED_GUARD;
         for comb in &mut self.combs_l {
             wet_l += comb.process(send_l, fb, damp);
         }
         wet_l *= 0.25;
-        for ap in &mut self.ap_l {
-            wet_l = ap.process(wet_l);
-        }
-
         let mut wet_r = 0.0;
-        let send_r = self.send_hp(r, false) + FEED_GUARD;
         for comb in &mut self.combs_r {
             wet_r += comb.process(send_r, fb, damp);
         }
         wet_r *= 0.25;
-        for ap in &mut self.ap_r {
-            wet_r = ap.process(wet_r);
-        }
 
+        // Modulate the allpass delay: L and R are 90° out of phase,
+        // so the tail spreads across the sides and doesn't ring predictably.
+        self.ap_lfo = (self.ap_lfo + AP_LFO_HZ * self.sample_dt) % 1.0;
+        let frac_l = 0.5 + AP_LFO_DEPTH * sin01(self.ap_lfo);
+        let frac_r = 0.5 + AP_LFO_DEPTH * sin01(self.ap_lfo + 0.25);
+        for ap in &mut self.ap_l {
+            wet_l = ap.process(wet_l, frac_l);
+        }
+        for ap in &mut self.ap_r {
+            wet_r = ap.process(wet_r, frac_r);
+        }
+        self.cross_l = wet_l;
+        self.cross_r = wet_r;
+
+        // The dry signal is NOT delayed: predelay applies only to the send
+        // into the reverb, otherwise instrument attacks shift by 20 ms.
         let (mut out_l, mut out_r) = (l + wet_l * wet, r + wet_r * wet);
         if !(out_l.is_finite() && out_r.is_finite()) {
             self.reset_all();
@@ -188,13 +263,13 @@ impl SpaceBus {
     }
 }
 
-/// Темповый feedback-дилэй (dotted-8th): эхо вокала и лида в сетке.
-/// Время выставляет движок из живого BPM; линия одна на канал.
+/// Tempo-synced feedback delay (dotted 8th): lead echoes in the grid.
+/// The time is set by the engine from the live BPM; one line per channel.
 ///
-/// ВЫКЛЮЧЕН из тракта (см. RenderState): ситуативен, мылит транзиенты
-/// и тянет хвост прошлого раздела в новый. Лежит здесь как готовая
-/// отдельная фича: возврат = посыл из микшера + set_time от живого
-/// темпа, а не захардкоженные доли по ролям.
+/// DISABLED in the pipeline (see RenderState): situational, smears transients
+/// and drags the previous section's tail into the new one. It sits here as a
+/// ready-made standalone feature: enabling it again = send from the mixer + set_time from the
+/// live tempo, rather than hardcoded divisions by role.
 pub struct Echo {
     buf_l: Vec<f32>,
     buf_r: Vec<f32>,
@@ -207,7 +282,7 @@ pub struct Echo {
 }
 
 impl Echo {
-    /// `max_secs` — запас линии (хватит на самый медленный темп).
+    /// `max_secs` — line headroom (enough for the slowest tempo).
     pub fn new(sample_rate: f32, max_secs: f32, feedback: f32, damp_hz: f32) -> Self {
         let len = ((max_secs * sample_rate) as usize).max(64);
         let rc = 1.0 / (std::f32::consts::TAU * damp_hz);
@@ -231,7 +306,7 @@ impl Echo {
         self.read_offset = ((secs * sample_rate) as usize).clamp(16, len - 1);
     }
 
-    /// Send stereo → мокрые повторы. Сухого в выходе нет.
+    /// Send stereo → wet repeats. No dry signal in the output.
     pub fn process(&mut self, send_l: f32, send_r: f32) -> (f32, f32) {
         let len = self.buf_l.len();
         let read = (self.write_idx + len - self.read_offset) % len;
@@ -243,7 +318,7 @@ impl Echo {
         if wet_r.abs() < 1e-15 {
             wet_r = 0.0;
         }
-        // Демпфирование в петле: повторы темнеют, как в аналоге.
+        // Damping in the loop: repeats get darker, as with analog gear.
         self.lp_y_l += self.lp_a * (wet_l - self.lp_y_l);
         self.lp_y_r += self.lp_a * (wet_r - self.lp_y_r);
         self.buf_l[self.write_idx] = send_l + self.lp_y_l * self.feedback;
@@ -267,7 +342,6 @@ mod tests {
         let mut space = SpaceBus::new(44_100.0);
         for _ in 0..1000 {
             let (l, r) = space.process(0.0, 0.0);
-            // Только неслышимый пол анти-денормала, не сигнал.
             assert!(l.abs() < 1e-9 && r.abs() < 1e-9);
         }
     }
@@ -277,7 +351,6 @@ mod tests {
         let mut space = SpaceBus::new(44_100.0);
         let (l, r) = space.process(f32::NAN, 0.0);
         assert!(l.is_finite() && r.is_finite());
-        // После сброса шина снова работает.
         let (l, r) = space.process(0.5, 0.5);
         assert!(l.is_finite() && r.is_finite());
     }
@@ -288,13 +361,11 @@ mod tests {
         let mut space = SpaceBus::new(sr);
         let (l0, r0) = space.process(1.0, 1.0);
         assert!(l0.is_finite() && r0.is_finite());
-        // Энергия первой половины хвоста больше второй — затухание.
         let mut first = 0.0;
         let mut second = 0.0;
         for i in 0..(sr as usize) {
             let (l, r) = space.process(0.0, 0.0);
             assert!(l.is_finite() && r.is_finite());
-            // Мокрый хвост не взрывается.
             assert!(l.abs() < 2.0 && r.abs() < 2.0);
             let e = l * l + r * r;
             if i < (0.5 * sr) as usize {
@@ -311,8 +382,6 @@ mod tests {
 
     #[test]
     fn room_size_changes_tail() {
-        // Собор звенит дольше комнаты: сравниваем позднюю энергию хвоста
-        // (ранние отражения у всех комнат похожи).
         let sr = 44_100.0;
         let late_energy = |size: f32| {
             let mut space = SpaceBus::new(sr);
@@ -337,14 +406,48 @@ mod tests {
     }
 
     #[test]
+    fn stereo_banks_are_coupled() {
+        // An impulse in the left channel alone must produce energy in the right
+        // (cross-feedback) — otherwise these are two independent mono reverbs.
+        let sr = 44_100.0;
+        let mut space = SpaceBus::new(sr);
+        space.set_room(0.5, 0.5);
+        space.process(1.0, 0.0);
+        let mut right = 0.0;
+        for _ in 0..(0.5 * sr) as usize {
+            let (_, r) = space.process(0.0, 0.0);
+            right += r * r;
+        }
+        assert!(right > 1e-4, "right bank stays silent: {right}");
+    }
+
+    #[test]
+    fn retune_keeps_the_tail() {
+        // Changing the output rate doesn't cut the tail: after retune the energy
+        // keeps flowing instead of dropping to zero.
+        let mut space = SpaceBus::new(44_100.0);
+        space.process(1.0, 1.0);
+        let mut before = 0.0;
+        for _ in 0..1000 {
+            let (l, r) = space.process(0.0, 0.0);
+            before += l * l + r * r;
+        }
+        space.retune(48_000.0);
+        let mut after = 0.0;
+        for _ in 0..1000 {
+            let (l, r) = space.process(0.0, 0.0);
+            after += l * l + r * r;
+        }
+        assert!(after > before * 0.1, "retune cut the tail: {after} vs {before}");
+    }
+
+    #[test]
     fn echo_repeats_then_dies() {
         let sr = 44_100.0;
         let mut echo = Echo::new(sr, 1.0, 0.38, 2800.0);
         echo.set_time(0.2, sr);
-        // Один импульс в send.
         let (w0, _) = echo.process(1.0, 1.0);
         assert!(w0.is_finite());
-        // Первый повтор приходит примерно через время задержки.
         let mut heard: f32 = 0.0;
         for i in 0..((0.5 * sr) as usize) {
             let (l, r) = echo.process(0.0, 0.0);
@@ -354,7 +457,6 @@ mod tests {
             }
         }
         assert!(heard > 0.05, "no echo repeat: {heard}");
-        // Хвост затухает: через 3 секунды почти тишина.
         for _ in 0..((3.0 * sr) as usize) {
             echo.process(0.0, 0.0);
         }

@@ -1,12 +1,12 @@
-//! Диагностика длин: какие затворы реально выбирает генерация по слоям.
-//! Печатает словарь гайда и распределение длин за 8 тактов: видно, что
-//! длина — решение (диапазон), а не одна константа на инструмент.
+//! Gate diagnostics: which note lengths the generator actually picks per slot.
+//! Prints the guide dictionary and length distribution over 8 bars: shows that
+//! length is a decision (a range), not one constant per instrument.
 
-use rust_lib_cont::arranger::Arranger;
-use rust_lib_cont::instruments::Slot;
-use rust_lib_cont::mixer::MixerState;
-use rust_lib_cont::playback::apply_style_mix;
-use rust_lib_cont::styles::{make_style, render_style, StepContext};
+use rust_lib_continuum::arranger::Arranger;
+use rust_lib_continuum::instruments::Slot;
+use rust_lib_continuum::mixer::MixerState;
+use rust_lib_continuum::playback::apply_style_mix;
+use rust_lib_continuum::styles::{make_style, render_style, StepContext};
 use std::collections::HashMap;
 
 fn main() {
@@ -22,7 +22,7 @@ fn main() {
     let seed = 424242u64;
     let mut mixer = MixerState::new();
     apply_style_mix(&*style, seed, &mut mixer);
-    let mut ids = [0usize; rust_lib_cont::core::MAX_ACTIVE_TRACKS];
+    let mut ids = [0usize; rust_lib_continuum::core::MAX_ACTIVE_TRACKS];
     let n = mixer.active_ids(&mut ids);
     let active = ids[..n].to_vec();
 
@@ -46,7 +46,7 @@ fn main() {
             };
             for note in render_style(&*style, &mut sctx) {
                 let gate = note.duration_secs / base;
-                // Кровати (150+) не музыкальные длины: не засоряем выборку.
+                // Beds (150+) are not musical lengths: keep them out of the sample.
                 if gate > 0.0 && gate < 50.0 {
                     hist.entry(note.instrument_id).or_default().push(gate);
                 }

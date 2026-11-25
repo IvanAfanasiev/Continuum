@@ -1,15 +1,15 @@
-/// Конечный автомат структуры композиции.
+/// Finite-state machine of the composition structure.
 //
-// Активные стили гоняют бесконечный круг без финала и без разогрева
-// (Outro противоречит «бесконечной» генерации, Intro — требованию
-// играть сразу в полную): MainMotif -> BuildUp -> Drop -> PostChorus
-// -> по кругу. Первый такт — уже тема в полную силу.
-// Спокойные стили дышат темой: MainMotif почти всегда,
-// редкие BuildUp/PostChorus для разнообразия.
+// Active styles run an endless loop without a finale or a build-up
+// (Outro contradicts "endless" generation, Intro contradicts the requirement
+// to play at full strength right away): MainMotif -> BuildUp -> Drop -> PostChorus
+// -> around again. The first bar is already the theme at full strength.
+// Calm styles breathe with the theme: MainMotif almost always,
+// rare BuildUp/PostChorus for variety.
 //
-// Мотив сида фиксирован на весь круг: одна и та же тема
-// развивается формой, а не сочиняется заново. Круги отличаются длинами
-// секций и дыханием энергии, мелодическое ДНК стабильно.
+// The seed's motif is fixed for the whole loop: the same theme
+// develops through the form rather than being composed anew. Loops differ in
+// section lengths and energy breathing, the melodic DNA is stable.
 use crate::instruments::InstrumentRole;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,9 +20,9 @@ pub enum SongSection {
     PostChorus,
 }
 
-/// Баланс партий по секциям: насколько громко звучит роль.
-/// Текстуры идут ровным слоем всегда; остальное дышит формой.
-/// Порядок колонок = порядок дискриминантов [`InstrumentRole`].
+/// Balance of parts by section: how loudly a role sounds.
+/// Textures run as an even layer always; the rest breathes with the form.
+/// Column order = the declaration order of [`InstrumentRole`] discriminants.
 const STAGE_GAINS: [[f32; 8]; 4] = [
     // MainMotif
     [0.85, 0.9, 0.8, 0.85, 0.8, 0.75, 0.65, 1.0],
@@ -30,17 +30,17 @@ const STAGE_GAINS: [[f32; 8]; 4] = [
     [0.7, 0.9, 0.9, 0.9, 0.7, 0.8, 0.7, 1.0],
     // Drop
     [1.0, 1.0, 1.0, 1.0, 0.8, 1.0, 0.8, 1.0],
-    // PostChorus: грув катит дальше (не рестарт!), отдыхает только верх.
+    // PostChorus: the groove rolls on (no restart!), only the top rests.
     [0.8, 0.9, 0.7, 0.85, 0.75, 0.55, 0.5, 1.0],
 ];
 
-/// Партитура: бесконечный цикл секций без разогрева и финала.
+/// Score: an endless cycle of sections without build-up or finale.
 #[derive(Debug, Clone, Copy)]
 pub struct Score {
     pub cycle: &'static [(SongSection, usize)],
 }
 
-/// Полная форма активных стилей: тема → разгон → удар → передышка.
+/// Full form of active styles: theme → build-up → hit → breakdown.
 pub const ENERGETIC_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 8),
@@ -50,8 +50,8 @@ pub const ENERGETIC_SCORE: Score = Score {
     ],
 };
 
-/// Спокойная форма: тема дышит, но кусок всё равно доходит до удара
-/// (у lofi это смена тембра, а не взрыв) и возвращается к теме.
+/// Calm form: the theme breathes, but the chunk still reaches the hit
+/// (in lofi that's a timbre change, not an explosion) and returns to the theme.
 pub const CALM_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 8),
@@ -62,9 +62,9 @@ pub const CALM_SCORE: Score = Score {
     ],
 };
 
-/// Форма deep house: сетка не останавливается, удар длинный, передышка
-/// короткая. Ровный дом-клуб: тема держит бит, разгон короткий, дроп
-/// растянут — в club дроп это не взрыв, а восемь тактов одной сетки.
+/// Deep house form: the grid never stops, the hit is long, the breakdown
+/// is short. Even house-club: the theme holds the beat, the build-up is short, the drop
+/// is stretched — in club the drop isn't an explosion but eight bars of one grid.
 pub const HOUSE_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 8),
@@ -74,9 +74,9 @@ pub const HOUSE_SCORE: Score = Score {
     ],
 };
 
-/// Форма рока: рифф приходит быстро, разгон короткий, удар длинный.
-/// Рок держится риффом, а не сеткой: тема короткая, чтобы рифф сразу
-/// пошёл, и дроп длинный — там соло и второй голос.
+/// Rock form: the riff arrives quickly, the build-up is short, the hit is long.
+/// Rock is held by the riff, not the grid: the theme is short so the riff
+/// starts right away, and the drop is long — that's where the solo and the second voice are.
 pub const ROCK_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 6),
@@ -86,8 +86,8 @@ pub const ROCK_SCORE: Score = Score {
     ],
 };
 
-/// Форма фонка: дрейф (тема длинная и гипнотическая), разгон короткий,
-/// удар средний, передышка длинная — half-time и пустота.
+/// Funk form: drift (the theme is long and hypnotic), a short build-up,
+/// a medium hit, a long breakdown — half-time and emptiness.
 pub const DRIFT_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 12),
@@ -97,9 +97,9 @@ pub const DRIFT_SCORE: Score = Score {
     ],
 };
 
-/// Форма прото: голая сетка без уступок. Тема длинная и гипнотическая,
-/// разгон короткий, дроп длинный, передышка короткая — в прото пауза
-/// это смена ритма, а не отдых.
+/// Proto form: a bare grid with no concessions. The theme is long and hypnotic,
+/// the build-up is short, the drop long, the breakdown short — in proto a break
+/// is a change of rhythm, not a rest.
 pub const PROTO_SCORE: Score = Score {
     cycle: &[
         (SongSection::MainMotif, 10),
@@ -109,7 +109,7 @@ pub const PROTO_SCORE: Score = Score {
     ],
 };
 
-/// Выбрать форму стиля по сиду: детерминированно, без состояния.
+/// Choose a style's form by seed: deterministic, stateless.
 pub fn pick_score(seed: u64, salt: u64, variants: &'static [Score]) -> Score {
     if variants.is_empty() {
         return ENERGETIC_SCORE;
@@ -118,75 +118,75 @@ pub fn pick_score(seed: u64, salt: u64, variants: &'static [Score]) -> Score {
     variants[idx]
 }
 
-/// Музыкальная фраза меняется каждые N тактов.
+/// The musical phrase changes every N bars.
 const PHRASE_LENGTH_MEASURES: usize = 2;
-/// Сдвиг фраз между кругами: 3 взаимно просто и с 7, и с 5 —
-/// мелодия не повторяется ни в 7-ступенных ладах, ни в пентатонике.
+/// Phrase shift between loops: 3 is coprime with both 7 and 5 —
+/// the melody doesn't repeat in 7-degree scales nor in pentatonic.
 const CYCLE_PHRASE_JUMP: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct SongContext {
     pub section: SongSection,
-    /// Сквозной номер такта от старта сессии (1-based). Не сбрасывается
-    /// на границах секций: по нему живут прогрессия, вторая половина
-    /// мотива и фаза многотактовой клетки риффа (см. `styles::play_guide`).
+    /// Absolute bar number from the session start (1-based). It doesn't reset
+    /// at section boundaries: the progression, the second half of the
+    /// motif and the phase of the multi-bar riff cell live by it (see `styles::play_guide`).
     pub measure_index: usize,
-    /// Монотонный номер музыкальной фразы (2 такта). Фразы выровнены
-    /// по нечетным тактам: `total=1,2 -> 0; 3,4 -> 1; ...`. Внутри фразы
-    /// фаза такта = `(measure_index - 1) % 2`.
+    /// Monotonic musical phrase number (2 bars). Phrases are aligned
+    /// to odd bars: `total=1,2 -> 0; 3,4 -> 1; ...`. Within a phrase
+    /// the bar phase = `(measure_index - 1) % 2`.
     pub phrase_index: usize,
     pub energy: f32,
     pub progress: f32,
     pub is_last_measure: bool,
-    /// Номер такта внутри текущей секции (1-based). Переходы и
-    /// кроссфейд полюсов знают, что раздел только начался, а не
-    /// просто что сменился сквозной такт.
+    /// Bar number within the current section (1-based). Transitions and
+    /// the poles crossfade know that the section has just begun, not merely
+    /// that the absolute bar changed.
     pub section_measure_index: usize,
-    /// Предыдущая секция формы. На первом разделе и при удержании
-    /// последней секции совпадает с текущей.
+    /// Previous form section. On the first section and while holding
+    /// the last section it equals the current one.
     pub previous_section: SongSection,
-    /// Ступень круга 0..8 (тема встречается на 1 и 5).
+    /// Loop degree 0..8 (the theme occurs at 1 and 5).
     pub stage: usize,
-    /// Номер круга формы (0 = первый проход).
+    /// Form loop number (0 = first pass).
     pub cycle: u64,
-    /// Громкости ролей на этой ступени с учетом фейдов краев.
+    /// Role volumes at this degree, including edge fades.
     pub stage_gains: [f32; 8],
-    /// Кто играет в этой секции (маска групп): аранж написан в плане
-    /// куска, а не брошен на каждом шаге.
+    /// Who plays in this section (group mask): the arrangement is written in the chunk
+    /// plan, not tossed on every step.
     pub layers: crate::piece::LayerMask,
-    /// Хэш сида: ротация лада и модальный вариант в генерации.
-    /// Стабилен внутри сида — тональность не прыгает посреди трека.
+    /// Seed hash: scale rotation and modal variation in generation.
+    /// Stable within a seed — the key doesn't jump mid-track.
     pub seed_hash: u64,
-    /// Плотность генерации 0.7..=1.3 от сида: разреженные и густые сиды.
+    /// Generation density 0.7..=1.3 from the seed: sparse and dense seeds.
     pub density: f32,
-    /// Мотив сида: 16 ступеней лада 0..4 — мелодическое ДНК трека.
-    /// Длинная тема через 2 такта (окно фразы) узким напевом:
-    /// сиды различаются темой, а не случайными прыжками.
-    /// Широкие скачки давали «свою композицию» у каждого слоя —
-    /// неслышимую кашу вместо гетерофонии.
-    /// Создается в интро и НЕ меняется весь круг: один сид = одна
-    /// узнаваемая тема, развиваемая формой, а не пересочиняемая.
+    /// Seed motif: 16 scale degrees 0..4 — the track's melodic DNA.
+    /// The long theme two bars later (phrase window) as a narrow chant:
+    /// seeds differ by theme, not by random jumps.
+    /// Wide leaps gave "their own composition" to every layer —
+    /// an inaudible mush instead of heterophony.
+    /// Created in the intro and NOT changed for the whole loop: one seed = one
+    /// recognizable theme developed by the form, not recomposed.
     pub motif: [u8; 16],
-    /// Вторая тема сида: B — вариация A (3 мутации), материал кульминаций.
-    /// Drop и PostChorus поют B, остальное A: куплет/припев различаются
-    /// темой, а не только громкостью. Границы — границы секций (их длины
-    /// от сида), отдельной блочной логики нет.
+    /// The seed's second theme: B is a variation of A (3 mutations), the material of climaxes.
+    /// Drop and PostChorus sing B, the rest A: verse/chorus differ
+    /// by theme, not only by volume. Boundaries are section boundaries (their lengths
+    /// come from the seed), there's no separate block logic.
     pub motif_b: [u8; 16],
-    /// B звучит на кульминациях (Drop/PostChorus), A — везде иначе.
+    /// B sounds at the climaxes (Drop/PostChorus), A everywhere else.
     pub use_alt_motif: bool,
-    /// Гармоническая прогрессия сида: сдвиги ступеней 0..4 для аккомпанемента,
-    /// меняются каждые 2 такта. Лид держит мотив, гармония движется —
-    /// сиды отличаются и темой, и гармоническим движением.
+    /// Harmonic progression of the seed: degree shifts 0..4 for accompaniment,
+    /// changing every 2 bars. The lead holds the motif, the harmony moves —
+    /// seeds differ both in theme and in harmonic motion.
     pub prog: [u8; 4],
-    /// Сырое блуждание тоники (префикс-сумма шагов −1/0/+1 для пар
-    /// визитов `0..stage/2`). Потребитель берёт `% длина_лада` сам.
-    /// Инкрементально: генерация вечна, пересчёт с нуля каждый шаг —
-    /// нет (см. `Arranger::extend_tonic`).
+    /// Raw tonic wandering (prefix sum of −1/0/+1 steps for pairs of
+    /// visits `0..stage/2`). The consumer applies `% scale_len` itself.
+    /// Incrementally: generation is endless, recalculating from scratch every step is
+    /// not an option (see `Arranger::extend_tonic`).
     pub tonic_walk: i64,
 }
 
 impl SongContext {
-    /// Громкость роли на текущей ступени (1.0 = как написано в ноте).
+    /// A role's volume at the current degree (1.0 = as written in the note).
     pub fn stage_gain(&self, role: InstrumentRole) -> f32 {
         self.stage_gains[role.index()]
     }
@@ -194,39 +194,39 @@ impl SongContext {
 
 #[derive(Clone)]
 pub struct Arranger {
-    /// План куска: конечная форма (30-60 с), а не бесконечное кольцо.
-    /// Секции идут по плану; шов в конце — написанный финал.
+    /// Chunk plan: a finite form (30-60 s), not an endless loop.
+    /// Sections follow the plan; the seam at the end is a written finale.
     plan: crate::piece::PiecePlan,
-    /// Позиция в плане: индекс секции тела.
+    /// Position within the plan: the body's section index.
     plan_idx: usize,
-    /// План исчерпан: тело и шов отыграны, ждём следующий кусок.
+    /// Plan exhausted: body and seam have played, waiting for the next chunk.
     plan_done: bool,
-    /// Текущая секция плана (из плана, а не из кольца скелета).
+    /// Current section of the plan (from the plan, not the skeleton loop).
     section: SongSection,
-    /// Секция, которая играла до текущей: нужна переходам (хвост
-    /// жеста после BuildUp) и кроссфейду полюсов на первом такте.
+    /// The section that played before the current one: needed for transitions (the
+    /// tail of a gesture after BuildUp) and the poles crossfade on the first bar.
     previous_section: SongSection,
-    /// Написанная энергия секции (None — по общей формуле формы).
+    /// Written energy of the section (`None` — from the general form formula).
     section_energy: Option<f32>,
-    /// Кто играет в секции (маска групп) — из плана куска.
+    /// Who plays in the section (group mask) — from the chunk plan.
     section_layers: crate::piece::LayerMask,
-    /// Как стиль склеивает куски (плавный внахлёст или резкий стык).
+    /// How the style glues chunks (smooth overlap or sharp join).
     transition: crate::piece::Transition,
-    /// Аранж стиля: кто играет в каждой секции. Нужен, чтобы следующий
-    /// кусок планировался с тем же аранжем.
+    /// Style arrangement: who plays in each section. Needed so that the next
+    /// chunk is planned with the same arrangement.
     layers: crate::piece::Layers,
-    /// Номер куска в потоке: куски отличаются друг от друга.
+    /// Chunk number in the stream: chunks differ from one another.
     piece: u64,
-    /// Сквозной такт, на котором начался текущий кусок: по нему считаем,
-    /// сколько тактов куска уже отыграно.
+    /// Absolute bar on which the current chunk started: from it we compute
+    /// how many bars of the chunk have already played.
     piece_start_measure: usize,
-    /// Сид куска (сырой): планировщик солит им форму.
+    /// Chunk seed (raw): the planner salts the form with it.
     seed: u64,
-    /// Темп стиля: от него зависит длина куска в тактах.
+    /// Style tempo: the chunk's length in bars depends on it.
     bpm: f32,
-    /// Скелет стиля: из него планируются следующие куски.
+    /// Style skeleton: the following chunks are planned from it.
     score: Score,
-    /// План следующего куска: пишется, когда начинается шов текущего.
+    /// Plan of the next chunk: written when the current chunk's seam starts.
     next_piece: Option<crate::piece::PiecePlan>,
     section_measure_count: usize,
     section_len: usize,
@@ -239,19 +239,19 @@ pub struct Arranger {
     motif: [u8; 16],
     motif_b: [u8; 16],
     prog: [u8; 4],
-    /// Сглаженные громкости ролей: едут к таблице полпути за такт,
-    /// а не прыгают на стыках (инструменты не гаснут/не врываются).
+    /// Smoothed role volumes: they travel halfway to the table over a bar,
+    /// rather than jumping at joins (instruments don't fade out or burst in).
     prev_gains: [f32; 8],
-    /// Инкрементальное блуждание тоники: префикс-сумма шагов для пар
-    /// визитов `0..tonic_done`. Стадии монотонны, поэтому walk только
-    /// extends — каждый шаг генерации стоит O(1), а не O(stage).
-    /// Сырая сумма (не по модулю): модуль лада берёт потребитель,
-    /// лад может отличаться у стилей.
+    /// Incremental tonic wandering: prefix sum of steps for pairs
+    /// of visits `0..tonic_done`. Stages are monotonic, so the walk only
+    /// extends — every generation step costs O(1), not O(stage).
+    /// The raw sum (not modulo): the consumer applies the scale modulus,
+    /// scales may differ between styles.
     tonic_pos: i64,
     tonic_done: usize,
 }
 
-/// Детерминированный 64-битный хэш (splitmix64).
+/// Deterministic 64-bit hash (splitmix64).
 pub(crate) fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E3779B97F4A7C15);
     let mut z = x;
@@ -260,18 +260,52 @@ pub(crate) fn splitmix64(mut x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Хэш трех чисел в [0, 1).
+/// Hash of three numbers into [0, 1).
 fn hash01(a: u64, b: u64, c: u64) -> f32 {
     let h = splitmix64(a ^ b.wrapping_mul(0x9E3779B9) ^ c.wrapping_mul(0x85EBCA6B));
     (h >> 32) as f32 / (u32::MAX as f32)
 }
 
-/// Один шаг детерминированного блуждания тоники (−1/0/+1 из битов
-/// хэша пары визитов). Шаг не больше ступени за пару (музыкально
-/// связно), путь непериодичен (период потока 2^64 — скелет
-/// не замыкается никогда). Тот же сид — тот же путь.
-/// Атом генерации: полный walk складывается инкрементально
-/// в [`Arranger::extend_tonic`], тесты складывают вручную.
+/// Rebuild of theme B and the progression for every chunk of the loop. The first loop
+/// (cycle 0) keeps the foundation as-is; further on the seed + loop number
+/// give up to two point mutations in the middle of the theme (the hook 0..3 and the cadence
+/// 12..15 are untouched) and a cyclic shift of the progression — the same set
+/// of chords in a different order. Chunks differ not only in length, but
+/// the seed's DNA and key are preserved.
+pub(crate) fn remix_for_cycle(
+    motif_b: [u8; 16],
+    prog: [u8; 4],
+    seed_hash: u64,
+    cycle: u64,
+) -> ([u8; 16], [u8; 4]) {
+    if cycle == 0 {
+        return (motif_b, prog);
+    }
+    let salt = splitmix64(seed_hash ^ cycle.wrapping_mul(0x9E37_79B9));
+    let mut b = motif_b;
+    let mut h = salt;
+    for _ in 0..2 {
+        h = splitmix64(h);
+        let pos = 4 + (h % 8) as usize;
+        h = splitmix64(h);
+        let d = if h.is_multiple_of(2) { 1i8 } else { -1 };
+        let v = (b[pos] as i8 + d).clamp(0, 4);
+        if (v - b[pos - 1] as i8).abs() <= 1 && (v - b[pos + 1] as i8).abs() <= 1 {
+            b[pos] = v as u8;
+        }
+    }
+    let rot = (splitmix64(salt ^ 0x000A_11CE) % 4) as usize;
+    let mut p = prog;
+    p.rotate_left(rot);
+    (b, p)
+}
+
+/// One step of the deterministic tonic walk (−1/0/+1 from the bits
+/// of the hash of a pair of visits). A step is at most one degree per pair (musically
+/// coherent), the path is non-periodic (the stream's period is 2^64 — the skeleton
+/// never closes). Same seed — same path.
+/// Atom of generation: the full walk is accumulated incrementally
+/// in [`Arranger::extend_tonic`], tests accumulate it manually.
 pub(crate) fn drift_step(seed_hash: u64, pair: usize) -> i64 {
     let h = splitmix64(seed_hash ^ (pair as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0xD21F7);
     match h % 3 {
@@ -281,11 +315,11 @@ pub(crate) fn drift_step(seed_hash: u64, pair: usize) -> i64 {
     }
 }
 
-/// Гармонические прогрессии (ступени лада, все диатонично — любая
-/// комбинация остается в ладу). Выбор — сидом: аккомпанемент
-/// разных сидов движется по-разному при том же мотиве лида.
-/// Пул широкий (8): сиды заметно отличаются гармоническим движением.
-/// Публичен внутри крейта: стиль может дать свой пул (см. `Style::progressions`).
+/// Harmonic progressions (scale degrees, all diatonic — any
+/// combination stays in the scale). The choice is by seed: accompaniment
+/// of different seeds moves differently with the same lead motif.
+/// The pool is wide (8): seeds clearly differ in harmonic motion.
+/// Public within the crate: a style may provide its own pool (see `Style::progressions`).
 pub(crate) const PROGS: [[u8; 4]; 8] = [
     [0, 2, 3, 1],
     [0, 3, 2, 3],
@@ -297,8 +331,8 @@ pub(crate) const PROGS: [[u8; 4]; 8] = [
     [3, 0, 2, 1],
 ];
 
-/// Длина визита в данном круге: база или база + 2 такта.
-/// Дропы не варьируются — якоря формы. `salt` уникальна на визит.
+/// Visit length in this loop: base or base + 2 bars.
+/// Drops aren't varied — they're the form's anchors. `salt` is unique per visit.
 fn varied_len(section: SongSection, base: usize, seed_hash: u64, salt: u64) -> usize {
     if section == SongSection::Drop {
         return base;
@@ -307,8 +341,8 @@ fn varied_len(section: SongSection, base: usize, seed_hash: u64, salt: u64) -> u
     base + extra
 }
 
-/// Громкости секции из таблицы. Стыки текут глиссандо в advance_measure,
-// никто не гаснет и не врывается внезапно.
+/// Section volumes from the table. Joins glide in advance_measure,
+// nobody fades out or bursts in suddenly.
 fn stage_gains_for(section: SongSection) -> [f32; 8] {
     STAGE_GAINS[section as usize]
 }
@@ -322,10 +356,10 @@ impl Arranger {
         Self::with_score_and_layers(seed, score, crate::piece::default_layers())
     }
 
-    /// Форма с аранжем стиля: кто играет в каждой секции.
+    /// Form with the style's arrangement: who plays in each section.
     pub fn with_score_and_layers(seed: u64, score: Score, layers: crate::piece::Layers) -> Self {
-        // Форма по умолчанию: кусок из скелета стиля. Темп дефолтный —
-        // стиль знает свой и подставляет свой план (см. `with_plan`).
+        // Default form: a chunk from the style's skeleton. Default tempo —
+        // the style knows its own and substitutes its plan (see `with_plan`).
         let plan = crate::piece::plan_piece(
             seed,
             126.0,
@@ -345,9 +379,9 @@ impl Arranger {
         )
     }
 
-    /// Арранжер с готовым планом куска: форма конечна (30-60 с), шов в
-    /// конце — написанный финал. Следующие куски арранжер планирует сам,
-    /// когда начинается шов: стык кусков написан заранее.
+    /// Arranger with a ready chunk plan: the form is finite (30-60 s), the seam at
+    /// the end is a written finale. The arranger plans the following chunks itself
+    /// when a seam starts: the join between chunks is written in advance.
     pub fn with_plan(
         seed: u64,
         bpm: f32,
@@ -370,19 +404,19 @@ impl Arranger {
         layers: crate::piece::Layers,
     ) -> Self {
         let seed_hash = splitmix64(seed ^ 0x51ED);
-        // Размах темы — почерк сида: половина сидов поёт узко
-        // (поступенно, как раньше), половина — широко (скачки до
-        // терции). Один напев на всех давал «одинаковую генерацию»;
-        // теперь характер темы (напев vs прыжки) различает сиды.
+        // The theme's range is the seed's handwriting: half the seeds sing narrowly
+        // (stepwise, as before), half widely (leaps up to
+        // a third). One chant for all gave "identical generation";
+        // now the theme's character (chant vs leaps) distinguishes seeds.
         let wide = splitmix64(seed_hash ^ 0x1DE5).is_multiple_of(2);
-        // Мотив сида: напевная линия 0..4 (узкий напев),
-        // а не 16 независимых бросков. Случайное блуждание шагом ≤ 1
-        // (широкие сиды — до 2) с аркой (подъем к середине, спад
-        // к кадансу): мелодия цельная внутри сида, развивается окном
-        // фразы и тоникой, а не пересдается каждый шаг. Генерация —
-        // задом наперед от тоники: последний шаг всегда 0 (каданс),
-        // предпоследний — сосед (правильный подход, а не прыжок).
-        // Живет весь круг неизменной.
+        // The seed's motif: a chant-like line 0..4 (a narrow chant),
+        // rather than 16 independent rolls. A random walk with step ≤ 1
+        // (wide seeds — up to 2) with an arch (rise toward the middle, fall
+        // toward the cadence): the melody is coherent within a seed, developed by the
+        // phrase window and the tonic, not re-rolled each step. Generation is
+        // backwards from the tonic: the last step is always 0 (cadence),
+        // the penultimate is a neighbor (a proper approach, not a leap).
+        // It lives unchanged for the whole loop.
         let mut motif = [0u8; 16];
         let mut m = splitmix64(seed_hash ^ 0x9071F);
         motif[15] = 0;
@@ -392,12 +426,12 @@ impl Arranger {
             m = splitmix64(m);
             let r = m % 100;
             if r >= 20 {
-                // Смена направления — редко (напев, а не пила).
+                // Direction changes are rare (a chant, not a sawtooth).
                 if r >= 94 {
                     dir = -dir;
                 }
-                // Арка: к середине тянем вверх, к началу — к середине
-                // диапазона (пик где-то в первой половине пути назад).
+                // Arch: toward the middle we pull up, toward the beginning — toward the middle
+                // of the range (the peak is somewhere in the first half of the way back).
                 if (6..11).contains(&i) && pos < 3 {
                     dir = 1;
                 }
@@ -407,8 +441,8 @@ impl Arranger {
                 if i < 4 && pos < 2 {
                     dir = 1;
                 }
-                // Широкие сиды иногда шагают через ступень (терция).
-                // Не влезает — откат на поступенный (всегда валиден).
+                // Wide seeds sometimes step over a degree (a third).
+                // If it doesn't fit — fall back to stepwise (always valid).
                 let mut next = pos + dir;
                 if wide && (m >> 32).is_multiple_of(4) {
                     let ext = pos + dir * 2;
@@ -424,29 +458,29 @@ impl Arranger {
             }
             motif[i] = pos as u8;
         }
-        // Тема B: близкая вариация A — до 3 мутаций (±ступень, у широких
-        // сидов до терции). Не «вторая композиция», а развитие той же:
-        // припев к куплету, а не другой трек. Позиции — от хэша сида,
-        // шаг всегда соседний (кламп вместо модуля: модуль давал
-        // прыжок 4→0).
-        // Мутация, рвущая линию с соседями, отклоняется (другим
-        // направлением или пропуском): B держит размах своей темы.
-        // Страж на случай вырождения мутаций в исходную тему.
+        // Theme B: a close variation of A — up to 3 mutations (±a degree, for wide
+        // seeds up to a third). Not "a second composition", but development of the same one:
+        // a chorus to the verse, not another track. Positions come from the seed's hash,
+        // the step is always neighboring (clamp instead of modulo: modulo gave
+        // a 4→0 jump).
+        // The mutation is the middle of the theme (cells 1–2): the hook at the start and the cadence
+        // at the end of B hold, while the middle answers. So the Drop differs
+        // by development, not by a foreign melody.
         let mut motif_b = motif;
         let mut g = splitmix64(seed_hash ^ 0xB17B);
-        // Допуск линии: широкий сид терпит скачки до 2, узкий — до 1.
+        // Line tolerance: a wide seed tolerates leaps up to 2, a narrow one — up to 1.
         let line_lim: i8 = if wide { 2 } else { 1 };
         for _ in 0..3 {
             g = splitmix64(g);
-            // Позиции 0..14: каданс (шаг 15 = 0) мутации не трогают.
-            let pos = (g % 15) as usize;
+            // The middle 4..11: the hook (0..3) and the cadence (12..15) are untouched.
+            let pos = 4 + (g % 8) as usize;
             g = splitmix64(g);
             let cur = motif_b[pos] as i8;
-            let left = if pos > 0 { motif_b[pos - 1] as i8 } else { cur };
+            let left = motif_b[pos - 1] as i8;
             let right = motif_b[pos + 1] as i8;
             let mut done = false;
-            // Широкие мутируют терциями (±2 первым кандидатом),
-            // узкие — поступенно: B в размахе своей A.
+            // Wide ones mutate by thirds (±2 as the first candidate),
+            // narrow ones stepwise: B within A's range.
             let mag: i8 = if wide { 2 } else { 1 };
             for d in [
                 if g.is_multiple_of(2) { mag } else { -mag },
@@ -462,7 +496,19 @@ impl Arranger {
             let _ = done;
         }
         if motif_b == motif {
-            motif_b[0] = if motif[0] < 4 { motif[0] + 1 } else { 3 };
+            // Guard: we look for a middle where the step fits the line. The hook and
+            // the cadence are left alone even here.
+            'guard: for pos in 4..12 {
+                let left = motif_b[pos - 1] as i8;
+                let right = motif_b[pos + 1] as i8;
+                for d in [1i8, -1] {
+                    let v = (motif_b[pos] as i8 + d).clamp(0, 4);
+                    if (v - left).abs() <= line_lim && (v - right).abs() <= line_lim {
+                        motif_b[pos] = v as u8;
+                        break 'guard;
+                    }
+                }
+            }
         }
         let first_section = plan
             .body
@@ -491,20 +537,20 @@ impl Arranger {
             stages_done: 0,
             seed_hash,
             cycle: 0,
-            // Стартовый сдвиг фраз + плотность — от сида, стабильны весь трек.
+            // The phrase's starting shift + density — from the seed, stable for the whole track.
             phrase_offset: (seed_hash % 8) as usize,
             density: 0.7 + 0.6 * hash01(seed_hash, 0xD517, 0),
             motif,
             motif_b,
             prog: PROGS[(seed_hash % PROGS.len() as u64) as usize],
-            // Старт в полную: первый такт — уже тема, без разогрева.
+            // Start at full strength: the first bar is already the theme, no build-up.
             prev_gains: stage_gains_for(first_section),
             tonic_pos: 0,
             tonic_done: 0,
         }
     }
 
-    /// Секция плана по индексу: тело, потом шов (финал куска).
+    /// Plan section by index: the body, then the seam (chunk finale).
     fn plan_section(&self, idx: usize) -> Option<&crate::piece::SectionPlan> {
         if idx < self.plan.body.len() {
             self.plan.body.get(idx)
@@ -515,30 +561,30 @@ impl Arranger {
         }
     }
 
-    /// План исчерпан: кусок отыгран, ждём следующий (его подставляет
-    /// композитор). Пока не подменён — держим последнюю секцию, музыка
-    /// не встает.
+    /// Plan exhausted: the chunk has played, waiting for the next (the
+    /// composer substitutes it). Until then we hold the last section, the music
+    /// doesn't stop.
     pub fn plan_exhausted(&self) -> bool {
         self.plan_done
     }
 
-    /// Сколько тактов текущего куска уже отыграно: по этому кусок
-    /// перепланируется при живой смене сида/стиля (смена вступает с
-    /// следующего такта, отыгранное не трогаем).
+    /// How many bars of the current chunk have played: from this the chunk is
+    /// re-planned on a live seed/style change (the change takes effect from the
+    /// next bar, what has played is left alone).
     pub fn piece_bar(&self) -> usize {
         self.total_measures.saturating_sub(self.piece_start_measure)
     }
 
-    /// Номер текущего куска: по нему перепланируется остаток (живая
-    /// смена сида/стиля не должна ломать форму куска).
+    /// Current chunk number: from it the remainder is re-planned (a live
+    /// seed/style change must not break the chunk's form).
     pub fn piece(&self) -> u64 {
         self.piece
     }
 
-    /// Тень перехода: копия арранжера, у которой впереди — план
-    /// следующего куска. Копия, а не новый арранжер: состояние (счетчик
-    /// визитов, тоника, гармония) должно совпадать с основным, иначе
-    /// тень спела бы другой кусок в другой тональности.
+    /// Transition shadow: a copy of the arranger whose next item is the plan
+    /// of the following chunk. A copy, not a new arranger: state (the visit
+    /// counter, tonic, harmony) must match the main one, otherwise
+    /// the shadow would sing a different chunk in a different key.
     pub fn shadow_of(&self, plan: crate::piece::PiecePlan) -> Self {
         let mut s = self.clone();
         s.plan = plan;
@@ -546,30 +592,30 @@ impl Arranger {
         s.plan_done = false;
         s.next_piece = None;
         s.section_measure_count = 0;
-        // Круг куска у тени уже следующий — как у основного после
-        // приема плана.
+        // The shadow's chunk loop is already the next one — like the main one after
+        // receiving a plan.
         s.cycle = self.cycle + 1;
         s.enter_section();
-        // Первый такт нового куска тень поет сразу: счетчик секции
-        // начинается с единицы, а общий счетчик тактов сессии не
-        // сдвигается — тень и основной идут по одним часам.
+        // The shadow sings the first bar of a new chunk right away: the section counter
+        // starts at one, while the session-wide bar counter doesn't
+        // shift — the shadow and the main one run on the same clock.
         s.section_measure_count = 1;
         s
     }
 
-    /// Идёт ли шов (финал куска): в эти такты следующий кусок входит
-    /// голосом поверх грува.
+    /// Is a seam (chunk finale) in progress: during these bars the next chunk enters
+    /// with a voice over the groove.
     pub fn in_joint(&self) -> bool {
         self.plan_idx >= self.plan.body.len()
     }
 
-    /// План следующего куска (пишется, когда начинается шов): по нему
-    /// композитор строит «тень» — голос следующего куска.
+    /// Plan of the next chunk (written when the seam starts): from it the
+    /// composer builds the "shadow" — the next chunk's voice.
     pub fn next_plan(&self) -> Option<&crate::piece::PiecePlan> {
         self.next_piece.as_ref()
     }
 
-    /// Насколько шов прожит (0..1): громкость тени нарастает к его концу.
+    /// How far the seam has progressed (0..1): the shadow's volume grows toward its end.
     pub fn joint_progress(&self) -> f32 {
         if self.section_len == 0 {
             return 0.0;
@@ -577,8 +623,8 @@ impl Arranger {
         (self.section_measure_count as f32 / self.section_len as f32).clamp(0.0, 1.0)
     }
 
-    /// Прогресс шва по шагам (0..1): голос тени входит не с такта, а
-    /// плавно, шаг за шагом — вход слышен как событие, а не как удар.
+    /// Seam progress by steps (0..1): the shadow voice enters not at a bar boundary but
+    /// smoothly, step by step — the entrance is heard as an event, not as a hit.
     pub fn joint_step_progress(&self, steps_per_measure: usize, step_in_measure: usize) -> f32 {
         if self.section_len == 0 {
             return 0.0;
@@ -592,8 +638,8 @@ impl Arranger {
         (steps / total).clamp(0.0, 1.0)
     }
 
-    /// Подменить план куска: перепланированный остаток текущего (живая
-    /// смена сида/стиля вступает с следующего такта).
+    /// Substitute a chunk plan: the re-planned remainder of the current one (a live
+    /// seed/style change takes effect from the next bar).
     pub fn set_plan(&mut self, plan: crate::piece::PiecePlan) {
         self.plan = plan;
         self.plan_idx = 0;
@@ -604,9 +650,9 @@ impl Arranger {
         self.enter_section();
     }
 
-    /// Следующий кусок потока: форма пишется сама, когда начинается шов
-    /// текущего. Стык написан заранее — следующий кусок известен, пока
-    /// играет финал текущего.
+    /// Next chunk of the stream: the form is written by itself when the seam of the
+    /// current one starts. The join is written in advance — the next chunk is known while
+    /// the current one's finale is playing.
     fn plan_next_piece(&mut self) {
         let index = self.piece + 1;
         self.next_piece = Some(crate::piece::plan_piece(
@@ -620,10 +666,10 @@ impl Arranger {
         ));
     }
 
-    /// Вход в секцию: длина и монотонная соль визита.
+    /// Entering a section: the length and the monotonic salt of the visit.
     fn enter_section(&mut self) {
-        // Шов (финал куска) — момент, когда пишется следующий кусок:
-        // стык написан заранее, а не сшит на бегу.
+        // The seam (chunk finale) is the moment when the next chunk is written:
+        // the join is written in advance, not stitched on the fly.
         if self.plan_idx == self.plan.body.len() && self.next_piece.is_none() {
             self.plan_next_piece();
         }
@@ -641,8 +687,8 @@ impl Arranger {
         });
         match planned {
             Some((section, energy, layers, len)) => {
-                // Старая секция становится предыдущей ровно на входе.
-                // Нужна переходам и кроссфейду полюсов, а не истории.
+                // The old section becomes the previous one exactly on entry.
+                // Needed for transitions and the poles crossfade, not for history.
                 self.previous_section = self.section;
                 self.section = section;
                 self.section_energy = energy;
@@ -650,8 +696,8 @@ impl Arranger {
                 self.section_len = len;
             }
             None => {
-                // План исчерпан: держим текущую секцию (её уже отыграли),
-                // пока не подменят план.
+                // Plan exhausted: hold the current section (it has already played),
+                // until the plan is substituted.
                 self.plan_done = true;
                 self.section_len = self.section_len.max(1);
             }
@@ -664,10 +710,10 @@ impl Arranger {
         self.section
     }
 
-    /// Дотянуть walk тоники до пары визитов `pair` (включительно —
-    /// точнее, сложить шаги `tonic_done..pair`). Пары растут монотонно
-    /// вместе со сценами, поэтому каждый шаг считается один раз
-    /// за всю бесконечную сессию: O(1) на такт вместо O(stage).
+    /// Extend the tonic walk to visit pair `pair` (inclusive —
+    /// more precisely, add the steps `tonic_done..pair`). Pairs grow monotonically
+    /// together with the scenes, so each step is computed once
+    /// over the whole endless session: O(1) per bar instead of O(stage).
     fn extend_tonic(&mut self, pair: usize) -> i64 {
         while self.tonic_done < pair {
             self.tonic_pos += drift_step(self.seed_hash, self.tonic_done);
@@ -681,8 +727,8 @@ impl Arranger {
         self.total_measures += 1;
 
         if self.section_measure_count > self.section_len {
-            // Секция кончилась. Шов отыгран — кусок исчерпан: берём
-            // следующий кусок (его план написан, когда начался шов).
+            // The section ended. The seam has played — the chunk is exhausted: take
+            // the next chunk (its plan was written when the seam started).
             if self.plan_idx + 1 > self.plan.body.len() {
                 if let Some(next) = self.next_piece.take() {
                     let overlap = self.transition.overlap_bars();
@@ -690,29 +736,29 @@ impl Arranger {
                     self.piece += 1;
                     self.cycle += 1;
                     self.plan_idx = 0;
-                    // Налёт перехода: первые такты нового куска уже
-                    // спел голос тени (он входил в шве). Продолжаем с
-                    // того же места, длина секции остаётся полной — иначе
-                    // энергия прыгнула бы на стыке.
+                    // Transition overhang: the first bars of the new chunk were already
+                    // sung by the shadow voice (it entered in the seam). We continue from
+                    // that same point, the section's length stays full — otherwise
+                    // the energy would jump at the join.
                     self.piece_start_measure = self.total_measures.saturating_sub(overlap);
-                    // enter_section сбрасывает счетчик — текущий такт первый.
+                    // enter_section resets the counter — the current bar is the first.
                     self.enter_section();
                     self.section_measure_count = overlap + 1;
                     self.section_len = self.section_len.max(overlap + 1);
                 } else {
-                    // Плана нет (форма не должна встать): держим секцию.
+                    // No plan (the form must not stop): hold the section.
                     self.plan_done = true;
                     self.section_len = self.section_len.max(1);
                     self.section_measure_count = 1;
-                    // Удержанная секция не должна каждый такт выглядеть
-                    // «только что вошедшей»: иначе хвост перехода из
-                    // BuildUp повторялся бы в каждом такте Drop.
+                    // A held section must not look "just entered" every bar:
+                    // otherwise the tail of the BuildUp transition would repeat
+                    // in every bar of the Drop.
                     self.previous_section = self.section;
                 }
             } else {
                 self.plan_idx += 1;
                 self.enter_section();
-                // enter_section сбросил счетчик — текущий такт первый.
+                // enter_section reset the counter — the current bar is the first.
                 self.section_measure_count = 1;
             }
         }
@@ -720,22 +766,22 @@ impl Arranger {
         self.build_context()
     }
 
-    /// Контекст текущего такта (без продвижения счетчиков). Отдельно от
-    /// `advance_measure`, чтобы тень перехода читала тот же такт, что и
-    /// основной арранжер, не сдвигая счетчик сессии.
+    /// Context of the current bar (without advancing counters). Separate from
+    /// `advance_measure`, so that the transition shadow reads the same bar as the
+    /// main arranger without shifting the session counter.
     pub fn build_context(&mut self) -> SongContext {
         let section = self.section();
         let is_last = self.section_measure_count == self.section_len;
         let progress = self.section_measure_count as f32 / self.section_len as f32;
-        // Фразы — по 2 такта, границы на нечетных тактах (1,3,5,...):
-        // секции активных стилей имеют четную длину и стартуют с нечетного
-        // такта, поэтому фраза никогда не рвется на стыке секций.
+        // Phrases are 2 bars, boundaries on odd bars (1,3,5,...):
+        // sections of active styles have even lengths and start on an odd
+        // bar, so a phrase never breaks at a section join.
         let phrase_index = (self.total_measures - 1) / PHRASE_LENGTH_MEASURES
             + self.phrase_offset
             + (self.cycle as usize).wrapping_mul(CYCLE_PHRASE_JUMP);
-        // Глиссандо громкостей: полпути к таблице за такт. Стыки секций
-        // текут, а не щелкают — никто не гаснет и не врывается внезапно.
-        // Первый такт уже в цели (prev_gains инициализированы таблицей).
+        // Volume glissando: halfway to the table over a bar. Section joins
+        // flow rather than click — nobody fades out or bursts in suddenly.
+        // The first bar is already at the target (prev_gains initialized from the table).
         let target = stage_gains_for(section);
         let mut gains = self.prev_gains;
         for (g, t) in gains.iter_mut().zip(target) {
@@ -743,15 +789,19 @@ impl Arranger {
         }
         self.prev_gains = gains;
 
-        // Тоника стоит парами визитов (см. extend_tonic): инкрементально,
-        // один раз за сессию, а не пересчётом с нуля на каждый шаг.
+        // The tonic stands in visit pairs (see extend_tonic): incrementally,
+        // once per session, not recalculated from scratch each step.
         let stage = self.stages_done as usize;
         let tonic_walk = self.extend_tonic(stage / 2);
+        // A new chunk — a new B variation and a new chord order;
+        // the first cycle keeps the seed's written foundation. The seam's shadow computes
+        // the same cycle, so the next chunk is sung in the same key.
+        let (motif_b, prog) = remix_for_cycle(self.motif_b, self.prog, self.seed_hash, self.cycle);
 
         SongContext {
             section,
-            // Сквозной такт сессии: гармония, клетка риффа и вторая
-            // половина мотива живут по нему, а не по локальному счетчику.
+            // Session-wide bar: the harmony, the riff cell and the second
+            // half of the motif live by it, not by a local counter.
             measure_index: self.total_measures,
             phrase_index,
             energy: energy_for(
@@ -773,20 +823,20 @@ impl Arranger {
             seed_hash: self.seed_hash,
             density: self.density,
             motif: self.motif,
-            motif_b: self.motif_b,
-            // Тема секции: кульминации (Drop/PostChorus) поют B,
-            // остальное — A. Энергия и тема усиливают друг друга:
-            // настоящий припев, а не та же мелодия погромче.
+            motif_b,
+            // The section's theme: climaxes (Drop/PostChorus) sing B,
+            // the rest — A. Energy and theme reinforce each other:
+            // a real chorus, not the same melody louder.
             use_alt_motif: matches!(section, SongSection::Drop | SongSection::PostChorus),
-            prog: self.prog,
+            prog,
             tonic_walk,
         }
     }
 }
 
-/// Открытость фильтра формы 0..1: движок домножает на нее срез верхов.
-/// Тема держит середину, билд свистит вверх весь разгон и раскрывается
-/// на дропе, передышка прикрывается обратно. Чистая функция.
+/// Form filter openness 0..1: the engine multiplies the high-cut by it.
+/// The theme holds the middle, the build sweeps upward through the whole build-up and opens
+/// at the drop, the breakdown closes back down. Pure function.
 pub fn section_openness(section: SongSection, progress: f32) -> f32 {
     let p = progress.clamp(0.0, 1.0);
     match section {
@@ -805,8 +855,8 @@ fn energy_for(
     salt: u64,
     written: Option<f32>,
 ) -> f32 {
-    // Написанная энергия секции (из плана куска) — если есть, берём её
-    // за основу; иначе общая формула формы.
+    // Written section energy (from the chunk plan) — if present, we take it
+    // as the basis; otherwise the general form formula.
     let base = match written {
         Some(b) => b,
         None => match section {
@@ -816,17 +866,17 @@ fn energy_for(
             SongSection::PostChorus => 0.45,
         },
     };
-    // Дроп — якорь, всегда ровно 1.0.
+    // The drop is the anchor, always exactly 1.0.
     if section == SongSection::Drop {
         return 1.0;
     }
-    // Разгон идет вверх, передышка оседает: энергия — ход секции.
+    // The build-up rises, the breakdown settles: energy is the section's motion.
     let ramp = match section {
         SongSection::BuildUp => progress * 0.4,
         SongSection::PostChorus => -progress * 0.1,
         _ => 0.0,
     };
-    // Легкое дыхание энергии по кругам: форма та же, накал чуть разный.
+    // Slight energy breathing across loops: the same form, a bit different intensity.
     let wobble = (hash01(seed_hash, cycle, salt) - 0.5) * 0.15;
     (base + ramp + wobble).clamp(0.05, 1.0)
 }
@@ -837,10 +887,10 @@ mod tests {
 
     #[test]
     fn shadow_continues_the_next_piece_without_a_seam() {
-        // Переход внахлёст: тень поет первые такты следующего куска,
-        // а основной арранжер продолжает его же с того же места.
-        // Секция, прогресс и тональность обязаны совпасть — иначе
-        // стык слышно как смена тона.
+        // Overlapping transition: the shadow sings the first bars of the next chunk,
+        // and the main arranger continues that same chunk from the same place.
+        // Section, progression and key must match — otherwise
+        // the join is heard as a key change.
         use crate::piece::{plan_piece, Transition};
         let transition = Transition::Rolling { bars: 2 };
         let plan = plan_piece(
@@ -866,7 +916,7 @@ mod tests {
         let mut checked = false;
         for _ in 0..96 {
             let ctx = a.advance_measure();
-            // Тень идет в ногу с основным: те же такты.
+            // The shadow keeps in step with the main one: the same bars.
             if let Some(s) = shadow.as_mut() {
                 shadow_ctx = Some(s.advance_measure());
             }
@@ -880,18 +930,18 @@ mod tests {
                 }
             } else {
                 if was_joint {
-                    // Основной арранжер взял следующий кусок: тень должна
-                    // стоять ровно на том же такте.
+                    // The main arranger took the next chunk: the shadow must
+                    // stand at exactly the same bar.
                     let sc = shadow_ctx.expect("shadow context");
-                    assert_eq!(ctx.section, sc.section, "секция разошлась");
+                    assert_eq!(ctx.section, sc.section, "sections diverged");
                     assert!(
                         (ctx.progress - sc.progress).abs() < 0.01,
-                        "прогресс разошелся: {} против {}",
+                        "progression diverged: {} vs {}",
                         ctx.progress,
                         sc.progress
                     );
-                    assert_eq!(ctx.tonic_walk, sc.tonic_walk, "тоника разошлась");
-                    assert_eq!(ctx.motif, sc.motif, "мотив разошелся");
+                    assert_eq!(ctx.tonic_walk, sc.tonic_walk, "tonic diverged");
+                    assert_eq!(ctx.motif, sc.motif, "motif diverged");
                     checked = true;
                 }
                 shadow = None;
@@ -899,13 +949,41 @@ mod tests {
             }
             was_joint = a.in_joint();
         }
-        assert!(checked, "стык не проверен: шов не наступил");
+        assert!(checked, "join not checked: the seam hasn't arrived");
+    }
+
+    #[test]
+    fn remix_for_cycle_variants_keep_hook_and_harmony() {
+        // Chunks differ by the B variation and chord order, but the hook,
+        // the cadence and the set of progression degrees stay the seed's foundation.
+        let seed_hash = splitmix64(42 ^ 0x51ED);
+        let motif_b = [2u8, 3, 2, 1, 2, 3, 3, 4, 3, 2, 3, 4, 3, 2, 1, 0];
+        let prog = [0u8, 2, 3, 1];
+        assert_eq!(remix_for_cycle(motif_b, prog, seed_hash, 0), (motif_b, prog));
+        let mut variants = std::collections::HashSet::new();
+        for cycle in 1..8u64 {
+            let (b, p) = remix_for_cycle(motif_b, prog, seed_hash, cycle);
+            assert_eq!(&b[..4], &motif_b[..4], "hook changed");
+            assert_eq!(&b[12..], &motif_b[12..], "cadence changed");
+            let mut sorted = p;
+            sorted.sort_unstable();
+            let mut base_sorted = prog;
+            base_sorted.sort_unstable();
+            assert_eq!(sorted, base_sorted, "harmony foundation changed");
+            variants.insert((b, p));
+        }
+        assert!(variants.len() >= 2, "pieces share one remix: {variants:?}");
+        assert_eq!(
+            remix_for_cycle(motif_b, prog, seed_hash, 3),
+            remix_for_cycle(motif_b, prog, seed_hash, 3),
+            "remix not deterministic"
+        );
     }
 
     #[test]
     fn filter_opens_toward_drop() {
-        // Свип формы: билд доходит до 1.0, дроп открыт,
-        // передышка ниже темы.
+        // Form sweep: the build reaches 1.0, the drop is open,
+        // the breakdown is below the theme.
         assert_eq!(section_openness(SongSection::BuildUp, 1.0), 1.0);
         assert_eq!(section_openness(SongSection::Drop, 0.5), 1.0);
         assert!(
@@ -916,8 +994,8 @@ mod tests {
 
     #[test]
     fn full_cycle_visits_every_section_no_outro() {
-        // Круг активных: тема, разгон, дроп, передышка — и никаких
-        // финалов и разогревов: генерация бесконечная и сразу в полную.
+        // Active loop: theme, build-up, drop, breakdown — and no
+        // finales or build-ups at the start: generation is endless and immediately at full strength.
         let mut a = Arranger::new(1);
         let mut seen = std::collections::HashSet::new();
         for _ in 0..96 {
@@ -935,8 +1013,8 @@ mod tests {
 
     #[test]
     fn stages_follow_the_score() {
-        // Один проход круга: тема → разгон → дроп → передышка.
-        // Разогрева нет: первый визит — сразу тема.
+        // One pass of the loop: theme → build-up → drop → breakdown.
+        // No build-up: the first visit is already the theme.
         let mut a = Arranger::new(1);
         let mut order = Vec::new();
         let mut last = SongSection::PostChorus;
@@ -962,8 +1040,8 @@ mod tests {
 
     #[test]
     fn calm_score_breathes_main_with_rare_variety() {
-        // Спокойный кусок дышит темой, но всё равно проходит арку:
-        // тема, разгон, удар (смена тембра), передышка и возврат темы.
+        // A calm chunk breathes with the theme but still goes through the arc:
+        // theme, build-up, hit (timbre change), breakdown and return to the theme.
         let mut a = Arranger::with_score(1, CALM_SCORE);
         let mut order = Vec::new();
         let mut last = SongSection::Drop;
@@ -977,13 +1055,13 @@ mod tests {
             }
         }
         use SongSection::*;
-        // Кусок: тема, разгон, удар, передышка, возврат темы.
+        // A chunk: theme, build-up, hit, breakdown, theme return.
         assert_eq!(
             &order[..4],
             &[MainMotif, BuildUp, Drop, PostChorus],
             "{order:?}"
         );
-        assert_eq!(order[4], MainMotif, "тема не вернулась: {order:?}");
+        assert_eq!(order[4], MainMotif, "theme didn't return: {order:?}");
         let mains = order.iter().filter(|s| **s == MainMotif).count();
         let builds = order.iter().filter(|s| **s == BuildUp).count();
         assert!(mains >= builds, "calm must breathe main: {order:?}");
@@ -991,8 +1069,8 @@ mod tests {
 
     #[test]
     fn pieces_run_one_after_another() {
-        // Кусок конечен: тело, шов-финал, потом следующий кусок.
-        // Поток бесконечный, но форма — не кольцо, а цепочка кусков.
+        // The chunk is finite: body, seam-finale, then the next chunk.
+        // The stream is endless, but the form is a chain of chunks, not a loop.
         let mut a = Arranger::new(3);
         let mut cycles = std::collections::HashSet::new();
         let mut last = None;
@@ -1005,15 +1083,15 @@ mod tests {
         }
         assert!(
             cycles.len() >= 3,
-            "куски не сменяют друг друга: {:?}",
+            "chunks don't replace each other: {:?}",
             cycles
         );
     }
 
     #[test]
     fn main_gains_stable_across_visits() {
-        // Без реприз: устоявшийся баланс темы одинаков во всех визитах.
-        // Сравниваем последние такты визитов (глиссандо уже доехало).
+        // Without reprises: the settled balance of the theme is the same in all visits.
+        // We compare the last bars of visits (the glissando has already arrived).
         let mut a = Arranger::new(1);
         let mut mains = Vec::new();
         for _ in 0..200 {
@@ -1033,8 +1111,8 @@ mod tests {
 
     #[test]
     fn groove_continues_through_postchorus() {
-        // Передышка — не рестарт: ритм-секция катит дальше,
-        // отдыхает только верх (лид/вокал).
+        // The breakdown isn't a restart: the rhythm section rolls on,
+        // only the top rests (lead).
         let mut a = Arranger::new(1);
         for _ in 0..200 {
             let ctx = a.advance_measure();
@@ -1042,8 +1120,8 @@ mod tests {
                 break;
             }
             if ctx.section == SongSection::PostChorus && ctx.is_last_measure {
-                // Устоявшаяся передышка (глиссандо доехало): ритм катит,
-                // верх отдыхает. Первый такт переходный — не меряем.
+                // Settled breakdown (glissando arrived): the rhythm rolls,
+                // the top rests. The first bar is transitional — not measured.
                 let g = ctx.stage_gains;
                 let kick = InstrumentRole::Kick.index();
                 let hat = InstrumentRole::Hat.index();
@@ -1059,7 +1137,7 @@ mod tests {
 
     #[test]
     fn postchorus_is_a_breather() {
-        // Передышка тише дропа: круг дышит, а не лупит в полку.
+        // The breakdown is quieter than the drop: the loop breathes, not hammers.
         let mut a = Arranger::new(1);
         let mut drop_sum = None;
         let mut post_sum = None;
@@ -1103,8 +1181,8 @@ mod tests {
 
     #[test]
     fn phrases_span_two_measures_from_the_first_one() {
-        // Фраза — ровно 2 такта, первая фраза начинается с первого такта.
-        // Такт внутри фразы = (measure_index - 1) % 2.
+        // The phrase is exactly 2 bars, the first phrase starts at the first bar.
+        // Bar within the phrase = (measure_index - 1) % 2.
         let mut a = Arranger::new(1);
         let first = a.advance_measure();
         let second = a.advance_measure();
@@ -1121,8 +1199,8 @@ mod tests {
 
     #[test]
     fn measure_index_is_global_across_sections() {
-        // section_measure_count сбрасывается на стыках, а сквозной такт — нет:
-        // по нему движутся прогрессия и клетка риффа.
+        // section_measure_count resets at joins, the absolute bar doesn't:
+        // the progression and the riff cell move by it.
         let mut a = Arranger::new(1);
         let mut measures = 0usize;
         let mut last_section = None;
@@ -1144,8 +1222,8 @@ mod tests {
 
     #[test]
     fn phrases_never_straddle_section_boundaries() {
-        // Секции четной длины и стартуют с нечетного такта: фраза
-        // (2 такта) целиком лежит внутри секции, а не рвется на стыке.
+        // Sections have even lengths and start on an odd bar: the phrase
+        // (2 bars) lies wholly inside a section, not broken at a join.
         let mut a = Arranger::new(9);
         let mut last_section = None;
         let mut last_phrase = usize::MAX;
@@ -1168,15 +1246,15 @@ mod tests {
 
     #[test]
     fn alt_motif_marks_drop_sections() {
-        // B — материал кульминаций: Drop и PostChorus поют B, остальное A.
-        // Куплет/припев различаются темой, а не только громкостью.
+        // B — the climax material: Drop and PostChorus sing B, the rest A.
+        // Verse/chorus differ by theme, not only by volume.
         for seed in [0u64, 1, 7, 42, 777, 424242] {
             let mut a = Arranger::new(seed);
             let first = a.advance_measure();
             assert_ne!(first.motif, first.motif_b, "seed {seed}: A == B");
             assert!(!first.use_alt_motif, "starts with A");
-            // Размах темы — почерк сида: узкие поступенные (≤1),
-            // широкие терцовые (≤2). Каданс всегда на тонике.
+            // The theme's range is the seed's handwriting: narrow stepwise (≤1),
+            // wide third-wise (≤2). The cadence is always on the tonic.
             let seed_hash = splitmix64(seed ^ 0x51ED);
             let lim: i8 = if splitmix64(seed_hash ^ 0x1DE5).is_multiple_of(2) {
                 2
@@ -1224,7 +1302,7 @@ mod tests {
             main_a && drop_b && post_b,
             "sections never complete a cycle"
         );
-        // Границы детерминированы сидом.
+        // Boundaries are determined by the seed.
         let mut x = Arranger::new(5);
         let mut y = Arranger::new(5);
         for _ in 0..40 {
@@ -1252,8 +1330,8 @@ mod tests {
 
     #[test]
     fn cycles_advance_and_vary_lengths() {
-        // Круги идут вперед, а длины темы между кругами различаются:
-        // форма не повторяется дословно.
+        // Loops move forward, but the theme lengths between loops differ:
+        // the form doesn't repeat verbatim.
         let mut a = Arranger::new(1);
         let mut max_cycle = 0;
         let mut main_lens = std::collections::HashSet::new();
@@ -1284,8 +1362,8 @@ mod tests {
 
     #[test]
     fn starts_at_full_strength() {
-        // Разогрева нет: первый такт — уже тема в полную силу,
-        // все роли слышны (гейны > 0.3), heartbeat бочки стучит.
+        // No build-up: the first bar is already the theme at full strength,
+        // all roles are audible (gains > 0.3), the kick drum's heartbeat ticks.
         let mut a = Arranger::new(3);
         let ctx = a.advance_measure();
         assert_eq!(ctx.section, SongSection::MainMotif);
@@ -1308,8 +1386,8 @@ mod tests {
 
     #[test]
     fn progressions_differ_between_seeds() {
-        // Гармоническое движение — от сида: разные сиды ведут
-        // аккомпанемент по-разному при узнаваемом мотиве.
+        // Harmonic motion — from the seed: different seeds lead
+        // the accompaniment differently with a recognizable motif.
         let progs: std::collections::HashSet<_> = (0..16u64)
             .map(|s| Arranger::new(s).advance_measure().prog)
             .collect();
@@ -1318,7 +1396,7 @@ mod tests {
 
     #[test]
     fn same_seed_same_progression() {
-        // Прогрессия стабильна внутри сида — гармония не прыгает.
+        // The progression is stable within a seed — harmony doesn't jump.
         let a = Arranger::new(4242).advance_measure().prog;
         let b = Arranger::new(4242).advance_measure().prog;
         assert_eq!(a, b);

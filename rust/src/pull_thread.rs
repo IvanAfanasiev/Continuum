@@ -1,47 +1,47 @@
-//! Нативный аудио-поток Android: рендер + запись в AudioTrack по JNI.
-//! Dart здесь не участвует вовсе (ни таймеров, ни каналов в тракте):
-//! часы — блокирующая запись из нативного потока, как cpal на десктопе.
-//! Маршрут/пауза рулятся снаружи: Dart шлет только команды
-//! (старт/стоп/захват), звук идет мимо него.
+//! Native Android audio stream: render + write to AudioTrack via JNI.
+//! Dart takes no part here at all (no timers or channels in the pipeline):
+//! the clock is the blocking write from the native stream, like cpal on desktop.
+//! Route/pause are controlled externally: Dart only sends commands
+//! (start/stop/capture), the sound goes around it.
 //!
-//! Живет только на Android (`#[cfg]` ниже); на остальных платформах —
-//! заглушки, чтобы собирались FRB и десктоп.
+//! Lives only on Android (`#[cfg]` below); on other platforms there are
+//! stubs so FRB and the desktop target still build.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     Mutex,
 };
 
-/// Чанк рендера/записи: 0.05с при 48 кГц. Короче квант — меньше
-/// слышимая дыра от одного медленного чанка (50 мс против 100 мс)
-/// и точнее онсеты. Мельче (25 мс) — вдвое больше JNI-вызовов
-/// без слышимого выигрыша.
+/// Render/write chunk: 0.05 s at 48 kHz. A shorter quantum means less
+/// audible gap from one slow chunk (50 ms vs 100 ms)
+/// and more accurate onsets. Any shorter (25 ms) — twice as many JNI calls
+/// with no audible benefit.
 pub(crate) const CHUNK_FRAMES: usize = 2400;
-/// Частота нативного трека (AudioTrack ресемплит сам, как раньше).
+/// Native track sample rate (AudioTrack resamples itself, as before).
 pub(crate) const TRACK_SR: f32 = 48000.0;
-/// Байтов буфера трека: секунда (противодавление без спина).
+/// Track buffer bytes: one second (backpressure without spinning).
 const TRACK_BUF_BYTES: i32 = 48000 * 2 * 4;
-/// Блоков в захвате экспертизы (30 секунд по 0.05с).
+/// Blocks in a diagnostic capture (30 seconds at 0.05 s each).
 const CAPTURE_BLOCKS: usize = 600;
 
-/// Поколение потока: stop/start впритык убивает старый цикл.
+/// Stream generation: back-to-back stop/start kills the old loop.
 static GEN: AtomicU64 = AtomicU64::new(0);
-/// Поток жив (для UI и самодиагностики).
+/// Stream is alive (for UI and self-diagnostics).
 static ALIVE: AtomicBool = AtomicBool::new(false);
-/// Бортовой журнал потока (кап — память не течет).
+/// Onboard stream log (capped — memory doesn't leak).
 static DIAG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Захват потока в файл: путь + осталось блоков.
+/// Stream capture to a file: path + blocks remaining.
 static CAPTURE: Mutex<Option<(std::fs::File, usize)>> = Mutex::new(None);
-/// Буферная очередь AudioTrack (отдано минус съедено), мс: оценка того,
-/// насколько звучащее отстает от отрендеренного. Пишет аудио-цикл
-/// каждые 5 секунд, читает UI для синхронизации визуалайзера
-/// (колесо должно показывать то, что звучит, а не то, что
-/// сгенерировалось). Ноль — поток не играет / неизвестно.
+/// AudioTrack buffer queue (given minus consumed), ms: an estimate of how
+/// far the sounding audio lags behind the rendered audio. Written by the audio loop
+/// every 5 seconds, read by the UI to sync the visualizer
+/// (the wheel must show what sounds, not what was
+/// generated). Zero — stream isn't playing / unknown.
 static LATENCY_MS: AtomicI64 = AtomicI64::new(0);
 
-/// Очередь буфера трека для фронта, мс. Только Android: там позиция
-/// хэда читается нативным циклом. Остальные платформы — 0 (колбэк cpal
-/// идёт почти в момент звучания, остаток правится маржой фронта).
+/// Track buffer queue for the frontend, ms. Android only: there the head
+/// position is read by the native loop. Other platforms — 0 (the cpal callback
+/// fires almost at the moment of sounding, the remainder is corrected by the frontend margin).
 #[cfg(target_os = "android")]
 pub(crate) fn output_latency_ms() -> f32 {
     LATENCY_MS.load(Ordering::Relaxed).max(0) as f32
@@ -52,15 +52,15 @@ pub(crate) fn output_latency_ms() -> f32 {
     0.0
 }
 
-/// Счетчики тракта для сводки (каждые 100 блоков ≈ 5 секунд).
+/// Pipeline counters for the summary (every 100 blocks ≈ 5 seconds).
 struct Counters {
     chunks: u64,
     slow: u64,
     render_ms_total: u64,
     pending_max: usize,
-    /// Кадров отдано треку всего (для дрейфа часов).
+    /// Total frames given to the track (for clock drift).
     written: u64,
-    /// Последняя позиция хэда + база обёртки 32-битного счётчика.
+    /// Last head position + base of the 32-bit counter wrap.
     last_head: i64,
     head_base: i64,
 }
@@ -74,7 +74,7 @@ pub(crate) fn diag_push(line: String) {
 }
 
 fn diag_now() -> String {
-    // HH:MM:SS без chrono: достаточно секунд суток для журнала.
+    // HH:MM:SS without chrono: seconds of the day are enough for the log.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -83,18 +83,18 @@ fn diag_now() -> String {
     format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Последние строки журнала потока (для экрана диагностики).
+/// Last lines of the stream log (for the diagnostics screen).
 pub(crate) fn diag_lines() -> Vec<String> {
     DIAG.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Жив ли аудио-поток прямо сейчас.
+/// Is the audio stream alive right now.
 pub(crate) fn thread_alive() -> bool {
     ALIVE.load(Ordering::Relaxed)
 }
 
-/// Захват следующих 30 секунд потока в файл. Путь — снаружи
-/// (публичная папка приложения). false — уже пишем или не играет.
+/// Capture the next 30 seconds of the stream to a file. The path is outside
+/// (the app's public folder). false — already writing or not playing.
 pub(crate) fn capture_start(path: &str) -> bool {
     if path.is_empty() || !thread_alive() {
         return false;
@@ -140,8 +140,8 @@ fn capture_write(pcm: &[f32]) {
     }
 }
 
-/// Остановка потока: следующее поколение не стартует, текущий цикл
-/// выходит сам (максимум за один блок) и гасит трек.
+/// Stopping the stream: the next generation won't start, the current loop
+/// exits on its own (within one block at most) and releases the track.
 pub(crate) fn thread_stop() {
     GEN.fetch_add(1, Ordering::Relaxed);
 }
@@ -152,11 +152,11 @@ pub(crate) fn thread_start() {
     if thread_alive() {
         return;
     }
-    // След первого шага: виден ли вообще запуск (spawn мог молча
-    // не состояться — тогда тишина без единой строчки).
+    // Trace of the first step: whether startup is visible at all (spawn may have silently
+    // failed — then silence without a single log line).
     diag_push(format!("{} thread_start requested", diag_now()));
-    // Прошлый захват не должен душить новый: оборванный стопом файл
-    // закрываем и забываем (иначе кнопка мертва навсегда).
+    // A previous capture must not strangle a new one: a file cut short by a stop is
+    // closed and forgotten (otherwise the button is dead forever).
     {
         let mut guard = CAPTURE.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
@@ -175,13 +175,13 @@ pub(crate) fn thread_start() {
 
 #[cfg(not(target_os = "android"))]
 pub(crate) fn thread_start() {
-    // Десктоп играет через cpal — нативного трека тут нет.
+    // Desktop plays via cpal — there is no native track here.
 }
 
 #[cfg(target_os = "android")]
 fn jvm() -> jni::JavaVM {
     let ctx = ndk_context::android_context();
-    // SAFETY: указатель пришел из JNI_OnLoad, живет весь процесс.
+    // SAFETY: the pointer came from JNI_OnLoad, lives for the whole process.
     unsafe { jni::JavaVM::from_raw(ctx.vm() as *mut _) }
 }
 
@@ -194,10 +194,10 @@ fn audio_loop(gen: u64) {
     diag_push(format!("{} native audio loop running", diag_now()));
     let alive = || GEN.load(Ordering::Relaxed) == gen;
 
-    // Весь цикл внутри attach-callback: поток приаттачен, пока
-    // замыкание не вернется (detach автоматический в конце).
+    // The whole loop is inside the attach callback: the thread stays attached while
+    // the closure hasn't returned (automatic detach at the end).
     let res: jni::errors::Result<()> = jvm().attach_current_thread(|env| {
-        // --- Сборка AudioTrack через Builder-цепочку (без Activity) ---
+        // --- Building AudioTrack through a Builder chain (without Activity) ---
         let attrs_builder_cls =
             env.find_class(jni::jni_str!("android/media/AudioAttributes$Builder"))?;
         let attrs_builder = env.new_object(attrs_builder_cls, jni::jni_sig!("()V"), &[])?;
@@ -301,9 +301,9 @@ fn audio_loop(gen: u64) {
                 &[JValue::Int(1)],
             )?
             .l()?;
-        // setPerformanceMode НЕ ставим: на части устройств любое
-        // значение кроме дефолта кидает IllegalArgument ("Invalid
-        // performance mode") и убивает поток. Дефолт играет везде.
+        // We do NOT set setPerformanceMode: on some devices any value other than
+        // the default throws IllegalArgument ("Invalid
+        // performance mode") and kills the stream. The default works everywhere.
         let track = env
             .call_method(
                 &track_builder,
@@ -319,8 +319,8 @@ fn audio_loop(gen: u64) {
             diag_push(format!("{} bad track state: {state}", diag_now()));
             return Err(jni::errors::Error::JavaException);
         }
-        // Глобальная ссылка: переживает локальные фреймы цикла.
-        // Локальную тут же удаляем (иначе копится в таблице ссылок).
+        // Global reference: it survives the loop's local frames.
+        // We delete the local reference immediately (otherwise it accumulates in the ref table).
         let track_global = env.new_global_ref(&track)?;
         env.delete_local_ref(track);
 
@@ -336,10 +336,10 @@ fn audio_loop(gen: u64) {
         let mut last_summary = Instant::now();
         let mut last_pushed = 0u64;
         let controller = crate::api::playback::shared_controller();
-        // Префилл: 3 чанка в буфер ДО play — старт без underrun-дыры
-        // (иначе трек с первой миллисекунды потребляет быстрее, чем
-        // мы производим). Ошибка/пустота здесь не фатальны: главный
-        // цикл ниже сам выйдет через существующий путь «write failed».
+        // Prefill: 3 chunks into the buffer BEFORE play — startup without an underrun gap
+        // (otherwise the track consumes faster than we produce from the very first millisecond). An
+        // error or empty buffer here isn't fatal: the main
+        // loop below will exit via the existing "write failed" path.
         for _ in 0..3 {
             if !alive() {
                 break;
@@ -380,10 +380,10 @@ fn audio_loop(gen: u64) {
 
         env.call_method(&track_global, jni::jni_str!("play"), jni::jni_sig!("()V"), &[])?;
         while alive() {
-            // Каденс realtime: чанк покрывает 0.05с — отработали быстрее,
-            // ждем остаток. Без этого при незапирающей записи цикл
-            // крутит сотни чанков в секунду (видели 670/с), съедает ядро
-            // и морит композер голодом — отсюда редкие ноты.
+            // Realtime cadence: a chunk covers 0.05 s — if we finished early,
+            // wait out the remainder. Without this, with non-blocking write the loop
+            // spins hundreds of chunks per second (we saw 670/s), eats a CPU core
+            // and starves the composer — hence the rare notes.
             let chunk_start = Instant::now();
             let t0 = Instant::now();
             let pcm = controller.render_pull(CHUNK_FRAMES as u64, TRACK_SR);
@@ -402,9 +402,9 @@ fn audio_loop(gen: u64) {
             } else if counters.chunks % 100 == 0 {
                 let avg = counters.render_ms_total / counters.chunks.max(1);
                 let queued = controller.engine_stats().queued;
-                // Состояние трека и реальный темп: чанков в секунду
-                // около 20 (чанки по 50 мс) — запись нигде не тормозит
-                // (трек не потребляет). 3 = PLAYING.
+                // Track state and real tempo: chunks per second
+                // around 20 (50 ms chunks) — writing never stalls anywhere
+                // (the track doesn't consume). 3 = PLAYING.
                 let elapsed = last_summary.elapsed().as_secs_f32().max(0.01);
                 last_summary = Instant::now();
                 let rate = 100.0 / elapsed;
@@ -417,15 +417,15 @@ fn audio_loop(gen: u64) {
                     )
                     .map(|v| v.i().unwrap_or(-99))
                     .unwrap_or(-99);
-                // Темп композера: сколько нот сгенерировано за окно (5с).
-                // ~150 = полный микс, ~10 = композер стоит.
+                // Composer tempo: how many notes were generated in a window (5 s).
+                // ~150 = full mix, ~10 = composer is idle.
                 let pushed_now = controller.engine_stats().pushed;
                 let pushed_delta = pushed_now.saturating_sub(last_pushed);
                 last_pushed = pushed_now;
-                // Дрейф часов: отдано треку минус съедено хедом.
-                // Растёт — производим быстрее потребления (буфер пухнет,
-                // норма после префилла ~150-300 мс); около нуля надолго —
-                // идём впритык (риск underrun при первом же spike).
+                // Clock drift: given to the track minus consumed by the head.
+                // Growing — we produce faster than consumption (buffer swells,
+                // normal after prefill ~150-300 ms); near zero for a long time —
+                // we're running on the edge (underrun risk on the first spike).
                 let head: i32 = env
                     .call_method(
                         &track_global,
@@ -438,7 +438,7 @@ fn audio_loop(gen: u64) {
                 let drift_txt = if head >= 0 {
                     let head = head as i64;
                     if head < counters.last_head - 1_000_000 {
-                        // Обёртка 32-битного счётчика (~12.4 ч при 48 кГц).
+                        // Wrap of the 32-bit counter (~12.4 h at 48 kHz).
                         counters.head_base += 0x1_0000_0000;
                     }
                     counters.last_head = head;
@@ -446,8 +446,8 @@ fn audio_loop(gen: u64) {
                         - (counters.head_base + head))
                         * 1000
                         / TRACK_SR as i64;
-                    // Буферная очередь трека для визуалайзера: колесо
-                    // показывает звучащее, а не отрендеренное.
+                    // Track buffer queue for the visualizer: the wheel
+                    // shows what sounds, not what was rendered.
                     LATENCY_MS.store(drift_ms.max(0), Ordering::Relaxed);
                     format!("{drift_ms}ms")
                 } else {
@@ -461,7 +461,7 @@ fn audio_loop(gen: u64) {
                 ));
                 counters.pending_max = 0;
                 if play_state != 3 {
-                    // Трек не играет: толкаем play снова.
+                    // Track isn't playing: push play again.
                     diag_push(format!(
                         "{} track not playing ({play_state}), replay",
                         diag_now()
@@ -479,8 +479,8 @@ fn audio_loop(gen: u64) {
                 continue;
             }
             capture_write(&pcm);
-            // Запись одним куском в локальном фрейме: массив удаляется
-            // сразу, таблица ссылок не растет весь трек.
+            // Write in one piece in a local frame: the array is deleted
+            // right away, the reference table doesn't grow for the whole track.
             let write_res: jni::errors::Result<i32> =
                 env.with_local_frame(8, |env| {
                     let arr = env.new_float_array(pcm.len())?;
@@ -505,16 +505,16 @@ fn audio_loop(gen: u64) {
                     counters.written += pcm.len() as u64 / 2;
                 }
                 _ => {
-                    // Трек умер (маршрут без события): выходим, Dart
-                    // пересоздаст цикл по команде play (как раньше heal).
+                    // Track died (route without an event): we exit, Dart
+                    // will recreate the loop on a play command (as heal did before).
                     diag_push(format!("{} track write failed, exiting", diag_now()));
                     break;
                 }
             }
-            // Каденс: чанк покрывает 0.05с звука — ждем остаток ПОСЛЕ
-            // записи. Трек получает чанк сразу после рендера (буфер не
-            // голодает из-за сна), а цикл не крутится вхолостую на
-            // сотни чанков/с (съедал ядро и морил композер голодом).
+            // Cadence: a chunk covers 0.05 s of audio — wait out the remainder AFTER
+            // the write. The track gets the chunk right after render (the buffer doesn't
+            // starve because of sleep), and the loop doesn't spin idle at
+            // hundreds of chunks/s (ate a CPU core and starved the composer).
             let spent = chunk_start.elapsed();
             let quantum = std::time::Duration::from_millis(50);
             if spent < quantum {
@@ -522,12 +522,12 @@ fn audio_loop(gen: u64) {
             }
         }
 
-        // Уборка: пауза, сброс буфера, release.
+        // Cleanup: pause, reset buffer, release.
         let _ = env.call_method(&track_global, jni::jni_str!("pause"), jni::jni_sig!("()V"), &[]);
         let _ = env.call_method(&track_global, jni::jni_str!("flush"), jni::jni_sig!("()V"), &[]);
         let _ = env.call_method(&track_global, jni::jni_str!("release"), jni::jni_sig!("()V"), &[]);
-        // Незаконченный захват закрываем: файл целый (сколько успели),
-        // слот свободен для следующего.
+        // We close an unfinished capture: the file is whole (as far as we got),
+        // the slot is free for the next one.
         {
             let mut guard = CAPTURE.lock().unwrap_or_else(|e| e.into_inner());
             if guard.is_some() {
@@ -560,9 +560,9 @@ mod tests {
 
     #[test]
     fn capture_rejects_empty_path_or_dead_thread() {
-        // Без живого потока захват не стартует (не во что писать).
+        // Without a live stream a capture doesn't start (nowhere to write).
         assert!(!capture_start(""));
-        // Поток в тестах не запущен.
+        // The stream isn't running in tests.
         assert!(!thread_alive());
     }
 }

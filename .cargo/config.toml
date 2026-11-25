@@ -1,5 +1,5 @@
-# Зеркало rust/.cargo/config.toml (см. комментарий там).
-# Основной фикс статической STL — в
+# Mirror of rust/.cargo/config.toml (see the comment there).
+# The main static-STL fix lives in
 # rust_builder/cargokit/build_tool/lib/src/android_environment.dart.
 [target.aarch64-linux-android]
 rustflags = ["-C", "link-args=-lc++_static -lc++abi"]

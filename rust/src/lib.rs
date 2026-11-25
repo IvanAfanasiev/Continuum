@@ -8,8 +8,8 @@ pub mod mixer;
 pub mod piece;
 pub mod playback;
 pub mod proto;
-// На десктопе нативный поток — заглушки (там cpal); мертвый код
-// андроидной половины здесь разрешен явно.
+// On desktop the native stream is stubbed out (cpal is used there); dead code
+// in the Android half is explicitly allowed here.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub mod pull_thread;
 pub mod seed;

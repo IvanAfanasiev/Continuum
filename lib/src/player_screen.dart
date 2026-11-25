@@ -1,18 +1,15 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import 'package:cont/src/audio_bridge.dart';
-import 'package:cont/src/player_controller.dart';
-import 'package:cont/src/rust/api/playback.dart';
-import 'package:cont/src/rust/playback.dart';
-import 'package:cont/src/seed_input.dart';
+import 'package:continuum/src/audio_bridge.dart';
+import 'package:continuum/src/player_controller.dart';
+import 'package:continuum/src/rust/playback.dart';
+import 'package:continuum/src/seed_input.dart';
 
-/// Треки, разложенные по полкам групп. Порядок полок — из бэкенда
-/// (`groups` идут в каноническом порядке), внутри — порядок слотов.
-/// Пустые полки пропускаются. Никаких своих списков во фронте.
+/// Tracks arranged by group shelves. Shelf order comes from the backend
+/// (`groups` are in canonical order), with slot order within each shelf.
+/// Empty shelves are skipped. No frontend-side hardcoded lists.
 List<(String, List<TrackInfo>)> _groupedTracks(PlayerController c) {
   final out = <(String, List<TrackInfo>)>[];
   for (final g in c.groups) {
@@ -25,21 +22,20 @@ List<(String, List<TrackInfo>)> _groupedTracks(PlayerController c) {
   return out;
 }
 
-/// Подписи и иконки групп для обычного пользователя (без слов-TODO).
+/// Group labels and icons for end users (without TODO-style words).
 const _groupMeta = {
-  'bass': (Icons.speaker, 'Бас'),
-  'kick': (Icons.album, 'Кик'),
-  'snare': (Icons.circle, 'Снейр'),
-  'hat': (Icons.donut_small, 'Хэт'),
-  'chords': (Icons.piano, 'Аккорды'),
-  'lead': (Icons.music_note, 'Лид'),
-  'vocal': (Icons.mic, 'Вокал'),
-  'texture': (Icons.grain, 'Атмосфера'),
+  'bass': (Icons.speaker, 'Bass'),
+  'kick': (Icons.album, 'Kick'),
+  'snare': (Icons.circle, 'Snare'),
+  'hat': (Icons.donut_small, 'Hat'),
+  'chords': (Icons.piano, 'Chords'),
+  'lead': (Icons.music_note, 'Lead'),
+  'texture': (Icons.grain, 'Atmosphere'),
 };
 
-/// Пути арта. Файлы лежат в assets/images/ (см. README там):
-/// фон `bg_<стиль>.png`, превью `style_<стиль>.png`.
-/// Нет файла — черный фон (errorBuilder), приложение не падает.
+/// Artwork paths. Files live in assets/images/ (see the README there):
+/// background `bg_<style>.png`, preview `style_<style>.png`.
+/// No file — black background (errorBuilder), the app doesn't crash.
 class AppArtwork {
   static String background(String style) =>
       'assets/images/bg_${style.toLowerCase()}.png';
@@ -50,8 +46,8 @@ class AppArtwork {
   static const String appIcon = 'assets/images/app_icon.png';
 }
 
-/// Фон экрана: картинка стиля на весь экран + темная вуаль для
-/// читаемости белого текста. Без файла — просто черный.
+/// Screen background: full-screen style image + a dark veil for
+/// white-text readability. Without a file — just black.
 class StyleBackground extends StatelessWidget {
   const StyleBackground({super.key, required this.style});
 
@@ -74,7 +70,7 @@ class StyleBackground extends StatelessWidget {
   }
 }
 
-/// Мини-превью стиля 48x48. Без файла — черный квадрат.
+/// 48x48 mini style preview. Without a file — a black square.
 class StylePreview extends StatelessWidget {
   const StylePreview({super.key, required this.style});
 
@@ -97,36 +93,36 @@ class StylePreview extends StatelessWidget {
   }
 }
 
-/// Русские имена слотов для секции инструментов.
+/// Human-readable slot names for the instruments section.
 const _slotMeta = {
-  'bass': 'Бас',
-  'kick': 'Кик',
-  'pad': 'Пэд',
-  'snare': 'Снейр',
-  'hat': 'Хэт',
-  'pluck': 'Щипок',
-  'keys': 'Клавиши',
+  'bass': 'Bass',
+  'kick': 'Kick',
+  'pad': 'Pad',
+  'snare': 'Snare',
+  'hat': 'Hat',
+  'pluck': 'Pluck',
+  'keys': 'Keys',
   'kick808': '808',
-  'vinyl': 'Винил',
-  'vocal': 'Вокал',
-  'guitar': 'Гитара',
-  'shaker': 'Шейкер',
+  'vinyl': 'Vinyl',
+  'guitar': 'Guitar',
+  'shaker': 'Shaker',
+  'piano': 'Piano',
 };
 
 String _styleTitle(String style) {
   if (style.isEmpty) return 'Club';
   switch (style) {
-    case 'deep':
-      return 'Deep House';
-    case 'proto':
-      return 'Proto';
+    case 'club':
+      return 'Club';
+    case 'lofi':
+      return 'Lo-Fi';
     default:
       return style[0].toUpperCase() + style.substring(1);
   }
 }
 
-/// Диагностика тракта для баннера (null — все растет как надо).
-/// Первые секунды после старта молчание — норма (открывается устройство).
+/// Audio-path diagnostics for the banner (null — everything is growing as expected).
+/// Silence in the first seconds after start is normal (the device is opening).
 String? _statsDiag(PlayerController c) {
   if (!(c.running && !c.paused)) return null;
   if ((c.status?.engineError ?? '').isNotEmpty) return null;
@@ -136,27 +132,35 @@ String? _statsDiag(PlayerController c) {
   if (DateTime.now().difference(started).inSeconds < 6) return null;
   if (stats.frames == BigInt.zero) {
     final cfg =
-        stats.audioConfig.isEmpty ? 'конфиг неизвестен' : stats.audioConfig;
-    return 'Звуковой поток не запустился ($cfg). '
-        'Ноты генератора: ${stats.pushed}. '
-        'Проверь громкость медиа и Bluetooth.';
+        stats.audioConfig.isEmpty ? 'unknown output' : stats.audioConfig;
+    return 'Audio stream did not start ($cfg). '
+        'Notes generated: ${stats.pushed}. '
+        'Check media volume and Bluetooth.';
   }
   if (stats.pushed == BigInt.zero) {
-    return 'Генератор не выдаёт ноты — напиши разработчику.';
+    return 'The generator is not producing notes. Please report this.';
   }
   if (stats.consumed == BigInt.zero) {
-    return 'Ноты не доходят до движка — напиши разработчику.';
+    return 'Notes are not reaching the engine. Please report this.';
   }
   if (c.streamStalled) {
     final n = stats.restarts;
-    return 'Звуковой поток остановился — переподключаю'
-        '${n == BigInt.zero ? '' : ' (попытка ${n.toString()})'}. '
-        'Если висит — смени маршрут (наушники/динамик).';
+    return 'Audio stream stopped, reconnecting'
+        '${n == BigInt.zero ? '' : ' (attempt ${n.toString()})'}. '
+        'If it hangs, switch output (headphones/speaker).';
+  }
+  if (stats.dropped > BigInt.zero) {
+    return 'Rhythm gaps: ${stats.dropped} notes dropped under load. '
+        'Lower the energy or close background tasks.';
+  }
+  if (stats.reanchors > BigInt.from(3)) {
+    return 'Generator is lagging: ${stats.reanchors} grid re-anchors. '
+        'Try turning off some instruments in Mix.';
   }
   return null;
 }
 
-/// Плашка-уведомление под сидом: ошибка движка или диагностика тракта.
+/// Notice banner under the seed: engine error or audio-path diagnostics.
 class _NoticeBanner extends StatelessWidget {
   const _NoticeBanner({
     required this.icon,
@@ -210,14 +214,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   Timer? _poller;
 
-  /// Режим фона: фото стиля или живой круговой график мотива.
-  bool _graphMode = false;
-
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onController);
-    // Легкий опрос статуса, пока играет: фронт видит правду бэкенда.
+    // Light status polling while playing: the frontend sees backend truth.
     _poller = Timer.periodic(const Duration(seconds: 3), (_) {
       if (widget.controller.running) widget.controller.refresh();
     });
@@ -237,20 +238,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
-    // Горизонталь: кнопки прячем, панели выдвинуты сразу; центр
-    // держим узким — вертикальный стиль сохраняется.
+    // Landscape: hide the buttons, slide the panels out immediately; keep
+    // the center narrow — the portrait style is preserved.
     final landscape =
         MediaQuery.of(context).size.aspectRatio > 1.0;
-    // Фон: фото стиля или живой график (переключатель под сидом).
-    Widget background() => _graphMode
-        ? _MotifWheel(controller: c)
-        : StyleBackground(style: c.styleName);
+    // Background: style artwork.
     if (landscape) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            background(),
+            StyleBackground(style: c.styleName),
             SafeArea(
               child: Row(
                 children: [
@@ -263,9 +261,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           controller: c,
                           bridge: widget.bridge,
                           showSideButtons: false,
-                          graphMode: _graphMode,
-                          onToggleGraph: () =>
-                              setState(() => _graphMode = !_graphMode),
                         ),
                       ),
                     ),
@@ -284,13 +279,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: Colors.black,
-      // Широкая зона свайпа от края: меню открывается жестом,
-      // а не только кнопками (дефолтные 20pt не нащупать).
+      // Wide edge-swipe area: the menu opens by gesture,
+      // not only by buttons (the default 20pt is hard to hit).
       drawerEdgeDragWidth: 72,
-      // Гасим фокус при открытии И закрытии меню: FocusScope иначе
-      // возвращает фокус в ячейку сида при закрытии шторки (+клавиатура).
-      // Полностью запрещать фокус нельзя — иначе не напечатать сид,
-      // поэтому гасим агрессивно везде, кроме самого ввода.
+      // Clear focus on both opening AND closing the menu: otherwise FocusScope
+      // returns focus to the seed box when the drawer closes (+keyboard).
+      // Can't disable focus entirely — then the seed can't be typed,
+      // so clear it aggressively everywhere except the input itself.
       onDrawerChanged: (_) {
         FocusManager.instance.primaryFocus?.unfocus();
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -302,7 +297,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           Drawer(child: _StylesPanelBody(controller: c, bridge: widget.bridge)),
       body: Stack(
         children: [
-          background(),
+          StyleBackground(style: c.styleName),
           SafeArea(
             child: _CenterColumn(
               controller: c,
@@ -310,9 +305,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
               showSideButtons: true,
               onOpenMix: () => _scaffoldKey.currentState?.openDrawer(),
               onOpenStyles: () => _scaffoldKey.currentState?.openEndDrawer(),
-              graphMode: _graphMode,
-              onToggleGraph: () =>
-                  setState(() => _graphMode = !_graphMode),
             ),
           ),
         ],
@@ -321,8 +313,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-/// Боковая панель ландшафта: фиксированные 300pt, полупрозрачная
-/// поверх общего фона. Центр за счет этого всегда одного размера.
+/// Landscape side panel: fixed 300pt, semi-transparent
+/// over the shared background. This keeps the center a constant size.
 class _SidePanel extends StatelessWidget {
   const _SidePanel({required this.child});
 
@@ -340,8 +332,8 @@ class _SidePanel extends StatelessWidget {
   }
 }
 
-/// Середина: название стиля, сид, play по центру (+ боковые кнопки
-/// только в портрете).
+/// Center: style name, seed, centered play (+ side buttons
+/// in portrait only).
 class _CenterColumn extends StatelessWidget {
   const _CenterColumn({
     required this.controller,
@@ -349,8 +341,6 @@ class _CenterColumn extends StatelessWidget {
     required this.showSideButtons,
     this.onOpenMix,
     this.onOpenStyles,
-    required this.graphMode,
-    required this.onToggleGraph,
   });
 
   final PlayerController controller;
@@ -358,36 +348,67 @@ class _CenterColumn extends StatelessWidget {
   final bool showSideButtons;
   final VoidCallback? onOpenMix;
   final VoidCallback? onOpenStyles;
-  /// Фон-график вместо фото + переключатель режима.
-  final bool graphMode;
-  final VoidCallback onToggleGraph;
+
+  /// Double-tap guard: while an FFI call is in flight, the second is ignored
+  /// (otherwise play/pause arrive in completion order, not press order).
+  static bool _toggleInFlight = false;
 
   Future<void> _toggle(BuildContext context) async {
+    if (_toggleInFlight) return;
+    _toggleInFlight = true;
     FocusManager.instance.primaryFocus?.unfocus();
-    final c = controller;
-    if (c.running && !c.paused) {
-      await bridge.pause();
-    } else if (!await bridge.play()) {
-      // Трек не создался (нет устройства): объясняем, а не молчим.
+    try {
+      final c = controller;
+      if (c.running && !c.paused) {
+        await bridge.pause();
+      } else if (!await bridge.play()) {
+        // The track wasn't created (no device): explain instead of staying silent.
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not start audio: no output device'),
+            ),
+          );
+        }
+      }
+    } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Не удалось запустить звук: нет устройства вывода'),
-          ),
+          SnackBar(content: Text('Playback error: $e')),
         );
       }
+    } finally {
+      _toggleInFlight = false;
     }
   }
 
   Future<void> _seed(String code) async {
-    await controller.submitSeedCode(code);
-    await bridge.sync();
+    try {
+      await controller.submitSeedCode(code);
+      await bridge.sync();
+    } catch (e) {
+      debugPrint('[seed] $e');
+    }
   }
 
   Future<void> _dice(BuildContext context) async {
     FocusManager.instance.primaryFocus?.unfocus();
-    await controller.randomSeed();
-    await bridge.sync();
+    try {
+      await controller.randomSeed();
+      await bridge.sync();
+    } catch (e) {
+      debugPrint('[seed] $e');
+    }
+  }
+
+  Future<void> _previousSeed() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    try {
+      await controller.previousSeed();
+      await bridge.sync();
+    } catch (e) {
+      debugPrint('[seed] $e');
+    }
   }
 
   @override
@@ -396,7 +417,7 @@ class _CenterColumn extends StatelessWidget {
     final playing = c.running && !c.paused;
     return Column(
       children: [
-        // Центр: название стиля и сид.
+        // Center: style name and seed.
         Expanded(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -414,48 +435,34 @@ class _CenterColumn extends StatelessWidget {
                 initialCode: c.boxCode,
                 onSubmit: _seed,
                 onDice: () => _dice(context),
+                onPrevious: c.canGoBackSeed ? _previousSeed : null,
                 compact: MediaQuery.of(context).size.width < 600,
               ),
-              // Ошибка аудиодвижка: раньше была тишина без объяснений.
+              // Audio engine error: previously it was silence without explanation.
               if (c.status?.engineError case final err? when err.isNotEmpty)
                 _NoticeBanner(
                   icon: Icons.warning_amber,
                   color: Colors.redAccent,
                   text: err,
                 ),
-              // Переключатель фона: фото стиля / живой график мотива.
-              TextButton.icon(
-                onPressed: onToggleGraph,
-                icon: Icon(
-                  graphMode ? Icons.photo : Icons.donut_large,
-                  size: 14,
-                ),
-                label: Text(
-                  graphMode ? 'Фото' : 'График',
-                  style: const TextStyle(fontSize: 11),
-                ),
-              ),
-              // Диагностика тракта: поток не стартует / генератор молчит.
+              // Audio-path diagnostics: stream won't start / generator is silent.
               if (_statsDiag(c) case final diag? when diag.isNotEmpty)
                 _NoticeBanner(
                   icon: Icons.hearing,
                   color: Colors.amber,
                   text: diag,
                 ),
-              // Бортовой журнал: видно без USB, что творится в тракте.
-              // Жив ли поток — панель выяснит сама опросом.
-              _DiagPanel(bridge: bridge, controller: c, visible: c.running),
             ],
           ),
         ),
-        // Нижняя половина: play по центру.
+        // Lower half: centered play.
         Expanded(
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (showSideButtons) ...[
                 IconButton(
-                  tooltip: 'Громкость и темп',
+                  tooltip: 'Mix and tempo',
                   iconSize: 32,
                   color: Colors.white,
                   onPressed: onOpenMix,
@@ -463,26 +470,30 @@ class _CenterColumn extends StatelessWidget {
                 ),
                 const SizedBox(width: 32),
               ],
-              GestureDetector(
-                onTap: () => _toggle(context),
-                child: Container(
-                  width: 96,
-                  height: 96,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white,
-                  ),
-                  child: Icon(
-                    playing ? Icons.pause : Icons.play_arrow,
-                    size: 56,
-                    color: Colors.black,
+              Semantics(
+                button: true,
+                label: playing ? 'Pause' : 'Play',
+                child: GestureDetector(
+                  onTap: () => _toggle(context),
+                  child: Container(
+                    width: 96,
+                    height: 96,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                    ),
+                    child: Icon(
+                      playing ? Icons.pause : Icons.play_arrow,
+                      size: 56,
+                      color: Colors.black,
+                    ),
                   ),
                 ),
               ),
               if (showSideButtons) ...[
                 const SizedBox(width: 32),
                 IconButton(
-                  tooltip: 'Стили',
+                  tooltip: 'Styles',
                   iconSize: 32,
                   color: Colors.white,
                   onPressed: onOpenStyles,
@@ -497,477 +508,9 @@ class _CenterColumn extends StatelessWidget {
   }
 }
 
-/// Бортовой журнал нативного потока: последние строки + кнопки.
-/// Опрашивается раз в 3с (в ритме поллера статуса) — живых тиков нет,
-/// чтобы не будить перестройки ради диагностики.
-class _DiagPanel extends StatefulWidget {
-  const _DiagPanel(
-      {required this.bridge, required this.controller, required this.visible});
 
-  final AudioBridge bridge;
-  final PlayerController controller;
-  final bool visible;
-
-  @override
-  State<_DiagPanel> createState() => _DiagPanelState();
-}
-
-class _DiagPanelState extends State<_DiagPanel> {
-  bool _open = false;
-  bool _alive = false;
-  List<String> _lines = const [];
-  Timer? _poller;
-
-  @override
-  void initState() {
-    super.initState();
-    _poller = Timer.periodic(const Duration(seconds: 3), (_) => _poll());
-    _poll();
-  }
-
-  @override
-  void dispose() {
-    _poller?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _poll() async {
-    if (!mounted) return;
-    try {
-      final alive = await widget.bridge.pullActive();
-      // Строки забираем всегда: посмертный диагноз мертвого потока
-      // важнее, чем скрытие пустоты.
-      final lines = await widget.bridge.diagLog();
-      if (!mounted) return;
-      setState(() {
-        _alive = alive;
-        _lines = lines;
-      });
-    } catch (_) {
-      // Диагностика необязательна — молча пропускаем.
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!widget.visible) return const SizedBox.shrink();
-    final lines = _lines;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          GestureDetector(
-            onTap: () => setState(() => _open = !_open),
-            child: Text(
-              _open
-                  ? 'Скрыть журнал'
-                  : 'Журнал тракта (${lines.length})${_alive ? '' : ' — поток спит'} · движок v${widget.controller.status?.engineVersion ?? '?'}',
-              style: const TextStyle(fontSize: 11, color: Colors.white54),
-            ),
-          ),
-          if (_open) ...[
-            const SizedBox(height: 4),
-            Container(
-              constraints: const BoxConstraints(maxHeight: 160),
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  lines.isEmpty
-                      ? 'пока пусто — запусти генерацию'
-                      : lines.join('\n'),
-                  style: const TextStyle(
-                    fontSize: 10,
-                    color: Colors.white70,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ),
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextButton.icon(
-                  onPressed: lines.isEmpty
-                      ? null
-                      : () => Clipboard.setData(
-                          ClipboardData(text: lines.join('\n'))),
-                  icon: const Icon(Icons.copy, size: 14),
-                  label: const Text(
-                    'Копировать',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: !_alive
-                      ? null
-                      : () async {
-                          final path =
-                              await widget.bridge.startCapture();
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(path == null
-                                    ? 'Запись не стартовала'
-                                    : 'Пишу 30с сюда: $path'),
-                              ),
-                            );
-                          }
-                        },
-                  icon: const Icon(Icons.fiber_manual_record, size: 14),
-                  label: const Text(
-                    'Запись 30с',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Круговой график-партитура: 4 орбиты главных голосов (кик снаружи,
-/// тема внутри), точки — доли голоса за фразу на своих местах.
-/// План фразы приходит целиком при ее старте; рука делает оборот
-/// за фразу независимо, но в тех же часах — и «играет» точки:
-/// близкая к стрелке пульсирует в тайминг.
-/// Ход 20 Гц, опрос 10 Гц. Только пока играет и виден график.
-class _MotifWheel extends StatefulWidget {
-  const _MotifWheel({required this.controller});
-
-  final PlayerController controller;
-
-  @override
-  State<_MotifWheel> createState() => _MotifWheelState();
-}
-
-class _MotifWheelState extends State<_MotifWheel> {
-  Timer? _ticker;
-  LiveVisual? _frame;
-
-  /// Якорь руки от движка: фаза такта + момент замера. Между опросами
-  /// рука интерполируется от якоря с точной скоростью BPM — плавно
-  /// и в ногу с точками (те же часы, что и маски).
-  double _anchorP = 0.0;
-  DateTime _anchorT = DateTime.now();
-
-  /// История кадров (время приёма, кадр): звук позади генерации на
-  /// выходную задержку, поэтому показываем не свежий кадр, а тот,
-  /// что соответствует слышимому моменту (now - задержка).
-  final List<(DateTime, LiveVisual)> _history = [];
-
-  /// Выходная задержка из движка (мс) + маржа опроса/чанка.
-  /// Маржа 120мс покрывает опрос колеса (100мс) и чанк рендера (50мс).
-  double _latencyMs = 0;
-  static const _marginMs = 120.0;
-  int _statsTick = 0;
-
-  /// Маски голосов из последнего опроса: это настоящие ноты текущей
-  /// фразы (движок отдаёт то, что реально прозвучало), а не отдельный
-  /// пре-рендер. Поэтому точка на колесе и звук — это одно и то же
-  /// событие, разойтись они не могут.
-  int _liveKick = 0;
-  int _liveSnare = 0;
-  int _liveBass = 0;
-  int _liveTheme = 0;
-
-  /// Сглаженная фаза руки 0..1: тянется к цели (якорь + время × BPM),
-  /// а не прыгает на нее — свингованные 16-е дышат внутри такта,
-  /// опрос это видит с опозданием; тянучка ~120мс съедает щелчки.
-  double _display = 0.0;
-
-  double _bpm() =>
-      (widget.controller.status?.tempoBpm ?? 126).toDouble();
-
-  static const _sections = ['Main', 'Build', 'Drop', 'Post'];
-
-  @override
-  void initState() {
-    super.initState();
-    _anchorT = DateTime.now();
-    // Тик 50мс: рука тянется к цели каждый тик (20 Гц, плавно),
-    // опрос движка каждый 2-й тик (10 Гц): якорь свежий, точки
-    // загораются почти в момент звучания (опоздание ~0.1с, не такт).
-    var n = 0;
-    _ticker = Timer.periodic(const Duration(milliseconds: 50), (_) async {
-      if (!mounted) return;
-      final running =
-          widget.controller.running && !widget.controller.paused;
-      if (running) {
-        // Цель: якорь окна + прошедшее время × скорость BPM.
-        // Оборот руки — окно колеса (4 такта): шире музыкальной фразы,
-        // иначе на границе фразы след обрывался и радар очищался.
-        final elapsed =
-            DateTime.now().difference(_anchorT).inMilliseconds / 1000.0;
-        final target = (_anchorP + elapsed * _bpm() / 960.0) % 1.0;
-        var d = (target - _display) % 1.0;
-        if (d > 0.5) d -= 1.0;
-        if (d.abs() > 0.25) {
-          // Смена сида/стиля — прыгаем сразу, тянуть нечего.
-          _display = target;
-        } else {
-          _display = (_display + d * 0.4) % 1.0;
-        }
-      }
-      n++;
-      if (n % 2 != 0 || !running) {
-        setState(() {});
-        return;
-      }
-      try {
-        final v = await playbackLiveVisual();
-        if (mounted) {
-          setState(() {
-            final now = DateTime.now();
-            // Копим историю, старое режем (2.5с хватает с запасом:
-            // задержка выхода ≤ ~1с + маржа).
-            _history.add((now, v));
-            while (_history.length > 2 &&
-                now.difference(_history.first.$1).inMilliseconds > 2500) {
-              _history.removeAt(0);
-            }
-            // Кадр слышимого момента: самый свежий не новее now-задержка.
-            final delayMs =
-                (_latencyMs > 0 ? _latencyMs : 150.0) + _marginMs;
-            final cutoff =
-                now.subtract(Duration(milliseconds: delayMs.round()));
-            var shown = v;
-            var shownT = now;
-            for (final e in _history) {
-              if (!e.$1.isAfter(cutoff)) {
-                shown = e.$2;
-                shownT = e.$1;
-              }
-            }
-            _frame = shown;
-            // Якорь сдвигаем на задержку: рука показывает фазу,
-            // звучащую сейчас, а не сгенерированную сейчас.
-            _anchorP = shown.windowPhase;
-            _anchorT =
-                shownT.add(Duration(milliseconds: delayMs.round()));
-            // Ноты окна — как есть: точки совпадают с рукой.
-            // Маски приходят 64-битными (окно колеса — 4 такта).
-            _liveKick = shown.pkick.toInt();
-            _liveSnare = shown.psnare.toInt();
-            _liveBass = shown.pbass.toInt();
-            _liveTheme = shown.ptheme.toInt();
-          });
-        }
-      } catch (_) {
-        // Кадр необязателен — рука идет от якоря, колесо живет.
-      }
-      // Задержку обновляем раз в секунду: она дрейфует медленно.
-      _statsTick++;
-      if (_statsTick % 10 == 0) {
-        try {
-          final s = await playbackEngineStats();
-          if (mounted) {
-            setState(() {
-              _latencyMs = s.outputLatencyMs;
-            });
-          }
-        } catch (_) {
-          // Статистика необязательна — останется прошлая оценка.
-        }
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final v = _frame;
-    // Рука — сглаженная фаза из тикера (на паузе стоит сама).
-    final hand = _display;
-    final bpm = _bpm();
-    final phraseSecs = 480.0 / bpm;
-    // Точки — настоящие ноты фразы из последнего опроса: загораются
-    // в момент звучания под рукой (те же часы, рассинхрона нет) и
-    // тают за стрелкой.
-    final kick = _liveKick;
-    final snare = _liveSnare;
-    final bass = _liveBass;
-    final theme = _liveTheme;
-    final energy = v?.energy ?? 0.0;
-    return Container(
-      color: Colors.black,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: 280,
-              height: 280,
-              child: CustomPaint(
-                painter: _WheelPainter(
-                  kick: kick,
-                  snare: snare,
-                  bass: bass,
-                  theme: theme,
-                  phase: hand,
-                  energy: energy,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text.rich(
-              TextSpan(
-                style:
-                    const TextStyle(fontSize: 12, color: Colors.white54),
-                children: [
-                  const TextSpan(text: '● ', style: TextStyle(color: Color(0xFFFF5252))),
-                  const TextSpan(text: 'кик  '),
-                  const TextSpan(text: '● ', style: TextStyle(color: Color(0xFF4FC3F7))),
-                  const TextSpan(text: 'снейр  '),
-                  const TextSpan(text: '● ', style: TextStyle(color: Color(0xFF9CCC65))),
-                  const TextSpan(text: 'бас  '),
-                  const TextSpan(text: '● ', style: TextStyle(color: Colors.white)),
-                  const TextSpan(text: 'тема'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              v == null
-                  ? 'точки появятся с музыкой'
-                  : 'фраза ${phraseSecs.toStringAsFixed(1)}с · ${bpm.toStringAsFixed(0)} BPM · E${(energy * 100).round()}% · ${_sections[v.section.clamp(0, 3)]}',
-              style: const TextStyle(fontSize: 12, color: Colors.white54),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _WheelPainter extends CustomPainter {
-  _WheelPainter({
-    required this.kick,
-    required this.snare,
-    required this.bass,
-    required this.theme,
-    required this.phase,
-    required this.energy,
-  });
-
-  /// Маски голосов по долям фразы (бит = 32-я доля фразы): настоящие
-  /// ноты фразы — ровно то, что звучало.
-  final int kick;
-  final int snare;
-  final int bass;
-  final int theme;
-  /// Фаза руки 0..1 (доля фразы).
-  final double phase;
-  final double energy;
-
-  /// Сколько фразы точка тает за стрелкой. След короче фразы, поэтому
-  /// обнуление масок на границе фразы не видно: старые точки уже
-  /// погасли.
-  static const _fadeSpan = 0.75;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final r = size.shortestSide / 2 * 0.92;
-    // Фраза = 32 доли (2 такта по 16): позиции точек и руки.
-    const n = 64;
-    // Угол руки (0 — верх, по часовой).
-    final handA = phase * 6.2831853;
-
-    // Близость доли к руке 0..1 (1 — рука точно на точке):
-    // точки пульсируют, когда стрелка проходит мимо в тайминг.
-    double near(int i) {
-      var d = (i / n * 6.2831853 - handA).abs() % 6.2831853;
-      if (d > 3.14159265) d = 6.2831853 - d;
-      return (1.0 - d / 0.35).clamp(0.0, 1.0);
-    }
-
-    // Орбита голоса: свой радиус — точки голосов не лежат друг на друге,
-    // каждый голос читается отдельно. Доли и даунбит окна крупнее.
-    // Радарный след: точка загорается, когда стрелка до нее дошла, и
-    // плавно тает, когда стрелка ушла дальше.
-    void voice(int mask, double orbit, Color color, double size) {
-      // Едва видимая орбита.
-      canvas.drawCircle(
-        center,
-        r * orbit,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = const Color(0x1AFFFFFF),
-      );
-      for (var i = 0; i < n; i++) {
-        if ((mask & (1 << i)) == 0) continue;
-        final ang = i / n * 6.2831853 - 1.5707963;
-        final p = center +
-            Offset(
-                r * orbit * math.cos(ang), r * orbit * math.sin(ang));
-        final px = near(i);
-        // Давность точки: сколько окна прошло с момента, как стрелка
-        // прошла мимо. 0 — точка под стрелкой, дальше — тает.
-        var age = (phase - i / n) % 1.0;
-        if (age < 0) age += 1.0;
-        final fade = (1.0 - age / _fadeSpan).clamp(0.0, 1.0);
-        // Доля такта (каждая 4-я) и даунбит окна крупнее: метр виден.
-        final beat = i % 4 == 0 ? 1.0 : 0.0;
-        final down = i == 0 ? 1.5 : 0.0;
-        final now = px > 0.55;
-        // Под стрелкой — вспышка: точка совпала с звуком.
-        final alpha = now ? 1.0 : (0.10 + 0.90 * fade * fade);
-        canvas.drawCircle(
-          p,
-          size + beat + down + 3.0 * px * px,
-          Paint()
-            ..color = now
-                ? const Color(0xFFFFB300)
-                : color.withValues(alpha: alpha),
-        );
-      }
-    }
-
-    // Свечение центра от энергии.
-    final glow = (energy.clamp(0.0, 1.2) / 1.2 * r * 0.35).clamp(4.0, r * 0.4);
-    canvas.drawCircle(
-      center,
-      glow,
-      Paint()..color = const Color(0x22FFB300),
-    );
-
-    // Голоса на своих орбитах: тема внутри, кик снаружи.
-    voice(theme, 0.44, const Color(0xCCFFFFFF), 3.0);
-    voice(bass, 0.61, const Color(0xFF9CCC65), 3.5);
-    voice(snare, 0.78, const Color(0xFF4FC3F7), 3.5);
-    voice(kick, 0.95, const Color(0xFFFF5252), 4.0);
-
-    // Рука фразы через все орбиты: оборот за фразу, идет от BPM.
-    final a = phase * 6.2831853 - 1.5707963;
-    canvas.drawLine(
-      center,
-      center + Offset(r * 0.98 * math.cos(a), r * 0.98 * math.sin(a)),
-      Paint()
-        ..strokeWidth = 1.5
-        ..color = const Color(0x66FFFFFF),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_WheelPainter old) => true;
-}
-
-/// Левая панель: темп и энергия сверху, затем группы.
-/// Используется и в Drawer (портрет), и боком (ландшафт).
+/// Left panel: tempo, energy, master sound and instrument levels.
+/// Used both as a drawer (portrait) and as a side panel (landscape).
 class _MixPanelBody extends StatelessWidget {
   const _MixPanelBody({required this.controller});
 
@@ -980,79 +523,140 @@ class _MixPanelBody extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text('Микс',
-                    style:
-                        TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-              ),
-              // Кнопка сброса горит, только когда список правил слушатель:
-              // до этого стилю и сиду можно менять состав, после — нельзя.
-              IconButton(
-                onPressed: (c.status?.instrumentListEdited ?? false)
-                    ? c.resetInstruments
-                    : null,
-                icon: const Icon(Icons.restart_alt),
-                tooltip: 'Сбросить список инструментов к стилю',
-                visualDensity: VisualDensity.compact,
-              ),
-            ],
-          ),
+          const Text('Mix',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           _VolumeRow(
             icon: Icons.speed,
-            tooltip: 'Темп',
+            tooltip: 'Tempo',
             value: c.status?.tempoBpm ?? 126,
             min: 50,
             max: 180,
             integer: true,
             suffix: ' BPM',
             onCommit: (v) => c.setTempo(v),
+            onReset: c.resetTempo,
           ),
           _VolumeRow(
             icon: Icons.bolt,
-            tooltip: 'Энергия',
+            tooltip: 'Energy',
             value: c.status?.intensity ?? 1.0,
             max: 2.0,
             percent: true,
             onCommit: (v) => c.setIntensity(v),
+            onReset: c.resetIntensity,
           ),
-          // Инструменты, сгруппированные по полкам (порядок полок —
-          // как 8 типов выше было). Групповых фейдеров нет: ручка
-          // инструмента — единственная, потолок ей не нужен.
+          const Divider(height: 24),
+          Row(
+            children: [
+              const Expanded(
+                child: Text('Sound',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              ),
+              IconButton(
+                onPressed: c.resetMasterFx,
+                icon: const Icon(Icons.restart_alt),
+                tooltip: 'Restore style sound',
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+          _VolumeRow(
+            icon: Icons.blur_on,
+            tooltip: 'Echo (reverb amount)',
+            value: c.status?.reverbWet ?? 0.16,
+            max: 0.6,
+            percent: true,
+            onCommit: (v) => c.setMasterFx(
+              reverbWet: v,
+              reverbSize: c.status?.reverbSize ?? 0.5,
+              trebleHz: c.status?.trebleHz ?? 19000,
+              sidechain: c.status?.sidechain ?? 1.0,
+            ),
+          ),
+          _VolumeRow(
+            icon: Icons.highlight,
+            tooltip: 'Treble cutoff',
+            value: (c.status?.trebleHz ?? 19000) / 1000.0,
+            min: 2.0,
+            max: 20.0,
+            integer: true,
+            suffix: ' kHz',
+            onCommit: (v) => c.setMasterFx(
+              reverbWet: c.status?.reverbWet ?? 0.16,
+              reverbSize: c.status?.reverbSize ?? 0.5,
+              trebleHz: v * 1000.0,
+              sidechain: c.status?.sidechain ?? 1.0,
+            ),
+          ),
+          _VolumeRow(
+            icon: Icons.graphic_eq,
+            tooltip: 'Sidechain (pump depth)',
+            value: c.status?.sidechain ?? 1.0,
+            max: 2.0,
+            percent: true,
+            onCommit: (v) => c.setMasterFx(
+              reverbWet: c.status?.reverbWet ?? 0.16,
+              reverbSize: c.status?.reverbSize ?? 0.5,
+              trebleHz: c.status?.trebleHz ?? 19000,
+              sidechain: v,
+            ),
+          ),
+          _VolumeRow(
+            icon: Icons.filter_alt,
+            tooltip: 'Filter openness (on top of the arrangement)',
+            value: c.status?.toneOpen ?? 0.0,
+            min: -0.5,
+            max: 0.5,
+            onCommit: (v) => c.setToneOpen(v),
+          ),
           if (c.tracks.isNotEmpty) ...[
             const Divider(height: 32),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text('Instruments',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w600)),
+                ),
+                IconButton(
+                  onPressed: (c.status?.instrumentListEdited ?? false)
+                      ? c.resetInstruments
+                      : null,
+                  icon: const Icon(Icons.restart_alt),
+                  tooltip: 'Reset instrument list to style',
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
             for (final entry in _groupedTracks(c)) ...[
               Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-              child: Text(
-                _groupMeta[entry.$1]?.$2 ?? entry.$1,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.6),
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+                child: Text(
+                  _groupMeta[entry.$1]?.$2 ?? entry.$1,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.6),
+                  ),
                 ),
               ),
-            ),
-            for (final t in entry.$2)
-              _VolumeRow(
-                icon: _groupMeta[t.group]?.$1 ?? Icons.music_note,
-                tooltip: (_slotMeta[t.name] ?? t.name) +
-                    (t.volume <= 0.0 ? ' — выкл' : ''),
-                // Шкала — % от базы стиля, потолок 100%:
-                // выше базы слот не поднять.
-                value: t.baseVolume > 0
-                    ? (t.volume / t.baseVolume).clamp(0.0, 1.0)
-                    : 0.0,
-                max: 1.0,
-                percent: true,
-                dimmed: t.volume <= 0.0,
-                onCommit: (v) => c.setTrackVolume(t.id, v * t.baseVolume),
-              ),
+              for (final t in entry.$2)
+                _VolumeRow(
+                  icon: _groupMeta[t.group]?.$1 ?? Icons.music_note,
+                  tooltip: (_slotMeta[t.name] ?? t.name) +
+                      (t.volume <= 0.0 ? ' (off)' : ''),
+                  // Absolute 0..100%: the style base is no longer a ceiling.
+                  value: t.volume,
+                  max: 1.0,
+                  percent: true,
+                  dimmed: t.volume <= 0.0,
+                  onCommit: (v) => c.setTrackVolume(t.id, v),
+                ),
             ],
           ],
         ],
@@ -1061,11 +665,10 @@ class _MixPanelBody extends StatelessWidget {
   }
 }
 
-/// Строка слайдера: локальный отклик во время драга, один коммит
-/// в бэкенд по отпусканию. Иначе каждый тик драга — это 2–3 FFI
-/// туда-обратно плюс перестройка всего экрана: на телефоне слайдер
-/// вешает UI. Откат бэкенда (защита последнего слота) приезжает
-/// сам через notifyListeners после коммита.
+/// Slider row: local response while dragging, one backend commit on release.
+/// Otherwise every drag tick means 2–3 FFI round trips plus a rebuild of the
+/// whole screen: on a phone the slider freezes the UI. A backend rollback
+/// (protection of the last slot) arrives on its own via notifyListeners after commit.
 class _VolumeRow extends StatefulWidget {
   const _VolumeRow({
     required this.icon,
@@ -1078,6 +681,7 @@ class _VolumeRow extends StatefulWidget {
     this.integer = false,
     this.percent = false,
     this.dimmed = false,
+    this.onReset,
   });
 
   final IconData icon;
@@ -1090,8 +694,11 @@ class _VolumeRow extends StatefulWidget {
   final bool percent;
   final void Function(double) onCommit;
 
-  /// Затемнение строки (группа/слот выключены стилем).
+  /// Dim the row (group/slot disabled by the style).
   final bool dimmed;
+
+  /// Optional button to reset this fader to the style value.
+  final VoidCallback? onReset;
 
   @override
   State<_VolumeRow> createState() => _VolumeRowState();
@@ -1110,8 +717,8 @@ class _VolumeRowState extends State<_VolumeRow> {
   @override
   void didUpdateWidget(_VolumeRow oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Внешнее значение (коммит/откат) — только вне драга,
-    // иначе ползунок вырывают из-под пальца.
+    // Apply an external value (commit/rollback) only outside a drag,
+    // otherwise the slider is yanked out from under the finger.
     if (!_dragging && widget.value != oldWidget.value) {
       _local = widget.value;
     }
@@ -1167,22 +774,29 @@ class _VolumeRowState extends State<_VolumeRow> {
               style: const TextStyle(fontSize: 12),
             ),
           ),
+          if (widget.onReset != null)
+            IconButton(
+              onPressed: widget.onReset,
+              icon: const Icon(Icons.restart_alt, size: 18),
+              tooltip: 'Reset to style default',
+              visualDensity: VisualDensity.compact,
+            ),
         ],
       ),
     );
   }
 }
 
-/// Правая панель: список стилей с превью и сортировкой
-/// (по полкам Club/Rock/Chill или по алфавиту).
-/// Используется и в endDrawer (портрет), и боком (ландшафт).
+/// Right panel: style list with previews and sorting
+/// (by Club/Rock/Chill shelves or alphabetically).
+/// Used both as the endDrawer (portrait) and as a side panel (landscape).
 class _StylesPanelBody extends StatelessWidget {
   const _StylesPanelBody({required this.controller, required this.bridge});
 
   final PlayerController controller;
   final AudioBridge bridge;
 
-  /// Заголовок полки: имя группы с заглавной буквы.
+  /// Shelf title: group name capitalized.
   static String _groupTitle(String group) => group.isEmpty
       ? group
       : group[0].toUpperCase() + group.substring(1);
@@ -1199,14 +813,14 @@ class _StylesPanelBody extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                const Text('Стили',
+                const Text('Styles',
                     style:
                         TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
                 const Spacer(),
                 IconButton(
                   tooltip: c.styleSortMode == 'group'
-                      ? 'Сортировать по алфавиту'
-                      : 'Сортировать по группам',
+                      ? 'Sort alphabetically'
+                      : 'Sort by category',
                   icon: Icon(c.styleSortMode == 'group'
                       ? Icons.sort_by_alpha
                       : Icons.category_outlined),
@@ -1255,9 +869,9 @@ class _StylesPanelBody extends StatelessWidget {
     );
   }
 
-  /// Имена, сгруппированные по полкам в порядке бэкенда
-  /// (порядок первого появления полки). Возвращает пары
-  /// (полка, имена) — пустые полки отсекает вызывающий.
+  /// Names grouped by shelf in backend order
+  /// (order of the shelf's first appearance). Returns pairs
+  /// (shelf, names) — the caller drops empty shelves.
   List<(String, List<String>)> _grouped(
       List<String> names, PlayerController c) {
     final order = <String>[];
@@ -1273,7 +887,7 @@ class _StylesPanelBody extends StatelessWidget {
   }
 }
 
-/// Строка стиля: превью, название, галочка текущего.
+/// Style row: preview, title, checkmark for the current one.
 class _StyleTile extends StatelessWidget {
   const _StyleTile({
     required this.name,
@@ -1298,13 +912,15 @@ class _StyleTile extends StatelessWidget {
               ? const Icon(Icons.check, color: Colors.green)
               : null,
           onTap: () async {
-            // ListTile фокус не забирает (в отличие от слайдеров
-            // левого меню), поэтому гасим явно: иначе при закрытии
-            // шторки FocusScope вернет фокус в ячейку сида.
+            // ListTile doesn't take focus (unlike the sliders in the
+            // left menu), so clear it explicitly: otherwise when the drawer
+            // closes FocusScope returns focus to the seed box.
             FocusManager.instance.primaryFocus?.unfocus();
             await c.chooseStyle(name);
             await bridge.sync();
-            if (context.mounted && Scaffold.of(context).isDrawerOpen) {
+            // Styles live in the endDrawer — isDrawerOpen checks the left
+            // Drawer, so the panel stayed open after selection.
+            if (context.mounted && Scaffold.of(context).isEndDrawerOpen) {
               Navigator.of(context).pop();
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 FocusManager.instance.primaryFocus?.unfocus();

@@ -3,11 +3,11 @@ use super::{
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
-/// Электро-кик в духе 909: тело падает 170 → 44 Гц за ~6 мс
-/// (быстрый свип = панч сидит точно на сетке, а не плывет),
-/// щелчок-битер через полосу, короткий «knock» на 280 Гц.
-/// Хвост короткий (0.30с): длинный суб-хвост бьется с басом
-/// (44 Гц против ~55 Гц = 11 Гц «жабьего» рипла).
+/// 909-style electro kick: body falls 170 → 44 Hz in ~6 ms
+/// (a fast sweep = punch lands exactly on the grid instead of drifting),
+/// beater click through a band, a short "knock" at 280 Hz.
+/// Short tail (0.30 s): a long sub-tail beats against the bass
+/// (44 Hz vs ~55 Hz = 11 Hz "frog" ripple).
 const CLICK_BP_HZ: f32 = 3500.0;
 const CLICK_BP_Q: f32 = 0.8;
 const KICK_LEN_SECS: f32 = 0.30;
@@ -16,23 +16,23 @@ const FREQ_END_HZ: f32 = 44.0;
 const SWEEP_RATE: f32 = 160.0;
 const AMP_DECAY: f32 = 7.5;
 const CLICK_DECAY: f32 = 300.0;
-/// Щелчок погромче (был 0.6): на мелких динамиках фундамент
-/// не слышно, бит везёт именно битер. Хвост короткий — грязи нет.
+/// Click louder (was 0.6): on small speakers the fundamental
+/// is inaudible, the beat rides on the beater. Short tail — no mud.
 const CLICK_GAIN: f32 = 0.7;
 const KNOCK_HZ: f32 = 280.0;
 const KNOCK_DECAY: f32 = 55.0;
 const KNOCK_GAIN: f32 = 0.3;
 const DRIVE: f32 = 1.1;
-/// Гритового оффсета больше нет (был 0.1): постоянка косила волну
-/// в tanh-флэттоп каждый удар (хрип соло-бочки) — чистый удар
-/// держит панч свипом тела, а не перегрузом. Драйв снижен с 1.25:
-/// транзиент обязан крыть сустейн баса, флэттоп — нет.
+/// No more grit offset (was 0.1): the DC skew flattened the wave
+/// in tanh on every hit (the rasp of a solo kick) — a clean hit
+/// keeps its punch from the body sweep, not from overload. Drive lowered from 1.25:
+/// the transient must cover the bass sustain, flat-topping does not.
 const ATTACK_SECS: f32 = 0.001;
 const FADE_SECS: f32 = 0.012;
-/// Выход бочки. Сумма тела, «knock» и битера доходила до 1.09 — а с
-/// хвостом ретриггера (предыдущий удар ещё звучит) до 1.09+ и клиппила:
-/// на каждом втором ударе был щелчок. Нормируем так, чтобы удар и его
-/// перекрытие оставались в единице.
+/// Kick output. The sum of body, "knock" and beater reached 1.09 — and with
+/// the retrigger tail (previous hit still sounding) over 1.09+, clipping:
+/// every other hit had a click. Normalize so the hit and its
+/// overlap stay within unity.
 const OUT_GAIN: f32 = 0.78;
 
 #[derive(Clone, Default)]
@@ -45,7 +45,7 @@ struct KickVoice {
     samples_left: usize,
     noise: Noise,
     click_bp: Svf,
-    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    /// Recursive envelopes instead of per-sample `exp`.
     body_env: ExpDecay,
     sweep_env: ExpDecay,
     knock_env: ExpDecay,
@@ -68,8 +68,8 @@ impl Voice for KickVoice {
         self.knock_env = ExpDecay::start(KNOCK_DECAY, self.sample_rate);
         self.click_env = ExpDecay::start(CLICK_DECAY, self.sample_rate);
         self.click_bp.reset();
-        // Шум щелчка пересеивается от ноты: одинаковые удары одинаковы,
-        // разная velocity дает живую вариацию вместо machine-gun.
+        // Click noise reseeded from the note: identical hits are identical,
+        // differing velocity gives live variation instead of machine-gun.
         self.noise = Noise::new(note_seed(note, 0xC10C));
     }
 
@@ -88,8 +88,8 @@ impl Voice for KickVoice {
         self.knock_phase = (self.knock_phase + KNOCK_HZ / sample_rate) % 1.0;
         let knock = sin01(self.knock_phase) * self.knock_env.next() * KNOCK_GAIN;
 
-        // Щелчок-битер живет первые ~5 мс: шум через полосу 3.5 кГц —
-        // удар колотушки, а не сырой белый шум.
+        // The beater click lives the first ~5 ms: noise through a 3.5 kHz band —
+        // a mallet strike, not raw white noise.
         let raw_click = self.noise.sample() * self.click_env.next();
         let (_, click_band, _) =
             self.click_bp
@@ -97,7 +97,7 @@ impl Voice for KickVoice {
         let click = click_band * CLICK_GAIN;
 
         let attack_raw = (self.t / ATTACK_SECS).min(1.0);
-        // S-атака: у линейной остаются углы (микрощелчки на частых хитах).
+        // S-curve attack: linear leaves corners (micro-clicks on frequent hits).
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
@@ -117,7 +117,7 @@ impl Voice for KickVoice {
     }
 }
 
-/// Публичный инструмент: моно-голос с кроссфейдом хвоста.
+/// Public instrument: monophonic voice with tail crossfade.
 pub struct Kick(Mono<KickVoice>);
 
 impl Kick {
@@ -178,8 +178,8 @@ mod tests {
 
     #[test]
     fn retrigger_has_no_audible_step() {
-        // Регрессия щелчка на частых повторах: ретриггер в громкий хвост
-        // не должен давать ступеньку — хвост гаснет кроссфейдом.
+        // Click regression on frequent repeats: retriggering into a loud tail
+        // must not produce a step — the tail fades via crossfade.
         let sr = 44_100.0;
         let mut kick = Kick::new(2);
         kick.set_sample_rate(sr);

@@ -3,9 +3,9 @@ use super::{
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
-/// Шейкер deep house: короткий шумовой всплеск через высокий highpass.
-/// Металлика хэта тут нет — только песок атаки. Монофония с choke:
-/// частые 16-е не копятся в кашу.
+/// Deep house shaker: a short noise burst through a high highpass.
+/// No hi-hat metal here — just attack sand. Monophonic with choke:
+/// frequent 16ths don't pile up into mush.
 const HP_HZ: f32 = 7000.0;
 const HP_Q: f32 = 0.7;
 const BODY_DECAY: f32 = 90.0;
@@ -21,7 +21,7 @@ struct ShakerVoice {
     samples_left: usize,
     noise: Noise,
     hp: Svf,
-    /// Рекуррентная огибающая вместо посэмплового `exp`.
+    /// Recursive envelope instead of per-sample `exp`.
     env: ExpDecay,
 }
 
@@ -31,8 +31,8 @@ impl Voice for ShakerVoice {
     }
 
     fn trigger(&mut self, note: &NoteEvent) {
-        // Шейкер короткий по природе: длина от ноты, но не длиннее
-        // 120 мс — иначе хвост тишины жрет DSP и держит choke.
+        // The shaker is short by nature: length from the note, but no more
+        // than 120 ms — otherwise the silent tail eats DSP and holds the choke.
         let len = note.duration_secs.clamp(0.02, 0.12) * self.sample_rate;
         self.samples_left = len.max(1.0) as usize;
         self.gain = note.velocity;
@@ -70,7 +70,7 @@ impl Voice for ShakerVoice {
     }
 }
 
-/// Публичный инструмент: моно-голос с кроссфейдом хвоста.
+/// Public instrument: monophonic voice with tail crossfade.
 pub struct Shaker(Mono<ShakerVoice>);
 
 impl Shaker {
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn shaker_burst_is_short_and_finite() {
-        // Всплеск короче хэта: тишина уже через 120 мс при ноте 0.3 с.
+        // Shorter burst than the hi-hat: silence after 120 ms even with a 0.3 s note.
         let sr = 44_100.0;
         let mut shaker = Shaker::new(18);
         shaker.set_sample_rate(sr);

@@ -1,34 +1,34 @@
-//! Прототип pure-formula движка: вся музыка — замкнутые функции
-//! времени `y(seed, t)`. Ни планировщика, ни нот, ни голосов:
-//! кик, бас, хэты, снейр и лид читают одни и те же часы, поэтому
-//! не могут разъехаться по определению. Состояние только там, где
-//! без него нельзя (фильтры), и оно едет внутри структуры —
-//! та же последовательность вызовов дает те же сэмплы.
+//! Prototype of the pure-formula engine: all music is closed-form functions
+//! of time `y(seed, t)`. No scheduler, notes or voices:
+//! kick, bass, hats, snare and lead read the same clock, so they
+//! cannot drift apart by definition. State exists only where it
+//! cannot be avoided (filters), and it lives inside the structure —
+//! the same call sequence yields the same samples.
 //!
-//! Живет РЯДОМ с основным движком для честного A/B, а не вместо него.
+//! It lives ALONGSIDE the main engine for a fair A/B, not instead of it.
 //! CLI: `cargo run -- --proto 7 --wav proto.wav --secs 30`.
 
 use std::f32::consts::TAU;
 
 use crate::arranger::splitmix64;
 
-/// Темп прототипа: клубные 126, как основной движок (A/B честное).
+/// Prototype tempo: club 126, like the main engine (fair A/B).
 pub const PROTO_BPM: f32 = 126.0;
-/// Лад: натуральный минор от тоники сида.
+/// Scale: natural minor from the seed's tonic.
 const SCALE: [i8; 7] = [0, 2, 3, 5, 7, 8, 10];
-/// Прогрессия корней (ступени): тоника держит, остальные гуляют.
+/// Root progression (degrees): the tonic holds, the others roam.
 const PROG_LEN: usize = 4;
-/// Скелет лида по 16-м долям: якоря на четвертях, жизнь между.
+/// Lead skeleton on 16th notes: anchors on the beats, life in between.
 const LEAD_W: [f32; 16] = [
     1.0, 0.0, 0.4, 0.0, 0.6, 0.0, 0.4, 0.0, 0.7, 0.0, 0.4, 0.0, 0.5, 0.0, 0.4, 0.2,
 ];
 
-/// Детерминированный хэш → [0, 1). Весь «рандом» прототипа.
+/// Deterministic hash → [0, 1). All the "randomness" of the prototype.
 fn hash01(a: u64, b: u64) -> f32 {
     ((splitmix64(a ^ b.wrapping_mul(0x9E3779B9)) >> 32) as f32) / (u32::MAX as f32)
 }
 
-/// Параметры трека из сида: тоника, мотив, прогрессия, свинг, плотность.
+/// Track parameters from the seed: tonic, motif, progression, swing, density.
 #[derive(Clone, Copy)]
 struct ProtoParams {
     tonic: u8,
@@ -63,9 +63,9 @@ impl ProtoParams {
     }
 }
 
-/// Позиция в форме от такта: 8 тактов по кругу —
-/// 2 интро, 2 разгон, 2 дроп, 2 выход. Возвращает гейны слоев
-/// (кик, низ, верх, лид): кик держит всегда, остальные дышат.
+/// Position in the form from the bar: 8 bars in a loop —
+/// 2 intro, 2 build-up, 2 drop, 2 outro. Returns layer gains
+/// (kick, low, high, lead): the kick always holds, the others breathe.
 fn form_gains(bar8: usize) -> (f32, f32, f32, f32) {
     match bar8 {
         0 | 1 => (0.7, 0.0, 0.4, 0.0),
@@ -79,8 +79,8 @@ fn midi_to_freq(m: u8) -> f32 {
     440.0 * 2f32.powf((m as f32 - 69.0) / 12.0)
 }
 
-/// Движок прототипа: рендерит блоки последовательно.
-/// Состояние (`n`, фильтры) — непрерывность между блоками.
+/// Prototype engine: renders blocks sequentially.
+/// State (`n`, filters) — continuity between blocks.
 pub struct ProtoEngine {
     params: ProtoParams,
     seed: u64,
@@ -89,7 +89,7 @@ pub struct ProtoEngine {
     bass_lp: f32,
     dc_x: f32,
     dc_y: f32,
-    /// Сглаженные гейны формы: секции переключаются без ступенек.
+    /// Smoothed form gains: sections switch without steps.
     gains: [f32; 4],
 }
 
@@ -116,13 +116,13 @@ impl ProtoEngine {
         60.0 / PROTO_BPM / 4.0
     }
 
-    /// Шаг сетки с учетом свинга сида: нечетные 16-е опаздывают.
+    /// Grid step with the seed's swing: odd 16ths are late.
     fn step_at(&self, t: f32) -> (usize, f32) {
         let b = self.beat16();
         let raw = t / b;
         let i = raw.floor() as usize;
         let frac = raw - i as f32;
-        // Свинг: нечетный шаг начинается позже на (swing-1)*долю.
+        // Swing: an odd step starts later by (swing-1)*subdivision.
         let shift = if i % 2 == 1 {
             (self.params.swing - 1.0) * 2.0
         } else {
@@ -136,13 +136,13 @@ impl ProtoEngine {
             return 0.0;
         }
         let d = local * self.beat16();
-        // Панч из видео: экспонента тела + свип вниз + клик атаки.
+        // Punch from the video: body exponent + downward sweep + attack click.
         let env = (-9.0 * d).exp();
-        // Аналитическая фаза свипа 160→45 Гц: разрывов нет по построению.
+        // Analytical phase of the 160→45 Hz sweep: no discontinuities by construction.
         let phase = 160.0 * (1.0 - (-30.0 * d).exp()) / 30.0 + 45.0 * d;
         let body = (TAU * phase).sin() * env;
         let click = (-300.0 * d).exp() * 0.4;
-        // Оффсет видео (−2.2): гритовый хвост вместо чистого затухания.
+        // Video offset (−2.2): a gritty tail instead of a clean decay.
         ((body * 4.7 - 2.2 * env) * 0.35 + click).tanh() * 0.8
     }
 
@@ -155,7 +155,7 @@ impl ProtoEngine {
         let midi = self.params.tonic + SCALE[root_deg % 7] as u8;
         let freq = midi_to_freq(midi);
         let x = t * freq;
-        // Битовая формула видео, постоянка вычтена, через мягкий LP.
+        // Video's bit formula, DC removed, through a soft LP.
         let m1 = (x.floor() as i64 & 1) as f32;
         let m2 = ((x * 2.0).floor() as i64 & 1) as f32;
         let m4 = ((x * 4.0).floor() as i64 & 1) as f32;
@@ -168,7 +168,7 @@ impl ProtoEngine {
         if gain <= 0.0 || local < 0.0 {
             return 0.0;
         }
-        // Оффбитные 8-е + госты 16-х: детерминированный шум-тик.
+        // Offbeat 8ths + 16th ghosts: deterministic noise tick.
         let odd8 = step % 4 == 2;
         let ghost = step % 2 == 1 && hash01(self.seed, step as u64) < 0.3 * self.params.density;
         if !odd8 && !ghost {
@@ -182,7 +182,7 @@ impl ProtoEngine {
     }
 
     fn snare(&self, step: usize, local: f32, gain: f32) -> f32 {
-        // Half-time: только 3-я доля (шаг 8), как фонк-реф.
+        // Half-time: only the 3rd beat (step 8), like a funk reference.
         if step % 16 != 8 || local < 0.0 || gain <= 0.0 {
             return 0.0;
         }
@@ -201,7 +201,7 @@ impl ProtoEngine {
         if w <= 0.0 || hash01(self.seed ^ 0x1EAD, step as u64) >= w * self.params.density {
             return 0.0;
         }
-        // Мотив сида терцией вверх на нечетных фразах (вопрос-ответ).
+        // Seed motif a third up on odd phrases (call and response).
         let phrase = step / 32;
         let mut deg = self.params.motif[(step / 2) % 16] as usize;
         if phrase % 2 == 1 {
@@ -210,21 +210,21 @@ impl ProtoEngine {
         let midi = self.params.tonic + 24 + SCALE[deg % 7] as u8;
         let freq = midi_to_freq(midi);
         let x = local * self.beat16() * freq + step as f32 * 0.5;
-        // Фонк-стек чистого строя: унисон + квинта + октава.
+        // Funk stack in just intonation: unison + fifth + octave.
         let tone =
             (TAU * x).sin() * 0.55 + (TAU * x * 1.5).sin() * 0.25 + (TAU * x * 2.0).sin() * 0.2;
         let d = local * self.beat16();
-        // Края шага гасятся: гейт включается/выключается без щелчка.
+        // Step edges are faded: the gate switches without a click.
         let edge = (local / 0.05).min(1.0) * ((1.0 - local) / 0.05).min(1.0);
         tone * (-4.0 * d).exp().min(1.0) * edge * gain * 0.4
     }
 
-    /// Один стерео-сэмпл (моно-дубль): сумма слоев через форму и tanh.
+    /// One stereo sample (mono doubled): sum of layers through the form and tanh.
     fn sample(&mut self) -> (f32, f32) {
         let t = self.n as f32 / self.sample_rate;
         let (step, local) = self.step_at(t);
         let bar8 = (step / 16) % 8;
-        // Форма без ступенек: гейны догоняют цели (~8/с).
+        // Form without steps: gains chase their targets (~8/s).
         let (tk, tb, th, tl) = form_gains(bar8);
         let c = 1.0 - (-8.0 / self.sample_rate).exp();
         for (g, t) in self.gains.iter_mut().zip([tk, tb, th, tl]) {
@@ -237,7 +237,7 @@ impl ProtoEngine {
         let s = self.snare(step, local, g_h);
         let l = self.lead(step, local, g_l);
         let m = (k * g_k + b + h + s + l).tanh() * 0.8;
-        // DC-блок: битовая формула без LP давала бы постоянку.
+        // DC blocker: the bit formula without LP would produce DC.
         let y = m - self.dc_x + 0.995 * self.dc_y;
         self.dc_x = m;
         self.dc_y = y;
@@ -245,8 +245,8 @@ impl ProtoEngine {
         (y, y)
     }
 
-    /// Блок стерео interleaved f32. Последовательные вызовы —
-    /// непрерывный поток (состояние едет внутри).
+    /// Block of stereo interleaved f32. Sequential calls —
+    /// a continuous stream (state lives inside).
     pub fn render_block(&mut self, frames: usize) -> Vec<f32> {
         let mut out = Vec::with_capacity(frames * 2);
         for _ in 0..frames {
@@ -258,7 +258,7 @@ impl ProtoEngine {
     }
 }
 
-/// Прогон прототипа без записи: пик/RMS/скорость для A/B с soak.
+/// Prototype run without recording: peak/RMS/speed for A/B with soak.
 pub struct ProtoSoak {
     pub peak: f32,
     pub rms: f32,
@@ -297,8 +297,8 @@ pub fn proto_soak(seed: u64, seconds: f32, sample_rate: f32) -> ProtoSoak {
     }
 }
 
-/// WAV-экспорт прототипа (PCM16 stereo, заголовок вручную —
-/// как основной тракт, без внешних зависимостей).
+/// WAV export of the prototype (PCM16 stereo, header written by hand —
+/// like the main pipeline, with no external dependencies).
 pub fn proto_wav(
     seed: u64,
     seconds: f32,
@@ -323,7 +323,7 @@ pub fn proto_wav(
                 sum_sq += s * s;
                 pcm.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
             }
-            // pcm стерео interleaved уже парами — счетчик кадров ниже.
+            // pcm stereo interleaved is already in pairs — frame counter below.
         }
         done = pcm.len() as u64 / 2;
     }
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn same_seed_same_blocks() {
-        // Детерминизм: два движка — побитово те же блоки.
+        // Determinism: two engines — bitwise identical blocks.
         let (mut a, mut b) = (ProtoEngine::new(7, 44_100.0), ProtoEngine::new(7, 44_100.0));
         for _ in 0..4 {
             let (x, y) = (a.render_block(4096), b.render_block(4096));
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn sequential_blocks_join_cleanly() {
-        // Непрерывность: 4×1024 == 1×4096 и без щелчков на стыках.
+        // Continuity: 4×1024 == 1×4096 and no clicks at the seams.
         let mut a = ProtoEngine::new(7, 44_100.0);
         let mut seq = Vec::new();
         for _ in 0..4 {
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn audible_finite_without_dc() {
-        // Слышно, конечно, без постоянки (среднее ~0 за 5 секунд).
+        // Audibly, of course, without DC (mean ~0 over 5 seconds).
         let mut eng = ProtoEngine::new(11, 44_100.0);
         let out = eng.render_block(220_500);
         let mut peak = 0.0f32;
@@ -422,10 +422,10 @@ mod tests {
 
     #[test]
     fn drop_hits_harder_than_intro() {
-        // Форма работает: дроп (такты 4–5) плотнее интро (такты 0–1).
+        // The form works: the drop (bars 4–5) is denser than the intro (bars 0–1).
         let energy = |bars: std::ops::Range<usize>| {
             let mut eng = ProtoEngine::new(7, 44_100.0);
-            // Перемотка к началу диапазона: дешевле пересоздать и сжечь.
+            // Rewind to the start of the range: cheaper to recreate and discard.
             let beat = 60.0 / PROTO_BPM;
             let skip = (bars.start as f32 * 4.0 * beat * 44_100.0) as usize;
             eng.render_block(skip);
@@ -439,8 +439,8 @@ mod tests {
 
     #[test]
     fn seeds_differ() {
-        // Разные сиды — разная музыка: сравнение в зоне дропа,
-        // где играют все слои (интро у всех похоже — там почти кик).
+        // Different seeds — different music: comparison in the drop zone,
+        // where all layers play (the intro is similar for all — mostly kick).
         let e = |seed: u64| {
             let mut eng = ProtoEngine::new(seed, 44_100.0);
             eng.render_block(8 * 44_100);

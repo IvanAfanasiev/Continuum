@@ -1,15 +1,15 @@
-# Android: C++ STL статически (для ручных `cargo build --target ...-android`).
+# Android: link the C++ STL statically (for manual `cargo build --target ...-android`).
 #
-# Основной путь сборки (flutter build apk) идет через
-# rust_builder/cargokit, который выставляет CARGO_ENCODED_RUSTFLAGS env —
-# он перебивает rustflags из конфигов, поэтому настоящий фикс лежит в
+# The normal path (`flutter build apk`) goes through rust_builder/cargokit,
+# which sets the CARGO_ENCODED_RUSTFLAGS env variable. That overrides rustflags
+# from config files, so the real fix lives in
 # rust_builder/cargokit/build_tool/lib/src/android_environment.dart
-# (_libGccWorkaround добавляет -static-libstdc++). Этот файл — страховка
-# для сборок в обход cargokit.
-# Причина: cpal тянет Oboe (C++), без статики dlopen на телефоне падает:
-#   "cannot locate symbol _cxa_pure_virtual".
-# Форма флага важна: линкер — C-драйвер clang, он игнорирует
-# -static-libstdc++, работают только явные -lc++_static -lc++abi.
+# (_libGccWorkaround adds -static-libstdc++). This file is a fallback for
+# builds that bypass cargokit.
+# Reason: cpal pulls in Oboe (C++); without static linking dlopen fails on the
+# device with "cannot locate symbol _cxa_pure_virtual".
+# The flag form matters: the linker is the clang C driver and ignores
+# -static-libstdc++; only explicit -lc++_static -lc++abi work.
 [target.aarch64-linux-android]
 rustflags = ["-C", "link-args=-lc++_static -lc++abi"]
 [target.armv7-linux-androideabi]

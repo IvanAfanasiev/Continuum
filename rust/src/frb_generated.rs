@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 857012167;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1419638576;
 
 // Section: executor
 
@@ -513,6 +513,38 @@ fn wire__crate__api__playback__playback_reset_instruments_impl(
         },
     )
 }
+fn wire__crate__api__playback__playback_reset_master_fx_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "playback_reset_master_fx",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::playback::playback_reset_master_fx())?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__playback__playback_set_group_volume_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -578,6 +610,47 @@ fn wire__crate__api__playback__playback_set_intensity_impl(
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
                         Ok::<_, ()>(crate::api::playback::playback_set_intensity(api_intensity))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__playback__playback_set_master_fx_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "playback_set_master_fx",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_reverb_wet = <f32>::sse_decode(&mut deserializer);
+            let api_reverb_size = <f32>::sse_decode(&mut deserializer);
+            let api_treble_hz = <f32>::sse_decode(&mut deserializer);
+            let api_sidechain = <f32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::playback::playback_set_master_fx(
+                        api_reverb_wet,
+                        api_reverb_size,
+                        api_treble_hz,
+                        api_sidechain,
+                    ))?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -747,6 +820,40 @@ fn wire__crate__api__playback__playback_set_tempo_bpm_impl(
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
                         Ok::<_, ()>(crate::api::playback::playback_set_tempo_bpm(api_bpm))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__playback__playback_set_tone_open_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "playback_set_tone_open",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_offset = <f32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Ok::<_, ()>(crate::api::playback::playback_set_tone_open(api_offset))?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -1194,6 +1301,11 @@ impl SseDecode for crate::playback::PlaybackStatus {
         let mut var_engineError = <Option<String>>::sse_decode(deserializer);
         let mut var_engineVersion = <u32>::sse_decode(deserializer);
         let mut var_instrumentListEdited = <bool>::sse_decode(deserializer);
+        let mut var_reverbWet = <f32>::sse_decode(deserializer);
+        let mut var_reverbSize = <f32>::sse_decode(deserializer);
+        let mut var_trebleHz = <f32>::sse_decode(deserializer);
+        let mut var_sidechain = <f32>::sse_decode(deserializer);
+        let mut var_toneOpen = <f32>::sse_decode(deserializer);
         return crate::playback::PlaybackStatus {
             running: var_running,
             paused: var_paused,
@@ -1205,6 +1317,11 @@ impl SseDecode for crate::playback::PlaybackStatus {
             engine_error: var_engineError,
             engine_version: var_engineVersion,
             instrument_list_edited: var_instrumentListEdited,
+            reverb_wet: var_reverbWet,
+            reverb_size: var_reverbSize,
+            treble_hz: var_trebleHz,
+            sidechain: var_sidechain,
+            tone_open: var_toneOpen,
         };
     }
 }
@@ -1338,48 +1455,66 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        15 => wire__crate__api__playback__playback_set_group_volume_impl(
+        15 => wire__crate__api__playback__playback_reset_master_fx_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        16 => wire__crate__api__playback__playback_set_intensity_impl(
+        16 => wire__crate__api__playback__playback_set_group_volume_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        17 => {
+        17 => wire__crate__api__playback__playback_set_intensity_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        18 => wire__crate__api__playback__playback_set_master_fx_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        19 => {
             wire__crate__api__playback__playback_set_paused_impl(port, ptr, rust_vec_len, data_len)
         }
-        18 => wire__crate__api__playback__playback_set_seed_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__playback__playback_set_seed_code_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        20 => {
-            wire__crate__api__playback__playback_set_style_impl(port, ptr, rust_vec_len, data_len)
-        }
-        21 => wire__crate__api__playback__playback_set_tempo_bpm_impl(
+        20 => wire__crate__api__playback__playback_set_seed_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__playback__playback_set_seed_code_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
         22 => {
+            wire__crate__api__playback__playback_set_style_impl(port, ptr, rust_vec_len, data_len)
+        }
+        23 => wire__crate__api__playback__playback_set_tempo_bpm_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        24 => wire__crate__api__playback__playback_set_tone_open_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        25 => {
             wire__crate__api__playback__playback_set_track_impl(port, ptr, rust_vec_len, data_len)
         }
-        23 => wire__crate__api__playback__playback_start_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__playback__playback_status_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__playback__playback_stop_impl(port, ptr, rust_vec_len, data_len),
-        26 => {
+        26 => wire__crate__api__playback__playback_start_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__playback__playback_status_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__playback__playback_stop_impl(port, ptr, rust_vec_len, data_len),
+        29 => {
             wire__crate__api__playback__playback_style_names_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__playback__playback_styles_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__playback__playback_tracks_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__playback__playback_styles_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__playback__playback_tracks_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1490,6 +1625,11 @@ impl flutter_rust_bridge::IntoDart for crate::playback::PlaybackStatus {
             self.engine_error.into_into_dart().into_dart(),
             self.engine_version.into_into_dart().into_dart(),
             self.instrument_list_edited.into_into_dart().into_dart(),
+            self.reverb_wet.into_into_dart().into_dart(),
+            self.reverb_size.into_into_dart().into_dart(),
+            self.treble_hz.into_into_dart().into_dart(),
+            self.sidechain.into_into_dart().into_dart(),
+            self.tone_open.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1695,6 +1835,11 @@ impl SseEncode for crate::playback::PlaybackStatus {
         <Option<String>>::sse_encode(self.engine_error, serializer);
         <u32>::sse_encode(self.engine_version, serializer);
         <bool>::sse_encode(self.instrument_list_edited, serializer);
+        <f32>::sse_encode(self.reverb_wet, serializer);
+        <f32>::sse_encode(self.reverb_size, serializer);
+        <f32>::sse_encode(self.treble_hz, serializer);
+        <f32>::sse_encode(self.sidechain, serializer);
+        <f32>::sse_encode(self.tone_open, serializer);
     }
 }
 

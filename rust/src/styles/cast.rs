@@ -1,38 +1,38 @@
-//! Каст сида: состав инструментов из палитры стиля.
+//! Seed cast: composition of instruments from the style palette.
 //!
-//! Палитра (`Style::ensemble`) — это краски стиля, а не жёсткий состав:
-//! сид выбирает подмножество, поэтому две композиции одного стиля могут
-//! звучать камерно, а могут — плотно, не теряя узнаваемости.
+//! The palette (`Style::ensemble`) is the colors of the style, not a rigid composition:
+//! seed selects a subset, so two compositions of the same style can sound
+//! chamber-like or dense, without losing their identity.
 //!
-//! Правила простые и музыкальные:
-//! - фундамент (бас, кик) и подписные инструменты стиля остаются всегда;
-//! - снейр держит бит, а хэт/шейкер — пульс: хотя бы один из них звучит;
-//! - гармония и тема не пропадают: если в палитре есть аккорды/лиды,
-//!   хотя бы один представитель группы выбран;
-//! - вокал, текстуры, второй лид и 808 — краски: сид решает, нужны ли они;
-//! - слоты стилевого перехода входят в каст всегда, иначе жест на шве
-//!   остался бы без инструмента.
+//! The rules are simple and musical:
+//! - the foundation (bass, kick) and signature instruments of the style always remain;
+//! - the snare holds the beat, and the hat/shaker holds the pulse: at least one of them sounds;
+//! - harmony and theme do not disappear: if there are chords/leads in the palette,
+//!   at least one group representative has been selected;
+//! - textures, second lead and 808 are colors: the seed decides whether they are needed;
+//! - style transition slots are always included in the cast; otherwise the seam gesture
+//!   would be left without an instrument.
 //!
-//! Краски выбираются не независимыми бросками, а общим рейтингом:
-//! сид задаёт плотность каста (35–85%), а слоты занимают места по
-//! собственному рангу. Поэтому редкий сид не «теряет» все краски сразу
-//! и не берёт их все скопом, а состав меняется от сида к сиду.
+//! Colors are chosen not by independent rolls, but by an overall ranking:
+//! The seed sets cast density (35–85%), and slots occupy places according to their
+//! own rank. A sparse seed therefore does not “lose” all its colors at once
+//! and does not take them all en masse, but the composition changes from seed to seed.
 //!
-//! Решение детерминировано (сид, стиль, слот): тот же сид — тот же состав.
+//! The decision is deterministic (seed, style, slot): the same seed — the same cast.
 
 use crate::arranger::splitmix64;
 use crate::instruments::{Group, Slot};
 
 const CAST_SALT: u64 = 0xCA57_0D1E_5EED;
 
-/// Соль стиля: одинаковый сид в разных стилях даёт разные касты.
+/// Style salt: the same seed in different styles gives different casts.
 fn style_salt(name: &str) -> u64 {
     name.bytes().fold(0xCBF2_9CE4_8422_2325, |h, b| {
         (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01B3)
     })
 }
 
-/// Если в группе нет ни одного выбранного слота, выбрать один из палитры.
+/// If there is no selected slot in the group, select one from the palette.
 fn ensure_group(chosen: &mut Vec<Slot>, palette: &[Slot], group: Group, hash: u64) {
     if chosen.iter().any(|s| s.group() == group) {
         return;
@@ -49,10 +49,10 @@ fn ensure_group(chosen: &mut Vec<Slot>, palette: &[Slot], group: Group, hash: u6
     chosen.push(candidates[idx]);
 }
 
-/// Собрать каст из палитры стиля.
+/// Build a cast from the style palette.
 ///
-/// `signature` — инструменты, без которых стиль теряет лицо (риффовая
-/// гитара рока, Rhodes лофай и т.п.); `required` — слоты перехода.
+/// `signature` — instruments without which the style loses its identity
+/// (rock riff guitar, Rhodes in lofi, etc.); `required` — transition slots.
 pub fn from_palette(
     palette: &[Slot],
     seed: u64,
@@ -63,8 +63,8 @@ pub fn from_palette(
     let hash = splitmix64(seed ^ CAST_SALT ^ style_salt(style_name));
     let mut chosen: Vec<Slot> = Vec::with_capacity(palette.len());
 
-    // Фундамент, подписи и переходы не обсуждаются: без них стиль или
-    // шов теряет смысл. Остальное — краски, их решает сид.
+    // The foundation, signatures and transitions are non-negotiable: without them the style
+    // or the seam loses its meaning. The rest is color, decided by the seed.
     let mut colors: Vec<Slot> = Vec::new();
     for slot in palette {
         let essential = matches!(slot.group(), Group::Bass | Group::Snare)
@@ -78,12 +78,12 @@ pub fn from_palette(
         }
     }
 
-    // Плотность каста: 35–85% красок. Узкий сид берёт только главное,
-    // плотный — почти всё, но не выходит за палитру стиля.
+    // Cast density: 35–85% of the colors. A sparse seed takes only the essentials,
+    // a dense one takes almost everything, but never leaves the style palette.
     let density = 35 + splitmix64(hash ^ 0xD3A5_11CE) % 51;
     let take = ((colors.len() as u64 * density + 50) / 100) as usize;
-    // Ранг слота — его место в очереди на этот сид. Порядок палитры
-    // остаётся стабильным, меняется только состав.
+    // The rank of a slot is its place in the queue for this seed. Palette order
+    // remains stable, only the composition changes.
     let mut ranked: Vec<(u64, Slot)> = colors
         .iter()
         .map(|slot| {
@@ -95,15 +95,15 @@ pub fn from_palette(
     ranked.sort_by_key(|(rank, slot)| (*rank, slot.index()));
     chosen.extend(ranked.iter().take(take).map(|(_, slot)| *slot));
 
-    // Музыка не должна проваливаться в дыру: пульс, гармония и тема
-    // живут в каждом касте.
+    // Music must not fall into a hole: pulse, harmony and theme
+    // live in every cast.
     ensure_group(&mut chosen, palette, Group::Kick, hash);
     ensure_group(&mut chosen, palette, Group::Bass, hash);
     ensure_group(&mut chosen, palette, Group::Hat, hash);
     ensure_group(&mut chosen, palette, Group::Chords, hash);
     ensure_group(&mut chosen, palette, Group::Lead, hash);
 
-    // Порядок палитры: стабильный обход движка.
+    // Palette order: stable engine traversal.
     chosen.sort_by_key(|s| s.index());
     chosen.dedup();
     chosen

@@ -6,36 +6,36 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-/// Диагностика живого тракта для фронта. Нули без сессии.
-/// Позволяет отличить «поток не стартует» от «генератор молчит»
-/// от «все работает, смотри громкость телефона».
+/// Live pipeline diagnostics for the frontend. Zeros without a session.
+/// Lets one tell "stream doesn't start" from "generator is silent"
+/// from "everything works, check the phone's volume".
 class EngineStats {
   final BigInt frames;
   final BigInt pushed;
   final BigInt consumed;
 
-  /// Ноты, потерянные из-за полной очереди: генератор обгоняет
-  /// движок. Ненулевой счетчик = ритм дырявит (пропадают доли).
+  /// Notes lost because the queue was full: the generator outruns
+  /// the engine. A nonzero counter = the rhythm has holes (beats are missing).
   final BigInt dropped;
 
-  /// Ноты, прозвучавшие позже своей доли: ритм спотыкается.
+  /// Notes that sounded later than their beat: the rhythm stumbles.
   final BigInt late_;
 
-  /// Пере-якорения сетки: генератор отставал, расписание переехало.
+  /// Grid re-anchors: the generator lagged, the schedule moved.
   final BigInt reanchors;
   final BigInt queued;
 
-  /// Выбранный выход (`48000 Гц, F32, 2ch`): видно в баннере,
-  /// какой конфиг взял движок на этом телефоне.
+  /// Selected output (`48000 Hz, F32, 2ch`): visible in the banner,
+  /// which config the engine took on this phone.
   final String audioConfig;
 
-  /// Сколько раз поток пересоздавался наживую (смена маршрута,
-  /// обрыв колбэков). Видно в баннере при затыке.
+  /// How many times the stream was recreated live (route change,
+  /// callback break). Visible in the banner on a stall.
   final BigInt restarts;
 
-  /// Выходная задержка (буфер трека), мс: на столько звук позади
-  /// генерации. Колесо фронта сдвигает показ на неё (иначе рука
-  /// и точки бегут впереди слышимого). Ноль = неизвестно/не играет.
+  /// Output latency (track buffer), ms: how far the sound lags
+  /// behind generation. The frontend wheel shifts its display by it (otherwise the hand
+  /// and the dots run ahead of what's audible). Zero = unknown/not playing.
   final double outputLatencyMs;
 
   const EngineStats({
@@ -81,7 +81,7 @@ class EngineStats {
           outputLatencyMs == other.outputLatencyMs;
 }
 
-/// Один макро-фейдер для UI: имя группы и ее множитель.
+/// One macro fader for UI: group name and its multiplier.
 class GroupInfo {
   final String name;
   final double volume;
@@ -100,10 +100,10 @@ class GroupInfo {
           volume == other.volume;
 }
 
-/// Живой кадр для кругового визуалайзера: позиция в такте,
-/// энергия, секция, мотив сида и позиция темы в нем + маски
-/// главных голосов по долям (точки колеса: кик, снейр+хэт,
-/// бас, тема). Конкретный тип без generic — безопасно для FFI-парсера.
+/// Live frame for the circular visualizer: position in the bar,
+/// energy, section, seed motif and the theme position in it + masks
+/// of the main voices by beats (wheel dots: kick, snare+hat,
+/// bass, theme). A concrete type without generics — safe for the FFI parser.
 class LiveVisual {
   final double barPhase;
   final double energy;
@@ -111,31 +111,31 @@ class LiveVisual {
   final Uint8List motif;
   final int motifPos;
 
-  /// Маска звучавших долей такта (бит = 16-я доля).
+  /// Mask of sounding beat positions (bit = 16th note).
   final int barHits;
 
-  /// Маски по голосам (тот же бит = та же доля).
+  /// Masks by voice (the same bit = the same beat).
   final int kickHits;
   final int snareHits;
   final int bassHits;
   final int themeHits;
 
-  /// Ноты фразы (бит = доля фразы): настоящие ноты, рука делает
-  /// оборот за фразу.
+  /// Phrase notes (bit = phrase beat): real notes, the hand makes
+  /// one revolution per phrase.
   final int phraseLen;
   final int phrasePos;
 
-  /// Точная фаза фразы 0..1 (якорь колеса).
+  /// Exact phrase phase 0..1 (the wheel's anchor).
   final double phrasePhase;
 
-  /// Фаза окна колеса 0..1 (окно = 4 такта): по ней идёт стрелка.
+  /// Wheel window phase 0..1 (window = 4 bars): the hand moves by it.
   final double windowPhase;
   final BigInt pkick;
   final BigInt psnare;
   final BigInt pbass;
   final BigInt ptheme;
 
-  /// Доли фразы, где что-то звучало (бит = доля фразы).
+  /// Phrase beats where something sounded (bit = phrase beat).
   final int pplayed;
 
   const LiveVisual({
@@ -208,30 +208,39 @@ class LiveVisual {
           pplayed == other.pplayed;
 }
 
-/// Снимок состояния для UI. Именно этот тип едет через flutter_rust_bridge.
+/// State snapshot for UI. This is the type sent through flutter_rust_bridge.
 class PlaybackStatus {
   final bool running;
   final bool paused;
   final String styleName;
   final BigInt seed;
 
-  /// Канонический код сида `XXX-XXX`: фронт показывает и вводит его.
+  /// Canonical seed code `XXX-XXX`: the frontend displays and enters it.
   final String seedCode;
 
-  /// Эффективный темп: ручка фронта или дефолт стиля.
+  /// Effective tempo: the frontend knob or the style default.
   final double tempoBpm;
 
-  /// Ручка intensity фронта («температура» генерации).
+  /// Frontend intensity knob (the "temperature" of generation).
   final double intensity;
   final String? engineError;
 
-  /// Версия звукового движка (см. ENGINE_VERSION): объясняет,
-  /// почему любимый сид звучит иначе после апдейта.
+  /// Audio engine version (see ENGINE_VERSION): explains
+  /// why a favorite seed sounds different after an update.
   final int engineVersion;
 
-  /// Список инструментов правил слушатель: стиль и сид его не трогают,
-  /// в миксе горит кнопка сброса.
+  /// The listener edited the instrument list: style and seed don't touch it,
+  /// the reset button lights up in the mixer.
   final bool instrumentListEdited;
+
+  /// Master effects: currently active values (for UI sliders).
+  final double reverbWet;
+  final double reverbSize;
+  final double trebleHz;
+  final double sidechain;
+
+  /// Filter-openness offset on top of the form (-0.5..0.5).
+  final double toneOpen;
 
   const PlaybackStatus({
     required this.running,
@@ -244,6 +253,11 @@ class PlaybackStatus {
     this.engineError,
     required this.engineVersion,
     required this.instrumentListEdited,
+    required this.reverbWet,
+    required this.reverbSize,
+    required this.trebleHz,
+    required this.sidechain,
+    required this.toneOpen,
   });
 
   @override
@@ -257,7 +271,12 @@ class PlaybackStatus {
       intensity.hashCode ^
       engineError.hashCode ^
       engineVersion.hashCode ^
-      instrumentListEdited.hashCode;
+      instrumentListEdited.hashCode ^
+      reverbWet.hashCode ^
+      reverbSize.hashCode ^
+      trebleHz.hashCode ^
+      sidechain.hashCode ^
+      toneOpen.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -273,10 +292,15 @@ class PlaybackStatus {
           intensity == other.intensity &&
           engineError == other.engineError &&
           engineVersion == other.engineVersion &&
-          instrumentListEdited == other.instrumentListEdited;
+          instrumentListEdited == other.instrumentListEdited &&
+          reverbWet == other.reverbWet &&
+          reverbSize == other.reverbSize &&
+          trebleHz == other.trebleHz &&
+          sidechain == other.sidechain &&
+          toneOpen == other.toneOpen;
 }
 
-/// Стиль каталога для UI: имя и полка (`club`/`rock`/`chill`).
+/// Catalog style for UI: name and shelf (`club`/`rock`/`chill`).
 class StyleMeta {
   final String name;
   final String group;
@@ -295,10 +319,10 @@ class StyleMeta {
           group == other.group;
 }
 
-/// Один слот микшера для UI: id, имена и живая громкость.
-/// `volume` — эффективная (слот × группа), то есть слышимая.
-/// `base_volume` — канонический уровень стиля (100% ползунка слота).
-/// `group` — имя макро-фейдера слота для фронта.
+/// One mixer slot for UI: id, names and live volume.
+/// `volume` — effective (slot × group), i.e. audible.
+/// `base_volume` — the style's canonical level (100% of the slot slider).
+/// `group` — the slot's macro-fader name for the frontend.
 class TrackInfo {
   final BigInt id;
   final String name;

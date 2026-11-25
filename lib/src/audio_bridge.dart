@@ -8,24 +8,25 @@ import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:cont/src/player_controller.dart';
-import 'package:cont/src/rust/api/playback.dart';
+import 'package:continuum/src/player_controller.dart';
+import 'package:continuum/src/rust/api/playback.dart';
 
-/// Мост к системному плееру: фоновая служба, уведомление с паузой,
-/// аудиофокус («главный звуковой поток»). Весь звук по-прежнему
-/// синтезирует Rust — мост только управляет и показывает состояние.
+/// Bridge to the system player: background service, notification with pause,
+/// audio focus ("main audio stream"). All sound is still synthesized by
+/// Rust — the bridge only controls it and reports state.
 ///
-/// На Android звук идет из нативного Rust-потока (свой AudioTrack
-/// по JNI): Dart шлет только команды play/pause, в тракте его нет.
+/// On Android, sound comes from the native Rust thread (its own AudioTrack
+/// via JNI): Dart only sends play/pause commands, it is not in the audio path.
 ///
-/// Если нативная служба недоступна (десктоп, ошибка init), мост
-/// тихо деградирует до прямых вызовов контроллера — UI не замечает.
+/// If the native service is unavailable (desktop, init error), the bridge
+/// silently falls back to direct controller calls — the UI doesn't notice.
 class AudioBridge {
   AudioBridge(this._controller);
 
   final PlayerController _controller;
   ContAudioHandler? _handler;
   StreamSubscription? _interruptionSub;
+  StreamSubscription? _becomingNoisySub;
   StreamSubscription? _noisySub;
 
   bool get available => _handler != null;
@@ -37,10 +38,10 @@ class AudioBridge {
       await AudioService.init(
         builder: () => handler,
         config: const AudioServiceConfig(
-          androidNotificationChannelId: 'com.example.cont.channel.audio',
+          androidNotificationChannelId: 'com.continuum.app.channel.audio',
           androidNotificationChannelName: 'Continuum playback',
-          // Пауза не снимает foreground: рестарт службы из фона на
-          // Android 12+ кидал бы исключение без этого.
+          // Pause does not drop foreground: restarting the service from the
+          // background on Android 12+ would throw an exception without this.
           androidStopForegroundOnPause: false,
         ),
       );
@@ -53,20 +54,20 @@ class AudioBridge {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
       _interruptionSub = session.interruptionEventStream.listen((event) {
-        // Звонок/навигатор забрали фокус — встаем на паузу, как плеер.
+        // A call/navigation app took audio focus — pause like a real player.
         if (event.begin) {
           debugPrint('[audio] interruption begin -> pause');
           unawaited(_controller.setPausedExternal(true));
         }
       });
-      session.becomingNoisyEventStream.listen((_) {
+      _becomingNoisySub = session.becomingNoisyEventStream.listen((_) {
         debugPrint('[audio] becoming noisy -> pause');
         unawaited(pause());
       });
-      // Дублирующий native-сигнал (трек душится сам, событие — для паузы
-      // состояния и уведомления, если главный изолят жив).
+      // Duplicate native signal (the track is throttled itself; the event is
+      // for pausing state and the notification, if the main isolate is alive).
       if (Platform.isAndroid) {
-        _noisySub = const EventChannel('cont/audio_events')
+        _noisySub = const EventChannel('continuum/audio_events')
             .receiveBroadcastStream()
             .listen((_) async {
           debugPrint('[pull] becoming noisy -> pause');
@@ -80,8 +81,8 @@ class AudioBridge {
     }
   }
 
-  /// Play на Android: сессия бэкенда + нативный аудио-поток.
-  /// Остальные платформы — как раньше, через контроллер напрямую.
+  /// Play on Android: backend session + native audio thread.
+  /// Other platforms — as before, through the controller directly.
   Future<bool> play() async {
     if (Platform.isAndroid) {
       await _controller.ensurePlaying();
@@ -119,19 +120,19 @@ class AudioBridge {
     }
   }
 
-  /// Нативный поток жив (для экрана диагностики).
+  /// Native thread is alive (for the diagnostics screen).
   Future<bool> pullActive() => Platform.isAndroid
       ? playbackPullAlive()
       : Future.value(false);
 
-  /// Журнал нативного потока для экрана диагностики.
+  /// Native thread log for the diagnostics screen.
   Future<List<String>> diagLog() => Platform.isAndroid
       ? playbackPullDiag()
       : Future.value(const <String>[]);
 
-  /// Захват следующих 30 секунд потока в файл (экспертиза скачков).
-  /// Имя содержит стиль и сид — контекст гадать не надо.
-  /// Путь — публичная папка приложения. null — не играет.
+  /// Capture the next 30 seconds of the stream to a file (to examine glitches).
+  /// The name contains the style and seed — no need to guess the context.
+  /// The path is the app's public folder. null — not playing.
   Future<String?> startCapture() async {
     if (!Platform.isAndroid) return null;
     try {
@@ -147,33 +148,34 @@ class AudioBridge {
     }
   }
 
-  /// Прогрев кэша артов после загрузки списка стилей: первый тап
-  /// play/стиль не будет тормозить на декоде картинки в UI-потоке.
-  /// Fire-and-forget: ошибка здесь ни на что не влияет.
+  /// Warm up the art cache after the style list is loaded: the first
+  /// play/style tap won't stall on image decoding in the UI thread.
+  /// Fire-and-forget: an error here has no effect.
   Future<void> warmup(List<String> styles) async {
     for (final style in styles) {
       await styleArtUri(style);
     }
   }
 
-  /// Обновить уведомление после действий вне кнопок play/pause
-  /// (смена стиля, сида): дергается из UI рядом с вызовом контроллера.
-  /// Замечание: на Android 13+ показ уведомления требует разрешения
-  /// POST_NOTIFICATIONS — включается вручную в настройках приложения
-  /// (звук и фон работают независимо от него).
+  /// Update the notification after actions outside the play/pause buttons
+  /// (style or seed change): called from the UI right next to the controller call.
+  /// Note: on Android 13+ showing a notification requires the
+  /// POST_NOTIFICATIONS permission — enabled manually in app settings
+  /// (sound and background playback work independently of it).
   Future<void> sync() async {
     await _handler?.syncFromController();
   }
 
   Future<void> dispose() async {
     await _interruptionSub?.cancel();
+    await _becomingNoisySub?.cancel();
     await _noisySub?.cancel();
   }
 }
 
-/// Хендлер системных кнопок (уведомление, гарнитура, Android Auto).
-/// Делегирует в PlayerController, затем публикует состояние.
-/// На Android в пару к состоянию стартует/останавливает нативный поток.
+/// Handler for system buttons (notification, headset, Android Auto).
+/// Delegates to PlayerController, then publishes state.
+/// On Android, starts/stops the native thread along with the state.
 class ContAudioHandler extends BaseAudioHandler {
   ContAudioHandler(this.controller);
 
@@ -188,7 +190,7 @@ class ContAudioHandler extends BaseAudioHandler {
       id: style,
       album: 'Continuum',
       title: _title(style),
-      artist: seed.isEmpty ? 'Continuum' : 'Сид $seed',
+      artist: seed.isEmpty ? 'Continuum' : 'Seed $seed',
       artUri: await styleArtUri(style),
     ));
     playbackState.add(playbackState.value.copyWith(
@@ -199,7 +201,7 @@ class ContAudioHandler extends BaseAudioHandler {
     ));
   }
 
-  /// Вызывается мостом/UI после внешних изменений (стиль, сид).
+  /// Called by the bridge/UI after external changes (style, seed).
   Future<void> syncFromController() async => _sync();
 
   @override
@@ -229,7 +231,7 @@ class ContAudioHandler extends BaseAudioHandler {
 
   @override
   Future<void> stop() async {
-    // У плеера stop = пауза + убрать уведомление.
+    // For this player stop = pause + remove the notification.
     if (Platform.isAndroid) {
       await playbackPullThreadStop();
     }
@@ -245,25 +247,36 @@ class ContAudioHandler extends BaseAudioHandler {
       style.isEmpty ? 'Continuum' : style[0].toUpperCase() + style.substring(1);
 }
 
-/// Затемненная картинка стиля для уведомления (файл в кэше).
-/// Общая для хендлера и прогрева: первый тап не тормозит на декоде.
+/// Darkened style artwork for the notification (cached file).
+/// Shared by the handler and warmup: the first tap doesn't stall on decoding.
 Future<Uri?> styleArtUri(String style) async {
+  final key = style.toLowerCase();
   try {
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/cont_art_$style.png');
+    final file = File('${dir.path}/cont_art_$key.png');
     if (await file.exists()) return Uri.file(file.path);
-    final data = await rootBundle.load('assets/images/style_$style.png');
-    final decoded = img.decodeImage(data.buffer.asUint8List());
-    if (decoded == null) return null;
-    for (final pixel in decoded) {
-      pixel.r = (pixel.r * 0.55).toInt();
-      pixel.g = (pixel.g * 0.55).toInt();
-      pixel.b = (pixel.b * 0.55).toInt();
-    }
-    await file.writeAsBytes(img.encodePng(decoded));
+    final data = await rootBundle.load('assets/images/style_$key.png');
+    // Decode and per-pixel processing run in a separate isolate: warming up
+    // dozens of artworks on the main thread froze the UI on first launch.
+    final out = await compute(_darkenArt, data.buffer.asUint8List());
+    if (out == null) return null;
+    await file.writeAsBytes(out);
     return Uri.file(file.path);
   } catch (e) {
     debugPrint('[audio] art unavailable: $e');
     return null;
   }
+}
+
+/// Top-level function for `compute`: darken and resize to 128 px.
+List<int>? _darkenArt(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  final small = img.copyResize(decoded, width: 128);
+  for (final pixel in small) {
+    pixel.r = (pixel.r * 0.55).toInt();
+    pixel.g = (pixel.g * 0.55).toInt();
+    pixel.b = (pixel.b * 0.55).toInt();
+  }
+  return img.encodePng(small);
 }

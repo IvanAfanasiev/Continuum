@@ -3,26 +3,26 @@ use std::collections::HashMap;
 use crate::core::MAX_ACTIVE_TRACKS;
 use crate::instruments::{Group, Slot};
 
-/// Состояние микшера: два слоя громкости.
+/// Mixer state: two volume layers.
 ///
-/// - Слоты (`tracks`): дефолты стиля + точечные правки. 0 = выключен.
-/// - Группы (`groups`): макро-фейдеры фронта (множитель 0..1,
-///   дефолт 1.0). Один «Kick» вместо «punchy vs 808».
+/// - Slots (`tracks`): style defaults + per-slot edits. 0 = muted.
+/// - Groups (`groups`): frontend macro faders (multiplier 0..1,
+///   default 1.0). One "Kick" instead of "punchy vs 808".
 ///
-/// Эффективная громкость = слот × группа. Ноль на любом слое означает
-/// «не используется»: композер не генерирует ноты, движок не тратит DSP.
-/// Смена стиля сбрасывает СЛОТЫ на каст нового стиля и сида, но НЕ
-/// группы: макро-фейдеры («больше кика», «тише лиды») — настройка
-/// слушателя, она переживает переход между стилями.
-/// Если слушатель правил список инструментов сам (`list_edited`), смена
-/// стиля и сида его не трогает: ручной выбор — приоритет. Сброс — кнопка
-/// «сброс настроек» в миксе.
+/// Effective volume = slot × group. Zero on either layer means
+/// "not in use": the composer generates no notes, the engine spends no DSP.
+/// A style change resets SLOTS to the new style's and seed's cast, but NOT
+/// groups: macro faders ("more kick", "quieter leads") are the
+/// listener's setting and survive transitions between styles.
+/// If the listener edited the instrument list themselves (`list_edited`), a change
+/// of style and seed doesn't touch it: manual choice takes priority. Reset is the
+/// "reset settings" button in the mixer.
 #[derive(Clone, Default)]
 pub struct MixerState {
     pub tracks: HashMap<usize, f32>,
     pub groups: HashMap<Group, f32>,
-    /// Список инструментов менял слушатель: дефолты стиля его не
-    /// перетирают, пока не нажат сброс.
+    /// The listener changed the instrument list: style defaults don't
+    /// overwrite it until reset is pressed.
     pub list_edited: bool,
 }
 
@@ -35,28 +35,28 @@ impl MixerState {
         }
     }
 
-    /// Громкость слота 0..1. Ноль = слот исключен.
+    /// Slot volume 0..1. Zero = slot excluded.
     pub fn set_track(&mut self, id: usize, volume: f32) {
         self.tracks.insert(id, volume.clamp(0.0, 1.0));
     }
 
-    /// Правка слота слушателем: список помечается изменённым, и смена
-    /// стиля/сида его больше не перетирает (ручной выбор — приоритет).
+    /// Listener's slot edit: the list is marked as edited, and further changes
+    /// of style/seed no longer overwrite it (manual choice takes priority).
     pub fn set_track_by_user(&mut self, id: usize, volume: f32) {
         self.set_track(id, volume);
         self.list_edited = true;
     }
 
-    /// Макро-фейдер группы 0..1 (выше дефолта не поднять —
-    /// шкала фронта везде 0..100%).
+    /// Group macro fader 0..1 (can't go above the default —
+    ///   the frontend scale is 0..100% everywhere).
     pub fn set_group(&mut self, group: Group, volume: f32) {
         self.groups.insert(group, volume.clamp(0.0, 1.0));
     }
 
-    /// Сброс групп на дефолт (1.0). Штатно НЕ вызывается при смене
-    /// стиля (фейдеры слушателя переживают переход); это аварийный
-    /// клапан для единственного случая, когда унаследованные фейдеры
-    /// заглушили бы новый стиль целиком.
+    /// Reset groups to default (1.0). Normally NOT called on a style
+    /// change (the listener's faders survive transitions); this is an emergency
+    /// valve for the single case where inherited faders would
+    /// mute the new style entirely.
     pub fn reset_groups(&mut self) {
         self.groups.clear();
     }
@@ -65,8 +65,8 @@ impl MixerState {
         self.groups.get(&group).copied().unwrap_or(1.0)
     }
 
-    /// Эффективная громкость: произведение слоев, 0 для отсутствующих.
-    /// Единая точка истины для движка и композера.
+    /// Effective volume: product of the layers, 0 for missing entries.
+    /// Single source of truth for the engine and composer.
     pub fn volume_for(&self, id: usize) -> f32 {
         let slot_vol = self.tracks.get(&id).copied().unwrap_or(0.0);
         if slot_vol <= 0.0 {
@@ -80,14 +80,14 @@ impl MixerState {
         slot_vol * group_vol
     }
 
-    /// Есть ли хоть один слышимый слот. Защита последнего инструмента:
-    /// глушение, после которого не останется ничего, отклоняется.
+    /// Is there at least one audible slot? Last-instrument guard:
+    /// muting that would leave nothing is rejected.
     pub fn has_audible(&self) -> bool {
         self.tracks.keys().any(|id| self.volume_for(*id) > 0.0)
     }
 
-    /// Заполняет `out` отсортированными id используемых треков
-    /// (эффективная громкость > 0), возвращает их число.
+    /// Fills `out` with sorted ids of used tracks
+    /// (effective volume > 0), returns their count.
     pub fn active_ids(&self, out: &mut [usize; MAX_ACTIVE_TRACKS]) -> usize {
         let mut n = 0;
         for id in self.tracks.keys() {
@@ -130,14 +130,14 @@ mod tests {
         m.set_track(1, 0.8);
         m.set_track(2, 0.5);
         assert!(m.has_audible());
-        // Глушим все, кроме одного, — еще слышно.
+        // Mute everything but one — still audible.
         let mut probe = m.clone();
         probe.set_track(1, 0.0);
         assert!(probe.has_audible());
-        // Глушим последний — тишина, такое изменение отклоняем.
+        // Mute the last one — silence; we reject such a change.
         probe.set_track(2, 0.0);
         assert!(!probe.has_audible());
-        // Группа в ноль при живых слотах — тоже тишина.
+        // A group at zero with live slots — also silence.
         let mut probe2 = m.clone();
         probe2.set_group(Group::Bass, 0.0);
         probe2.set_group(Group::Kick, 0.0);
@@ -148,7 +148,7 @@ mod tests {
     fn group_fader_multiplies_slots() {
         let mut m = MixerState::new();
         m.set_track(2, 0.8); // punchy kick
-        m.set_track(8, 0.8); // 808 kick — та же группа Kick
+        m.set_track(8, 0.8); // 808 kick — same Kick group
         assert_eq!(m.volume_for(2), 0.8);
         m.set_group(Group::Kick, 0.5);
         assert_eq!(m.volume_for(2), 0.4);

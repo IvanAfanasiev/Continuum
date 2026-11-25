@@ -1,15 +1,15 @@
 use super::riff::RiffKind;
 use super::transition::{Kind, Spec};
-use super::{RoleGuide, Style, Voicing};
+use super::{Melody, RoleGuide, Style, Voicing};
 use crate::instruments::Slot;
 
-/// Club: битмейкер. Прямая бочка + 808-слой, глубокий саб,
-/// клэп на 2 и 4 и виниловый фон.
-/// Доминирует прямой бит 4/4: тяжело и агрессивно, без свиста.
+/// Club: beatmaker. Straight kick + 808 layer, deep sub,
+/// clap on 2 and 4 and vinyl background.
+/// The straight 4/4 beat dominates: heavy and aggressive, without whistles.
 const SCALE: [u8; 7] = [48, 50, 51, 53, 55, 56, 58];
 
-/// Гармонические ходы клуба: минорные i–VI–iv–v и родственные.
-/// Ступени индексируют SCALE; сид выбирает ход из пула.
+/// Harmonic moves of the club: minor i–VI–iv–v and related ones.
+/// The steps are indexed by SCALE; The seed chooses a move from the pool.
 const PROGS: [[u8; 4]; 6] = [
     [0, 5, 3, 4],
     [0, 3, 5, 4],
@@ -18,7 +18,7 @@ const PROGS: [[u8; 4]; 6] = [
     [0, 4, 5, 3],
     [3, 5, 0, 4],
 ];
-/// Клуб меняет аккорд каждые 2–4 такта: гармония качает вместе с битом.
+/// The club changes chords every 2–4 measures: the harmony swings along with the beat.
 const HARMONY_BARS: [usize; 2] = [2, 4];
 
 const FOUR_FLOOR: &[f32] = &[
@@ -31,9 +31,9 @@ const HAT_W: &[f32] = &[
     0.0, 0.35, 1.0, 0.35, 0.0, 0.35, 1.0, 0.35, 0.0, 0.35, 1.0, 0.35, 0.0, 0.35, 1.0, 0.35,
 ];
 const BASS_W: &[f32] = &[
-    // Оффбитные восьмые вместо стены 16-х: кач между ударами бочки,
-    // а не ковер под ней. Стена топила транзиенты (crest 4.4 против 7–12
-    // у референсов) и темнила микс.
+    // Off-beat eighths instead of a wall of 16s: swing between kick drum hits,
+    // not the carpet underneath. Wall stoked transients (crest 4.4 vs 7–12
+    // from references) and darkened the mix.
     0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8, 0.0,
 ];
 const PAD_W: &[f32] = &[
@@ -45,8 +45,8 @@ const LEAD_W: &[f32] = &[
 const STAB_W: &[f32] = &[
     0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.7, 0.0,
 ];
-// Клэп с гостами: бэкбит держат якоря, между — едва слышный шепот.
-// Громкие госты давали скачущий снейр вместо бэкбита.
+// Clap with ghost notes: the backbeat is held by anchors, between there is a barely audible whisper.
+// Loud ghost notes gave a jumping snare instead of a backbeat.
 const CLAP_GHOST_W: &[f32] = &[
     0.0, 0.0, 0.15, 0.0, 1.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.15, 0.0, 1.0, 0.0, 0.0, 0.2,
 ];
@@ -54,26 +54,23 @@ const SNARE_POLES: &[&[f32]] = &[CLAP_W, CLAP_GHOST_W];
 const BED_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];
-const VOCAL_W: &[f32] = &[
-    0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0,
-];
-// Полюса кика (выбор — сидом на весь трек): строгая четверка
-// и синкопы с тихими толчками (ref: Bad Angel). Толчки — шепот
-// (0.3), а не второй бит: горячие восьмые давали скачущий бит.
+// Kick poles (choice - seed for the entire track): strict four
+// and syncopations with quiet jolts (ref: Bad Angel). Tremors - whispers
+// (0.3), not a second beat: hot eighths produced a jumping beat.
 const KICK_SYNCOP_W: &[f32] = &[
     1.0, 0.0, 0.0, 0.3, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.35, 0.0,
 ];
 const KICK_DRIVE8_W: &[f32] = &[
-    // Вдох перед единицей: 15-й шаг пустой всегда, иначе связка
-    // 14-15-0 дает фламовую очередь вместо грува.
+    // Inhale before one: the 15th step is always empty, otherwise the link
+    // 14-15-0 gives a flam queue instead of a groove.
     1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.35, 0.0,
 ];
-// Драйв с оффбитными толчками: четверка плюс тихая синкопа на слабых.
+// Drive with offbeat pushes: four plus quiet syncopation on the weak ones.
 const KICK_PUSH_W: &[f32] = &[
     1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.3, 1.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.0,
 ];
-// Шейкер: песок 16-х, оффбитные восьмые — якоря (шейкер ровный),
-// четверти и 16-е заполняют.
+// Shaker: sand 16ths, offbeat eighths - anchors (flat shaker),
+// quarters and 16ths are filled in.
 const SHAKER_W: &[f32] = &[
     0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.3, 0.5, 0.3, 1.0, 0.4,
 ];
@@ -81,7 +78,7 @@ const KICK_POLES: &[&[f32]] = &[FOUR_FLOOR, KICK_SYNCOP_W, KICK_DRIVE8_W, KICK_P
 const HAT_OFF_W: &[f32] = &[
     0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55, 0.0, 0.55, 0.9, 0.55,
 ];
-// Плотные шестнадцатые (ref: все три трека держат хэт почти весь такт).
+// Tight sixteenth notes (ref: all three tracks keep the hi-hat for almost the entire bar).
 const HAT_BUSY16_W: &[f32] = &[
     0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.4, 0.6, 0.4, 0.8, 0.4, 0.6, 0.4, 0.9, 0.5,
 ];
@@ -115,13 +112,13 @@ impl Style for ClubStyle {
     }
 
     fn swing_ratio(&self) -> f32 {
-        // Deep house кач 54–58%: свингованные 16-е вместо прямых.
+        // Deep house quality 54–58%: swing 16ths instead of straight ones.
         1.2
     }
 
     fn style_contract(&self) -> super::contract::StyleContract {
-        // Club: бас уступает кику, фраза дышит velocity-аркой,
-        // не больше трёх мелодических онсетов на шаг, верхний регистр 78.
+        // Club: the bass gives way to the kick, the phrase breathes with a velocity arch,
+        // no more than three melodic onsets per step, upper register 78.
         super::contract::StyleContract::new(true, true, 3, Some(78))
     }
 
@@ -145,8 +142,21 @@ impl Style for ClubStyle {
         1.0
     }
 
-    /// Форма стиля: свои длины секций — стиль должен отличаться
-    /// не тембрами, а построением. Сид выбирает один из трёх рисунков.
+    /// Club hook: flat eighth notes with skips on weak beats,
+    /// the first cell returns after a measure. Downbeats stretch
+    /// to the chord - the theme sings with the harmony, not on top of it.
+    fn melody(&self) -> Melody {
+        Melody {
+            onsets: super::phrase_mask(0b1011_1010_1011_0110),
+            chord_snap: 0.65,
+            sustain: 1.0,
+            cells: [0, 1, 0, 3],
+            phrased: true,
+        }
+    }
+
+    /// Style form: your own section lengths - the style should be different
+    /// not in timbres, but in construction. seed chooses one of three drawings.
     fn arrangement(&self) -> crate::arranger::Score {
         crate::arranger::HOUSE_SCORE
     }
@@ -180,32 +190,32 @@ impl Style for ClubStyle {
         crate::arranger::pick_score(seed, 0xC1B5_F0A7, &[STEADY, LONG_GROOVE, SHORT_ARC])
     }
 
-    /// Аранж deep house: сетка never стоит, вокал и эффекты приходят
-    /// только к дропу, передышка — короткая (это club, а не half-time).
+    /// Club arrangement: the grid never stalls, effects come
+    /// only for the drop, the post-chorus is short (this is a club, not half-time).
     fn arrangement_layers(&self) -> crate::piece::Layers {
         use crate::piece::{default_layers, L_GROOVE, L_HARMONY, L_TEXTURE, L_THEME};
         let base = default_layers();
         [
-            // Тема: грув, бас, тема и Rhodes-стабы. Вокал молчит — его
-            // вход на дропе слышен как событие.
+            // Theme: groove, bass, theme and Rhodes stabs.
+            // the entrance to the drop is heard as an event.
             L_GROOVE | L_HARMONY | L_THEME | L_TEXTURE,
-            // Разгон: добавляется вокал.
+            // Build-up: the theme develops.
             base[1],
-            // Удар: весь состав.
+            // Drop: the entire cast.
             base[2],
-            // Передышка: грув и Rhodes, тема отдыхает.
+            // Post-chorus: groove and Rhodes; the theme rests.
             L_GROOVE | L_HARMONY | L_TEXTURE,
         ]
     }
 
     fn transition(&self) -> crate::piece::Transition {
-        // Диско-склейка: грув катит дальше, голос следующего куска входит
-        // поверх него — стыка не слышно.
+        // Disco cut: the groove rolls on, the voice of the next piece enters
+        // on top of it - you can’t hear the junction.
         crate::piece::Transition::Rolling { bars: 2 }
     }
 
-    /// Club: снейр-ролл 16-ми в последнем такте разгона и короткий
-    /// хвост после удара — энергичный, но не пулемет на весь такт.
+    /// Club: snare roll 16th in the last stroke of build-up and short
+    /// the tail after the hit is energetic, but not a machine gun for the entire measure.
     fn transition_gesture(&self) -> Option<Spec> {
         Some(Spec::new(
             Kind::SnareRoll,
@@ -228,18 +238,18 @@ impl Style for ClubStyle {
         0.3
     }
 
-    /// Срез верхов мастера, Гц. Тёмный аналоговый верх: полка выше
-    /// 16 кГц срезана (спека deep house). Было 19000 — лишний воздух цифры.
+    /// Master highs cutoff, Hz. Dark analog top: shelf above
+    /// 16 kHz is cut off (deep house spec). It was 19,000 - excess air numbers.
     fn treble_cutoff(&self) -> f32 {
         16000.0
     }
 
     fn ensemble(&self) -> &'static [Slot] {
-        // Deep house: бочка, клэп, бас, плак темы, Rhodes-стабы и
-        // шейкер. Хэта нет: звонкая тарелка на верху убивала характер
-        // (в микс шл «треугольник» вместо бита) — ритм держит шейкер.
-        // Пад и вокал — краски палитры: одни сиды берут их, другие
-        // оставляют клуб сухим.
+        // Deep house: kick drum, clap, bass, theme pluck, Rhodes stabs and
+        // shaker. There is no hat: the ringing cymbal on top killed the character
+        // (a “triangle” was included in the mix instead of a beat) - the shaker keeps the rhythm.
+        // Pad is a palette color: some seeds take it, others
+        // leave the club dry.
         &[
             Slot::Bass,
             Slot::Kick,
@@ -248,20 +258,20 @@ impl Style for ClubStyle {
             Slot::Keys,
             Slot::Shaker,
             Slot::Pad,
-            Slot::Vocal,
+            Slot::Piano,
         ]
     }
 
     fn signature_slots(&self) -> &'static [Slot] {
-        // Тема плаком и Rhodes-стабы — лицо club.
+        // The theme pluck and Rhodes stabs are the face of club.
         &[Slot::Pluck, Slot::Keys, Slot::Shaker]
     }
 
     fn slot_guides(&self) -> [RoleGuide; Slot::COUNT] {
-        // Бас ходит корнями за прогрессией (джиттер 1 — соседние
-        // ступени, не прыжки): баслайн вместо дрона на одной ноте.
-        // Громкость держит иерархию: транзиент кика крыть обязан —
-        // сустейн баса ниже пика бочки, бит ведет кик, а не бас.
+        // The bass follows the progression (jitter 1 - adjacent
+        // steps, not jumps): bassline instead of drone on one note.
+        // Volume holds the hierarchy: the transient of the kick must cover -
+        // The sustain of the bass is below the peak of the kick, the beat is driven by the kick, not the bass.
         let bass = RoleGuide {
             energy_response: 2.2,
             gates: &[1.5, 2.0, 3.0],
@@ -278,18 +288,18 @@ impl Style for ClubStyle {
             top_pitch: 50,
             vel_high_cut: 0.6,
             bass_fifth: true,
-            // Саб сидит низко: кап 43 (G2), прыжки вверх редкие.
-            // Выше — уже не фундамент, а вторая мелодия.
+            // The sub sits low: cap 43 (G2), upward jumps are rare.
+            // Above is no longer the foundation, but the second melody.
             bass_top: 43,
-            // Глубокий ровный саб вместо струны: презенс-цепь придавлена,
-            // фундамент — чистый синус. Рок держит струну (0.0).
-            // Громкость с запасом: саб без презенса тише струнного.
+            // Deep, smooth sub instead of strings: the presence chain is pressed down,
+            // the foundation is pure sine. Rock holds the string (0.0).
+            // Volume with reserve: a sub without presence is quieter than a string one.
             sub_bias: 0.8,
             ..RoleGuide::pitched(BASS_W, 0, -1, 1, &[1.5, 2.0, 3.0], 0.78)
         };
         let kick = RoleGuide {
-            // Заливка перед дропом умеренная: пулемет вместо брейка
-            // ломает бит (связка с даунбитом).
+            // The fill before the drop is moderate: a machine gun instead of a break
+            // breaks the beat (combined with downbeat).
             vel_base: 0.95,
             vel_energy: 0.05,
             poles: Some(KICK_POLES),
@@ -309,33 +319,33 @@ impl Style for ClubStyle {
         let hat = RoleGuide {
             energy_response: 1.2,
             long_offbeats: true,
-            // Короче и тише: звонкий металл на верху давал «треугольник»
-            // вместо бита и забивал весь верх микса. Ритм держит шейкер.
+            // Shorter and quieter: the ringing metal at the top gave a “triangle”
+            // instead of a beat and filled the entire top of the mix. The rhythm is kept by the shaker.
             gates: &[0.35, 0.7, 1.1],
             vel_base: 0.42,
             vel_energy: 0.3,
             vel_jitter: 0.1,
             poles: Some(HAT_POLES),
-            // Хэт держит сетку полюсов: собственный пульс давал фэйзинг
-            // против 16-х и сбивал ритм — бит важнее дрейфа.
-            // Грув хэта свой на каждую секцию (у дропа — свой бит),
-            // выбор детерминирован сидом и секцией.
+            // Hat holds the grid of poles: his own pulse gave phasing
+            // against 16s and disrupted the rhythm - the beat is more important than the drift.
+            // The hat has its own groove for each section (the drop has its own beat),
+            // the choice is determined by the seed and section.
             section_poles: true,
             ..RoleGuide::kit(HAT_W, 42, 0.65)
         };
-        // Сквозная тема битмейкера: плак ведет мотив сида через секции —
-        // у бита есть мелодическое лицо, а не только грув. Ноты длинные:
-        // линия льется фразами, а не тычет разовыми ударами.
+        // The beatmaker's recurring theme: the pluck carries the seed motif across sections —
+        // the beat has a melodic face, not just a groove. Long notes:
+        // the line flows in phrases, rather than poking at one-time hits.
         let pluck = RoleGuide {
             energy_response: 1.5,
             gates: &[1.0, 1.5, 2.0],
             vel_base: 0.55,
             vel_energy: 0.3,
             vel_jitter: 0.07,
-            // Унисон темы: носители поют те же ступени (джиттер 0) —
-            // цельная мелодия, краски различают тембры, а не высоты.
-            // Октава на единицу ниже: синтезатор на самом верху спорил
-            // с EP и хэтом — линии надо держаться в середине.
+            // Unison theme: carriers sing the same steps (jitter 0) -
+            // a solid melody, colors distinguish timbres, not pitches.
+            // An octave one lower: the synthesizer at the very top was arguing
+            // with an EP and a hat, the line needs to be kept in the middle.
             voice: Voicing::Scale {
                 degree: 0,
                 octave: 1,
@@ -346,8 +356,8 @@ impl Style for ClubStyle {
             ..RoleGuide::pitched(LEAD_W, 0, 1, 0, &[1.0, 1.5, 2.0], 0.45)
         };
         let keys = RoleGuide {
-            // Гость-текучка, а не рубильник: ровное присутствие
-            // через секции вместо «то нет, то стена».
+            // A fluid guest, not a switch: an even presence
+            // through sections instead of “either no, then a wall.”
             energy_response: 1.2,
             gates: &[1.0, 1.5, 2.0],
             vel_base: 0.62,
@@ -359,11 +369,11 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(STAB_W, 2, 1, 0, &[1.0, 1.5, 2.0], 0.55)
         };
-        // 808 держит сетку four-floor корнями прогрессии (тот же
-        // гармонический путь, что у саба); слайд между нотами — дело
-        // голоса Kick808, генератор лишь ставит корни на доли.
-        // Перед дропом — саб-ролл: удар вместо звона тарелки.
-        // Регистр тот же, что у саба (фолд в mod.rs): 808 — бас, а не лид.
+        // 808 keeps the four-floor grid rooted in progression (the same
+        // harmonic path that the sub has); slide between notes is the deal
+        // Kick808 voices, the generator only puts the roots on the beats.
+        // Before the drop there is a sub-roll: a hit instead of a cymbal ringing.
+        // The register is the same as that of the sub (fold in mod.rs): 808 - bass, not lead.
         let kick808 = RoleGuide {
             vel_base: 0.95,
             vel_energy: 0.05,
@@ -375,32 +385,16 @@ impl Style for ClubStyle {
             bass_top: 43,
             ..RoleGuide::pitched(FOUR_FLOOR, 0, -1, 0, &[1.0], 0.95)
         };
-        // Оперный голос: редкие долгие «ah→oh» в эхе, сидит сзади.
-        // Только для ручного включения: в битмейкере вокала нет.
-        // Текут через секции, а не мигают (отклик сглажен).
-        let vocal = RoleGuide {
-            energy_response: 1.2,
-            gates: &[2.0, 3.0, 4.0],
-            vel_base: 0.45,
-            vel_energy: 0.15,
-            vel_jitter: 0.08,
-            voice: Voicing::Scale {
-                degree: 2,
-                octave: 2,
-                jitter: 3,
-            },
-            ..RoleGuide::pitched(VOCAL_W, 2, 2, 3, &[2.0, 3.0, 4.0], 0.45)
-        };
-        // Чужие слоты: рабочие, но сдержанные направляющие — включаются
-        // только ручкой фронта, характер стиля не ломают.
+        // Alien slots: working but discreet guides - included
+        // Only handle the front, the character of the style is not broken.
         let vinyl = RoleGuide {
             gates: &[200.0],
             vel_base: 0.4,
             vel_jitter: 0.05,
             ..RoleGuide::pitched(BED_W, 0, 0, 0, &[200.0], 0.4)
         };
-        // Чужие мелодические/текстуры: разреженные направляющие.
-        // Гитара в club — ручной гость (ритм-гитара вместо плака).
+        // Alien melodic/textures: sparse guides.
+        // The guitar in the club is a manual guest (rhythm guitar instead of pluck).
         let guitar = RoleGuide {
             energy_response: 1.2,
             gates: &[1.0, 1.5, 2.0],
@@ -412,8 +406,8 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(LEAD_W, 0, 1, 3, &[1.0, 1.5, 2.0], 0.4)
         };
-        // Шейкер deep house: песок 16-х поверх хэта, акцент на оффбитах.
-        // Дождь: ровная пелена во все фразы (тише винила и музыки).
+        // Deep house shaker: 16's sand on top of the hi-hat, emphasis on offbeats.
+        // Rain: an even veil in all phrases (quieter than vinyl and music).
         let rain = RoleGuide {
             gates: &[150.0],
             vel_base: 0.35,
@@ -427,7 +421,7 @@ impl Style for ClubStyle {
             vel_jitter: 0.08,
             ..RoleGuide::kit(SHAKER_W, 60, 0.62)
         };
-        // Соло-гитара вне автомикса club: ручная краска для фронта.
+        // Lead guitar outside club automix: manual color for the frontend.
         let guitar_lead = RoleGuide {
             energy_response: 1.0,
             gates: &[1.0, 1.5, 2.0],
@@ -439,6 +433,14 @@ impl Style for ClubStyle {
             },
             ..RoleGuide::pitched(BED_W, 0, 2, 1, &[1.0, 1.5, 2.0], 0.35)
         };
+        // The piano is the quiet color of the club: the same stabs, but acoustic
+        // hammer attack tone instead of Rhodes.
+        let piano = RoleGuide {
+            energy_response: 0.8,
+            gates: &[2.0, 3.0, 4.0],
+            vel_base: 0.4,
+            ..RoleGuide::pitched(PAD_W, 0, 0, 1, &[2.0, 3.0, 4.0], 0.4)
+        };
         [
             bass,
             kick,
@@ -449,11 +451,11 @@ impl Style for ClubStyle {
             keys,
             kick808,
             vinyl,
-            vocal,
             guitar,
             rain,
             shaker,
             guitar_lead,
+            piano,
         ]
     }
 }
@@ -465,7 +467,7 @@ mod tests {
     use crate::playback::{HAT_ID, KICK808_ID, KICK_ID, SNARE_ID};
 
     fn render(seed: u64, steps: usize) -> Vec<(usize, crate::instruments::NoteEvent)> {
-        // Тестируем направляющие, а не микс: активны все слоты.
+        // Testing the guides, not the mix: all slots are active.
         let style = ClubStyle::new();
         let active: Vec<usize> = crate::instruments::Slot::ALL
             .iter()
@@ -501,8 +503,8 @@ mod tests {
 
     #[test]
     fn downbeat_breathes_but_holds() {
-        // Якорь 1: пропуск возможен (приоритет 0.95), но даунбит держится
-        // в подавляющем большинстве тактов — лицо жанра цело.
+        // Anchor 1: skipping is possible (priority 0.95), but downbeat holds
+        // in the overwhelming majority of bars - the face of the genre is intact.
         let notes = render(11, 1024);
         let downs = 1024 / 16;
         let hits = notes
@@ -525,7 +527,7 @@ mod tests {
 
     #[test]
     fn kick808_is_four_on_floor() {
-        // После впуска в интро (шаги 32+): four-floor держится.
+        // After entering the intro (steps 32+): four-floor holds.
         let notes = render(7, 128);
         let quarters_with_kick = notes
             .iter()
@@ -540,9 +542,9 @@ mod tests {
     #[test]
     fn all_pitches_are_kit_or_scale() {
         for (_, n) in render(99, 64) {
-            // 808-й мелодический (следует за баслайном), остальные
-            // ударные — фиксированный набор. Клэп помечен высотой 60:
-            // по ней снейр играет клэпом, а не барабаном.
+            // 808 melodic (follows the bassline), the rest
+            // drums - fixed set. The clap is marked with a height of 60:
+            // The snare plays on it with a clap, not a drum.
             if [KICK_ID, SNARE_ID, HAT_ID].contains(&n.instrument_id) {
                 assert!([36, 38, 42, 60].contains(&n.midi_pitch));
             } else {

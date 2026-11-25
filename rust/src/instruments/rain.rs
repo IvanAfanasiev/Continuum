@@ -3,10 +3,10 @@ use super::{
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
-/// đíđ┐đżđ║đżđ╣đŻĐőđ╣ ĐłĐâđ╝ đ┤đżđÂđ┤ĐĆ: ĐÇđżđ▓đŻđ░ĐĆ đ┐đÁđ╗đÁđŻđ░ ĐäđŞđ╗ĐîĐéĐÇđżđ▓đ░đŻđŻđżđ│đż ĐłĐâđ╝đ░ đ┐đ╗ĐÄĐü ĐÇđÁđ┤đ║đŞđÁ
-/// đ║đ░đ┐đ╗đŞ-đ┐đŞđŻđ│đŞ (đ║đżĐÇđżĐéđ║đŞđÁ ĐüđŞđŻĐâĐüĐő 2ÔÇô5 đ║đôĐć Đü đ▒ĐőĐüĐéĐÇĐőđ╝ Đüđ┐đ░đ┤đżđ╝).
-/// đóđŞĐůđŞđ╣ ĐäđżđŻ đ╗đżĐâĐäđ░ĐĆ ÔÇö đ▓ đżĐéđ╗đŞĐçđŞđÁ đżĐé đ▓đŞđŻđŞđ╗đ░ đ▒đÁđĚ ĐéĐÇđÁĐüđ║đ░ đŞ đ┐Đőđ╗đŞđŻđżđ║.
-/// đśđ│ĐÇđ░đÁĐé đ┤đ╗đŞđŻđŻĐőđ╝đŞ đŻđżĐéđ░đ╝đŞ-ĐäĐÇđ░đĚđ░đ╝đŞ.
+/// Calm rain noise: an even veil of filtered noise plus rare
+/// ping-drops (short 2–5 kHz sines with a fast decay).
+/// A quiet lofi bed — unlike vinyl, without crackle and dust pops.
+/// Plays long phrase-notes.
 const WASH_LP_HZ: f32 = 1200.0;
 const WASH_GAIN: f32 = 0.6;
 const WANDER_HZ: f32 = 0.08;
@@ -26,7 +26,7 @@ struct RainVoice {
     drop_phase: f32,
     drop_freq: f32,
     drop_env: f32,
-    /// đÜđżĐŹĐäĐäđŞĐćđŞđÁđŻĐé Đüđ┐đ░đ┤đ░ đ║đ░đ┐đ╗đŞ: đ┐đżĐüĐçđŞĐéđ░đŻ ĐÇđ░đĚ, đ░ đŻđÁ `exp` đŻđ░ ĐüĐŹđ╝đ┐đ╗.
+    /// Drop decay coefficient: computed once, not `exp` per sample.
     drop_coeff: f32,
     samples_left: usize,
     noise: Noise,
@@ -60,15 +60,15 @@ impl Voice for RainVoice {
         let attack = a * a * (3.0 - 2.0 * a);
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
-        // đčđÁđ╗đÁđŻđ░ Đü đ┤ĐőĐůđ░đŻđŞđÁđ╝.
+        // Breathing veil.
         let raw = self.noise.sample();
         let (wash, _, _) = self.wash_lp.process(raw, WASH_LP_HZ, 0.7, sample_rate);
         self.wander_phase = (self.wander_phase + WANDER_HZ / sample_rate) % 1.0;
         let wander = 1.0 + WANDER_DEPTH * sin01(self.wander_phase);
 
-        // đÜđ░đ┐đ╗ĐĆ: đ▓Đőđ▒ĐÇđżĐü ĐłĐâđ╝đ░ đĚđ░đ┐ĐâĐüđ║đ░đÁĐé đ▓ĐőĐüđżđ║đŞđ╣ đ┐đŞđŻđ│.
+        // Drop: a noise spike triggers a high ping.
         if raw > DROP_THRESH {
-            // đžđ░ĐüĐéđżĐéđ░ đ║đ░đ┐đ╗đŞ 2ÔÇô5 đ║đôĐć đŞđĚ đ▒đŞĐéđżđ▓ ĐłĐâđ╝đ░ ÔÇö đ┤đÁĐéđÁĐÇđ╝đŞđŻđŞĐÇđżđ▓đ░đŻđż.
+            // Drop frequency 2–5 kHz from the noise bits — deterministic.
             let bits = self.noise.sample().to_bits();
             self.drop_freq = 2000.0 + (bits % 3000) as f32;
             self.drop_env = 1.0;
@@ -93,7 +93,7 @@ impl Voice for RainVoice {
     }
 }
 
-/// đčĐâđ▒đ╗đŞĐçđŻĐőđ╣ đŞđŻĐüĐéĐÇĐâđ╝đÁđŻĐé: đ╝đżđŻđż-ĐéđÁđ║ĐüĐéĐâĐÇđ░ Đü đ║ĐÇđżĐüĐüĐäđÁđ╣đ┤đżđ╝ ĐäĐÇđ░đĚ.
+/// Public instrument: monophonic texture with phrase crossfade.
 pub struct Rain(Mono<RainVoice>);
 
 impl Rain {
@@ -155,7 +155,7 @@ mod tests {
         }
         let rms = (sum_sq / n as f32).sqrt();
         assert!(rms > 0.003 && rms < 0.2, "wash level wrong: rms={rms}");
-        // đÜđ░đ┐đ╗đŞ đ┐ĐÇđżđ▒đŞđ▓đ░ĐÄĐéĐüĐĆ đ┐đżđ▓đÁĐÇĐů đ┐đÁđ╗đÁđŻĐő.
+        // Drops break through the veil.
         assert!(loud > 5, "no rain drops");
     }
 }

@@ -1,13 +1,13 @@
-//! Слушательный набор: соло-рендер каждого слота стиля в WAV плюс
-//! объективные метрики (пик, RMS, атака, декей, тональный баланс).
-//! Временный инструмент (удаляется после проверки).
+//! Listening set: solo render of every style slot into WAV plus
+//! objective metrics (peak, RMS, attack, decay, tonal balance).
+//! Temporary tool (removed after verification).
 
-use rust_lib_cont::instruments::Slot;
-use rust_lib_cont::playback::render_wav;
+use rust_lib_continuum::instruments::Slot;
+use rust_lib_continuum::playback::render_wav;
 
 fn read_wav_pcm16(path: &str) -> (u32, Vec<i16>) {
     let bytes = std::fs::read(path).expect("wav readable");
-    // RIFF-заголовок: ищем "data" и читаем PCM16.
+    // RIFF header: find the "data" chunk and read PCM16.
     let mut pos = 12usize;
     let mut sample_rate = 44100u32;
     let mut samples = Vec::new();
@@ -31,7 +31,7 @@ fn read_wav_pcm16(path: &str) -> (u32, Vec<i16>) {
     (sample_rate, samples)
 }
 
-/// Метрики одного файла: громкость, динамика, атака, декей, спектр.
+/// Metrics for one file: level, dynamics, attack, decay, spectrum.
 fn analyze(path: &str) {
     let (sr, s16) = read_wav_pcm16(path);
     let n = s16.len();
@@ -42,7 +42,7 @@ fn analyze(path: &str) {
     let peak = s16.iter().map(|v| v.abs() as f32).fold(0.0f32, f32::max);
     let sum_sq: f64 = s16.iter().map(|v| (*v as f64) * (*v as f64)).sum();
     let rms = (sum_sq / n as f64).sqrt() as f32;
-    // Спектр: энергия по полосам по всему файлу (окна 8192 с перекрытием).
+    // Spectrum: band energy over the whole file (8192-sample windows with overlap).
     let size = 8192usize;
     let fft_n = size.next_power_of_two();
     let bands = [
@@ -75,8 +75,8 @@ fn analyze(path: &str) {
         }
         start += hop;
     }
-    // ВЧ-пик: однополюсный фильтр 2 кГц — транзиент виден отдельно от
-    // энергии (клик длится миллисекунды, в спектре энергии его нет).
+    // HF peak: one-pole 2 kHz filter — the transient is visible separately from
+    // energy (a click lasts milliseconds and carries little spectral energy).
     let mut hp_state = 0.0f32;
     let mut hp_prev = 0.0f32;
     let a = (-2.0 * std::f32::consts::PI * 2000.0 / sr as f32).exp();
@@ -88,8 +88,8 @@ fn analyze(path: &str) {
         hp_prev = x;
         hp_peak = hp_peak.max(y.abs());
     }
-    // Ширина микса: разница каналов против суммы. 0 = моно (плоско),
-    // ближе к 1 = каналы почти разделены.
+    // Mix width: channel difference versus sum. 0 = mono (flat),
+    // closer to 1 = channels almost fully separated.
     let mut side = 0.0f64;
     let mut mid = 0.0f64;
     for c in s16.chunks(2) {
@@ -99,8 +99,8 @@ fn analyze(path: &str) {
         mid += ((l + r) * 0.5).powi(2) as f64;
     }
     let width = (side / mid.max(1e-12)).sqrt();
-    // RMS по активной части (где есть сигнал): тишина не должна съедать
-    // средний уровень инструмента.
+    // RMS over the active part (where there is signal): silence must not dilute
+    // the instrument's average level.
     let total: f64 = energies.iter().sum::<f64>().max(1e-9);
     let pct: Vec<String> = bands
         .iter()
@@ -122,18 +122,18 @@ fn analyze(path: &str) {
     );
 }
 
-/// FFT на месте (итеративный radix-2, без зависимостей).
-/// Разрывы сигнала: отклонение от линейного предсказания. Большой
-/// разрыв = щелчок (граница ноты или обрыв хвоста).
+/// In-place FFT (iterative radix-2, no dependencies).
+/// Signal jumps: deviation from linear prediction. A large
+/// jump = click (a note boundary or a truncated tail).
 fn jumps(path: &str) {
     let (sr, s16) = read_wav_pcm16(path);
-    // WAV стерео с чередованием L/R: для разрывов берём среднее.
+    // Stereo WAV with interleaved L/R: use the average for jump detection.
     let mono: Vec<f32> = s16
         .chunks(2)
         .map(|c| (c[0] as f32 + c[1] as f32) * 0.5 / 32768.0)
         .collect();
-    // Ширина микса: разница каналов против суммы. 0 = моно (плоско),
-    // ближе к 1 = каналы почти разделены.
+    // Mix width: channel difference versus sum. 0 = mono (flat),
+    // closer to 1 = channels almost fully separated.
     let mut side = 0.0f64;
     let mut mid = 0.0f64;
     for c in s16.chunks(2) {
@@ -160,7 +160,7 @@ fn jumps(path: &str) {
         }
     }
     println!(
-        "    ширина={:.3} (0 = моно) | разрыв: макс={:.4} @ {:.3}с, с разрывом>0.01: {} ({} ppm)",
+        "    width={:.3} (0 = mono) | jump: max={:.4} @ {:.3}s, jumps>0.01: {} ({} ppm)",
         width,
         worst.0,
         worst.1 as f32 / sr as f32,
@@ -169,20 +169,20 @@ fn jumps(path: &str) {
     );
 }
 
-/// Спектральный поток по 16-м: насколько спектр меняется от доли к
-/// доле. Стык фразы (каждые 32 доли) сравниваем с обычными долями.
+/// Spectral flux per 16th: how much the spectrum changes from step to
+/// step. The phrase seam (every 32 steps) is compared with ordinary steps.
 fn flux(path: &str, bpm: f32) {
     let (sr, s16) = read_wav_pcm16(path);
     let mono: Vec<f32> = s16
         .chunks(2)
         .map(|c| (c[0] as f32 + c[1] as f32) * 0.5 / 32768.0)
         .collect();
-    let step = (sr as f32 * 60.0 / bpm / 4.0) as usize; // 16-я
+    let step = (sr as f32 * 60.0 / bpm / 4.0) as usize; // 16th step
     if step < 64 || mono.len() < step * 4 {
-        println!("мало данных");
+        println!("not enough data");
         return;
     }
-    // Магнитуда спектра по полосам (8 полос) для каждой 16-й.
+    // Spectral magnitude per band (8 bands) for each 16th step.
     let bands = 8usize;
     let mut prev = vec![0f32; bands];
     let mut fluxes: Vec<f32> = Vec::new();
@@ -208,9 +208,9 @@ fn flux(path: &str, bpm: f32) {
         prev = cur;
         idx += step;
     }
-    // Стыки фраз: каждые 32 доли (2 такта) — доли 0 внутри фразы.
-    // Сравниваем со ВТОРИМИ даунбитами (каждые 16 долей): иначе стык
-    // всегда сравнивается с пустыми долями и метрика врёт.
+    // Phrase seams: every 32 steps (2 bars) — step 0 inside the phrase.
+    // Compare with the SECOND downbeats (every 16 steps): otherwise the seam
+    // always compares against empty steps and the metric lies.
     let phrase = 32usize;
     let mut at_bound = Vec::new();
     let mut inside = Vec::new();
@@ -244,7 +244,7 @@ fn flux(path: &str, bpm: f32) {
         v[i]
     };
     println!(
-        "поток по 16-м: средний={:.4} | на стыке фраз: средний={:.4} p95={:.4} | внутри фразы: средний={:.4} p95={:.4}",
+        "flux per 16th: mean={:.4} | at phrase seams: mean={:.4} p95={:.4} | inside phrase: mean={:.4} p95={:.4}",
         mean(&fluxes),
         mean(&b),
         p95(&b, 0.95),
@@ -303,7 +303,7 @@ fn main() {
         .nth(2)
         .unwrap_or_else(|| "build/sounds".to_string());
     let _ = std::fs::create_dir_all(&dir);
-    // Режим разрывов: разбор уже отрендеренных соло-файлов.
+    // Jump mode: analyze already rendered solo files.
     if std::env::args().nth(3).as_deref() == Some("jumps") {
         let entries: Vec<_> = match std::fs::read_dir(&dir) {
             Ok(rd) => rd.flatten().collect(),
@@ -320,9 +320,9 @@ fn main() {
         }
         return;
     }
-    // Режим потока по соло: кто именно скачет на стыке фразы.
+    // Solo flux mode: which voice jumps at the phrase seam.
     if std::env::args().nth(3).as_deref() == Some("fluxall") {
-        let bpm = rust_lib_cont::styles::make_style(&style)
+        let bpm = rust_lib_continuum::styles::make_style(&style)
             .map(|s| s.bpm())
             .unwrap_or(126.0);
         let slots = [
@@ -335,7 +335,6 @@ fn main() {
             ("keys", Slot::Keys),
             ("pad", Slot::Pad),
             ("kick808", Slot::Kick808),
-            ("vocal", Slot::Vocal),
             ("guitar", Slot::Guitar),
         ];
         for (name, slot) in slots {
@@ -350,11 +349,11 @@ fn main() {
         }
         return;
     }
-    // Режим потока: спектральный поток по 16-м. Показывает, где музыка
-    // «прыгает»: на стыке фраз поток должен быть в рамках обычного.
+    // Flux mode: per-16th spectral flux. Shows where the music
+    // "jumps": at the phrase seam the flux should stay within the normal range.
     if std::env::args().nth(3).as_deref() == Some("flux") {
         let path = format!("{dir}/{style}_mix.wav");
-        let bpm = rust_lib_cont::styles::make_style(&style)
+        let bpm = rust_lib_continuum::styles::make_style(&style)
             .map(|s| s.bpm())
             .unwrap_or(126.0);
         match render_wav(&style, 424242, 40.0, 44_100.0, &path, &[], &[]) {
@@ -363,7 +362,7 @@ fn main() {
         }
         return;
     }
-    // Режим микса: полная смесь стиля — спектр и разрывы всего трека.
+    // Mix mode: full style mix — spectrum and jumps of the whole track.
     if std::env::args().nth(3).as_deref() == Some("mix") {
         let path = format!("{dir}/{style}_mix.wav");
         match render_wav(&style, 424242, 20.0, 44_100.0, &path, &[], &[]) {
@@ -375,7 +374,7 @@ fn main() {
         }
         return;
     }
-    let bpm = rust_lib_cont::styles::make_style(&style)
+    let bpm = rust_lib_continuum::styles::make_style(&style)
         .map(|s| s.bpm())
         .unwrap_or(126.0);
     let secs = 8.0f32;
@@ -390,18 +389,17 @@ fn main() {
         ("keys", Slot::Keys),
         ("pad", Slot::Pad),
         ("kick808", Slot::Kick808),
-        ("vocal", Slot::Vocal),
         ("guitar", Slot::Guitar),
         ("vinyl", Slot::Vinyl),
     ];
-    println!("--- соло-рендер {style} ---");
+    println!("--- solo render {style} ---");
     for (name, slot) in slots {
         let path = format!("{dir}/{style}_{name}.wav");
         match render_wav(&style, 424242, secs, 44_100.0, &path, &[], &[slot.id()]) {
             Ok(report) => {
                 analyze(&path);
                 println!(
-                    "    нот: {} (≈ {:.2} на такт)",
+                    "    notes: {} (approx. {:.2} per bar)",
                     report.notes,
                     report.notes as f32 / bars
                 );

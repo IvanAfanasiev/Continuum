@@ -1,12 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <!-- Фоновое аудио плеера -->
+    <!-- Background audio playback -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
-        android:label="cont"
+        android:label="Continuum"
         android:name=".App"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -37,7 +37,7 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- Фоновая служба аудио (уведомление плеера, фон, экран выкл) -->
+        <!-- Foreground audio service (media notification, background playback, screen off) -->
         <service android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"
             android:exported="true" tools:ignore="Instantiatable">

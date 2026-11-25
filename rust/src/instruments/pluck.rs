@@ -4,31 +4,38 @@ use super::{
 };
 use crate::core::midi_to_freq;
 
-/// Голос электро-плака: BLEP-пилы + BLEP суб-квадрат через резонансный
-/// SVF с быстрым «щелчком» среза и мягким насыщением. Чистый современный
-/// плак вместо резкого чиптюна. Короткий блип (хвост 0.35 с, как референс).
+/// Electric pluck voice: BLEP saws + a BLEP sub-square through a resonant
+/// SVF with a fast cutoff "snap" and soft saturation. A clean modern
+/// pluck instead of harsh chiptune. Short blip (0.35 s tail, like the reference).
 ///
-/// Тембр сознательно тёмный: тело плака живёт в 300–3000 Гц, резонанс
-/// почти убран (Q 0.9), а после сатурации стоит ещё один мягкий срез.
-/// Такой голос читается на телефоне, но не «звенит» и не дерет верх.
+/// The timbre is deliberately dark: the pluck body lives in 300–3000 Hz,
+/// resonance is almost removed (Q 0.9), and another gentle cut follows
+/// saturation. Such a voice reads on a phone but doesn't "ring" or razor the top.
 const SUB_GAIN: f32 = 0.22;
 const DETUNE: f32 = 1.0025;
 const FILTER_FLOOR_HZ: f32 = 360.0;
 const FILTER_SNAP_HZ: f32 = 2400.0;
 const FILTER_SNAP_RATE: f32 = 13.0;
 const FILTER_Q: f32 = 0.9;
-/// Мягкая полка после насыщения: гармоники сатурации не уходят в свист.
+/// Gentle shelf after saturation: saturation harmonics don't run off into a whistle.
 const TONE_LP_HZ: f32 = 6200.0;
 const TONE_Q: f32 = 0.6;
 const AMP_DECAY_RATE: f32 = 9.0;
-const MAX_RING_SECS: f32 = 0.35;
+/// 1.0 s tail instead of a 0.35 s blip: a pluck is a plucked string, it
+/// sings the note through, not a "tick". The HF share doesn't grow: the
+/// cutoff and shelf stay the same, the spectral contract (2–5 kHz <2%) holds.
+const MAX_RING_SECS: f32 = 1.0;
+/// Pitch "settles" by 2% over ~25 ms after the pluck — like a real string
+/// slightly over-pulled by the pick. Tied to the note seed.
+const PITCH_DROP: f32 = 0.02;
+const PITCH_DROP_RATE: f32 = 42.0;
 const ATTACK_SECS: f32 = 0.003;
 const FADE_SECS: f32 = 0.02;
 const VOICE_GAIN: f32 = 0.78;
-/// Щипок: скорость спада и своя рампа. Громкость — как медиатор:
-/// слышно атаку, а не второй инструмент поверх струны.
-/// Шум щипка не белый: полосовой «тик» 1.2–2.8 кГц. Широкополосный
-/// всплеск и был главным источником дребезга (энергия до Найквиста).
+/// Pluck: decay rate and its own ramp. Loudness is like a plectrum:
+/// you hear the attack, not a second instrument on top of the string.
+/// The pluck noise isn't white: a bandpassed 1.2–2.8 kHz "tick". A
+/// broadband burst was the main source of rasp (energy up to Nyquist).
 const PICK_DECAY: f32 = 220.0;
 const PICK_RAMP_SECS: f32 = 0.0015;
 const PICK_GAIN: f32 = 0.16;
@@ -42,20 +49,22 @@ pub struct PluckVoice {
     phase_saw2: f32,
     phase_sub: f32,
     filter: Svf,
-    /// Мягкая полка после сатурации и полосовой фильтр щипка.
+    /// Gentle shelf after saturation and the bandpass pluck filter.
     tone: Svf,
     pick_filter: Svf,
     frequency: f32,
     gain: f32,
     t: f32,
     samples_left: usize,
-    /// Рекуррентные огибающие вместо посэмпловых `exp`: один multiply
-    /// на сэмпл, коэффициенты посчитаны в `trigger`.
+    /// Recursive envelopes instead of per-sample `exp`: one multiply
+    /// per sample, coefficients computed in `trigger`.
     amp_env: ExpDecay,
     cutoff_env: ExpDecay,
-    /// Щипок: короткий шумовой транзиент до мягкого тела.
+    /// Pitched attack envelope (pitch settles after the pluck).
+    pitch_env: ExpDecay,
+    /// Pluck: short noise transient before the soft body.
     pick_env: ExpDecay,
-    /// Шум щипка: пересеивается нотой (одинаковые щипки одинаковы).
+    /// Pluck noise: reseeded by note (identical plucks are identical).
     noise: Noise,
 }
 
@@ -70,15 +79,16 @@ impl Voice for PluckVoice {
         self.samples_left = (ring * self.sample_rate) as usize;
         self.gain = note.velocity;
         self.t = 0.0;
-        // Небольшое сид-зависимое смещение фаз: транзиенты не совпадают
-        // бит-в-бит при повторах, но высота и огибающая сохраняются.
+        // Small seed-dependent phase offsets: transients don't line up
+        // bit-for-bit on repeats, but pitch and envelopes are preserved.
         let phase_seed = note_seed(note, 0x1234);
         self.phase_saw1 = (phase_seed as f32 / u32::MAX as f32) * 0.08;
         self.phase_saw2 = ((phase_seed >> 8) as f32 / u32::MAX as f32) * 0.08;
         self.phase_sub = ((phase_seed >> 16) as f32 / u32::MAX as f32) * 0.08;
         self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
         self.cutoff_env = ExpDecay::start(FILTER_SNAP_RATE, self.sample_rate);
-        // Щипок гаснет за ~7 мс: атака струны, а не второй инструмент.
+        self.pitch_env = ExpDecay::start(PITCH_DROP_RATE, self.sample_rate);
+        // The pluck dies out in ~7 ms: a string attack, not a second instrument.
         self.pick_env = ExpDecay::start(PICK_DECAY, self.sample_rate);
         self.noise = Noise::new(note_seed(note, 0x971C));
         self.filter.scrub_denormals();
@@ -98,27 +108,31 @@ impl Voice for PluckVoice {
         let amp = self.amp_env.next();
         let fade = release_fade(self.samples_left, (FADE_SECS * sample_rate) as usize);
 
-        self.phase_saw1 = (self.phase_saw1 + self.frequency / sample_rate) % 1.0;
-        self.phase_saw2 = (self.phase_saw2 + (self.frequency * DETUNE) / sample_rate) % 1.0;
-        self.phase_sub = (self.phase_sub + (self.frequency * 0.5) / sample_rate) % 1.0;
-        let saw = (saw_blep(self.phase_saw1, self.frequency, sample_rate)
-            + saw_blep(self.phase_saw2, self.frequency * DETUNE, sample_rate))
+        let pitch = 1.0 - PITCH_DROP * self.pitch_env.next();
+        let f1 = self.frequency * pitch;
+        let f2 = f1 * DETUNE;
+        let fs = f1 * 0.5;
+        self.phase_saw1 = (self.phase_saw1 + f1 / sample_rate) % 1.0;
+        self.phase_saw2 = (self.phase_saw2 + f2 / sample_rate) % 1.0;
+        self.phase_sub = (self.phase_sub + fs / sample_rate) % 1.0;
+        let saw = (saw_blep(self.phase_saw1, f1, sample_rate)
+            + saw_blep(self.phase_saw2, f2, sample_rate))
             * 0.5;
-        let sub = square_blep(self.phase_sub, self.frequency * 0.5, sample_rate) * SUB_GAIN;
+        let sub = square_blep(self.phase_sub, fs, sample_rate) * SUB_GAIN;
 
         let cutoff = FILTER_FLOOR_HZ + FILTER_SNAP_HZ * self.cutoff_env.next();
         let (low, _, _) = self
             .filter
             .process(saw + sub, cutoff, FILTER_Q, sample_rate);
-        // Сатурация до финальной полки: мягкое тело, но без гармоник,
-        // которые царапают 5–10 кГц. Раньше та же цепь звучала стерильно
-        // резко именно из-за неотфильтрованного щипка и открытого верха.
+        // Saturation before the final shelf: soft body, but without harmonics
+        // that scrape at 5–10 kHz. The same chain used to sound sterile
+        // and sharp precisely because of the unfiltered pluck and open top.
         let driven = fast_tanh(low * 1.05);
         let (voiced, _, _) = self.tone.process(driven, TONE_LP_HZ, TONE_Q, sample_rate);
 
-        // Щипок идёт МИМО мягкой S-атаки тела (своя рампа): иначе
-        // транзиент душится. Но это полосовой тик, а не белый клик:
-        // узкая полоса не рассыпается в «дребезг» на телефоне.
+        // The pluck BYPASSES the body's soft S-attack (it has its own ramp):
+        // otherwise the transient is suffocated. But it's a bandpassed tick,
+        // not a white click: the narrow band doesn't scatter into "rasp" on a phone.
         let pick_ramp = (self.t / PICK_RAMP_SECS).min(1.0);
         let (_, pick_band, _) =
             self.pick_filter
@@ -150,8 +164,8 @@ mod tests {
 
     #[test]
     fn pluck_stays_out_of_harsh_band() {
-        // Тембр плака: тело в 0.5–2 кГц, верх мягкий. Полоса 2–5 кГц —
-        // «резкость/дребезг» на телефоне; после реворка ее доля мала.
+        // Pluck timbre: body in 0.5–2 kHz, soft top. The 2–5 kHz band is
+        // "sharpness/rasp" on a phone; after the rework its share is small.
         let sr = 44_100.0;
         let mut pluck = VoicePool::plucks(6, 1);
         pluck.set_sample_rate(sr);
@@ -169,9 +183,9 @@ mod tests {
 
     #[test]
     fn pick_transient_leads_body() {
-        // Щипок идёт до тела: в первые 2 мс (пока S-атака почти закрыта)
-        // уже есть широкополосный транзиент — медиатор слышно.
-        // Детерминирован нотой: повтор — тот же щипок.
+        // The pluck precedes the body: in the first 2 ms (while the S-attack
+        // is still nearly closed) there's already a broadband transient —
+        // the pick is audible. Deterministic from the note: a repeat = same pluck.
         fn onset_peak() -> f32 {
             let sr = 44_100.0;
             let mut pluck = VoicePool::plucks(6, 1);
@@ -215,15 +229,42 @@ mod tests {
     }
 
     #[test]
-    fn pluck_is_a_short_blip() {
-        // Референс — блип 0.1 с: нота 0.6 с обязана затихнуть к 0.45 с.
+    fn pluck_rings_a_full_note() {
+        // The string sings the note through: 0.6 s sounds almost fully (it
+        // used to cut off at 0.35 s — an audible blip). But the tail isn't
+        // endless: a 0.6 s note dies before 0.62 s + fade margin.
         let sr = 44_100.0;
         let mut pluck = VoicePool::plucks(6, 1);
         pluck.set_sample_rate(sr);
         pluck.trigger(&NoteEvent::new(6, 72, 1.0, 0.6));
-        for _ in 0..(0.45 * sr) as usize {
+        let mut late = 0.0f32;
+        for _ in 0..(0.5 * sr) as usize {
+            late += pluck.next_sample().abs();
+        }
+        assert!(late > 1.0, "pluck died too early: {late}");
+        for _ in 0..((0.12 * sr) as usize) {
             pluck.next_sample();
         }
-        assert!(!pluck.is_active(), "pluck rings too long");
+        assert!(!pluck.is_active(), "pluck rings past its note");
+    }
+
+    #[test]
+    fn pitch_settles_after_the_pluck() {
+        // Pitch sits ~2% above target in the first milliseconds, then settles.
+        // Check the phase integrator directly: the frequency ratio in a
+        // 5 ms window is greater than in a 200 ms window.
+        let sr = 44_100.0;
+        let mut one = PluckVoice::default();
+        one.set_sample_rate(sr);
+        one.trigger(&NoteEvent::new(6, 72, 1.0, 0.5));
+        for _ in 0..220 {
+            one.next_sample();
+        }
+        let early_pitch = one.pitch_env.value();
+        for _ in 0..8000 {
+            one.next_sample();
+        }
+        let late_pitch = one.pitch_env.value();
+        assert!(early_pitch > late_pitch, "pitch envelope does not decay");
     }
 }

@@ -12,30 +12,36 @@ const TINE_RATIO: f32 = 3.98;
 const TINE_DECAY: f32 = 45.0;
 const TREMOLO_HZ: f32 = 4.5;
 const TREMOLO_DEPTH: f32 = 0.22;
-/// Атака 8 мс (спека стабов 5–15): мягкий вход без щелчка.
-/// High-pass 180 Гц: низ под Rhodes вырезан (место басу и бочке).
+/// 8 ms attack (stab spec 5–15): soft entry without a click.
+/// 180 Hz high-pass: the low end under the Rhodes is cut (room for bass and kick).
 const ATTACK_SECS: f32 = 0.008;
 const HP_HZ: f32 = 180.0;
 const AMP_DECAY_RATE: f32 = 3.5;
 const SUSTAIN_LEVEL: f32 = 0.55;
 const FADE_SECS: f32 = 0.08;
 const VOICE_GAIN: f32 = 0.65;
-/// Полирующий lowpass: срез держит постоянное число гармоник
-/// (12×freq, потолок 9.5 кГц) — цифровой блеск FM-боковых давят
-/// у высоких нот, низкие не темнеют.
+/// Polishing lowpass: cutoff holds a constant number of harmonics
+/// (12×freq, ceiling 9.5 kHz) — digital shine from FM sidebands is tamed
+/// at high notes, while low notes don't go dark.
 const POLISH_HZ: f32 = 9500.0;
 const POLISH_Q: f32 = 0.7;
 const POLISH_HARMS: f32 = 12.0;
 const POLISH_FLOOR_HZ: f32 = 1800.0;
-/// Молоточек гаснет кверху: tine 3.98× на высоких нотах уходит
-/// за Найквист и foldится — гейн тает выше 3 кГц звона.
+/// Hammer fades upward: the 3.98× tine on high notes goes past
+/// Nyquist and folds back — its gain melts above 3 kHz of ring.
 const TINE_FULL_HZ: f32 = 3000.0;
 const TINE_GONE_HZ: f32 = 6000.0;
 const TINE_FLOOR: f32 = 0.15;
+/// Soft electronic "key" transient (NOT an acoustic hammer:
+/// the lofi style explicitly wants no felt/wood). Narrow 1.8 kHz band,
+/// 3 ms, very quiet — just so the attack doesn't start as a bare sine.
+const CLICK_HZ: f32 = 1800.0;
+const CLICK_DECAY: f32 = 320.0;
+const CLICK_GAIN: f32 = 0.035;
 
-/// Голос электро-пиано в духе Rhodes: FM-корпус с затухающим индексом
-/// (атака «кусается», сустейн — чистый синус) + металлический «tine»
-/// на 3.98× частоте + мягкое тремоло.
+/// Rhodes-style electric piano voice: FM body with a decaying index
+/// (attack "bites", sustain is a pure sine) + a metallic "tine"
+/// at 3.98× frequency + gentle tremolo.
 #[derive(Clone, Default)]
 pub struct KeysVoice {
     sample_rate: f32,
@@ -46,9 +52,9 @@ pub struct KeysVoice {
     polish: Svf,
     frequency: f32,
     gain: f32,
-    /// Стартовая FM-глубина и звон молоточка от силы удара:
-    /// тихая нота — чистый тон, громкая — лающий атакующий звон.
-    /// Так ведет себя настоящий Rhodes.
+    /// Starting FM depth and hammer ring depend on strike force:
+    /// quiet note — pure tone, loud — a barking attack ring.
+    /// That's how a real Rhodes behaves.
     index_start: f32,
     tine_gain: f32,
     t: f32,
@@ -56,12 +62,14 @@ pub struct KeysVoice {
     attack_mul: f32,
     release_mul: f32,
     hp: Svf,
-    /// Шум молоточка: пересеивается нотой (одинаковые удары одинаковы).
+    /// "Key" noise: reseeded by note (identical hits are identical).
     noise: Noise,
-    /// Рекуррентные огибающие вместо посэмпловых `exp`.
+    click_bp: Svf,
+    /// Recursive envelopes instead of per-sample `exp`.
     amp_env: ExpDecay,
     index_env: ExpDecay,
     tine_env: ExpDecay,
+    click_env: ExpDecay,
 }
 
 impl Voice for KeysVoice {
@@ -73,28 +81,33 @@ impl Voice for KeysVoice {
         self.frequency = midi_to_freq(note.midi_pitch);
         self.samples_left = (note.duration_secs * self.sample_rate).max(1.0) as usize;
         self.gain = note.velocity;
-        // FM-индекс укушен сверху (макс 2.8 вместо 4.2): боковые
-        // держатся в полосе полировки, фолдбек не свистит.
-        // Лай молоточка цел — кусачесть остается.
+        // FM index is bitten at the top (max 2.8 instead of 4.2): sidebands
+        // stay within the polish band, foldback doesn't whistle.
+        // The hammer's bite is intact.
         self.index_start = 1.2 + 1.6 * note.velocity;
-        // Звон молоточка тает с высотой: наверху tine foldится.
+        // Hammer ring melts with pitch: up high the tine folds back.
         let tine_hz = self.frequency * TINE_RATIO;
         let tine_fade =
             ((TINE_GONE_HZ - tine_hz) / (TINE_GONE_HZ - TINE_FULL_HZ)).clamp(TINE_FLOOR, 1.0);
         self.tine_gain = (0.12 + 0.45 * note.velocity) * tine_fade;
         self.attack_mul = note.attack_mul;
         self.release_mul = note.release_mul;
-        self.noise = Noise::new(note_seed(note, 0x4E4D));
+        let seed = note_seed(note, 0x4E4D);
+        self.noise = Noise::new(seed);
         self.amp_env = ExpDecay::start(AMP_DECAY_RATE, self.sample_rate);
         self.index_env = ExpDecay::start(INDEX_DECAY, self.sample_rate);
         self.tine_env = ExpDecay::start(TINE_DECAY, self.sample_rate);
+        self.click_env = ExpDecay::start(CLICK_DECAY, self.sample_rate);
+        self.click_bp.reset();
         self.hp.reset();
         self.t = 0.0;
         self.car_phase = 0.0;
         self.mod_phase = 0.0;
         self.tine_phase = 0.0;
         self.polish.scrub_denormals();
-        // trem_phase сохраняется: тремоло общее на инструмент, как LFO педали.
+        // Per-voice LFO: each voice's tremolo is offset from the note seed,
+        // otherwise the whole chord breathes in sync (one-LFO-on-a-pedal effect).
+        self.trem_phase = ((seed >> 11) % 1000) as f32 / 1000.0;
     }
 
     fn next_sample(&mut self) -> f32 {
@@ -104,7 +117,7 @@ impl Voice for KeysVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        // Атака/релиз от сида: Rhodes бывает кусачим и ватным.
+        // Seed-based attack/release: a Rhodes can be biting or mushy.
         let attack_secs = ATTACK_SECS * self.attack_mul.max(0.25);
         let attack_raw = (self.t / attack_secs).min(1.0);
         let attack = attack_raw * attack_raw * (3.0 - 2.0 * attack_raw);
@@ -112,30 +125,34 @@ impl Voice for KeysVoice {
         let fade_len = (FADE_SECS * self.release_mul.max(0.25) * sample_rate) as usize;
         let fade = release_fade(self.samples_left, fade_len);
 
-        // FM 1:1 с падающим индексом: колокол в атаке, синус в сустейне.
+        // 1:1 FM with a falling index: bell on attack, sine in sustain.
         let index = INDEX_FLOOR + (self.index_start - INDEX_FLOOR) * self.index_env.next();
         self.mod_phase = (self.mod_phase + self.frequency / sample_rate) % 1.0;
         self.car_phase = (self.car_phase + self.frequency / sample_rate) % 1.0;
         let body = fast_sin(self.car_phase * TAU + index * sin01(self.mod_phase));
 
-        // Металлический «tine» молоточка.
+        // The hammer's metallic "tine".
         self.tine_phase = (self.tine_phase + (self.frequency * TINE_RATIO) / sample_rate) % 1.0;
         let tine = sin01(self.tine_phase) * self.tine_env.next() * self.tine_gain;
 
-        // Акустического молоточка (войлок, дерево) тут нет: это
-        // электропиано, а не рояль. Атаку задаёт FM-корпус и «tine» —
-        // электронные призвуки, а не звук материала.
+        // There is no acoustic hammer here (felt, wood): this is an
+        // electric piano, not a grand. But we keep the electronic "key" —
+        // a narrow 3 ms tick — so the attack is no longer a bare sine.
+        let (_, click_band, _) =
+            self.click_bp
+                .process(self.noise.sample(), CLICK_HZ, 1.2, sample_rate);
+        let click = click_band * self.click_env.next() * CLICK_GAIN;
 
         self.trem_phase = (self.trem_phase + TREMOLO_HZ / sample_rate) % 1.0;
         let tremolo = 1.0 + TREMOLO_DEPTH * sin01(self.trem_phase);
 
         self.t += 1.0 / sample_rate;
-        let raw = (body * 0.75 + tine) * attack;
+        let raw = (body * 0.75 + tine + click) * attack;
         let raw = raw * self.gain * amp * fade * tremolo;
-        // High-pass 180 Гц: низ под Rhodes вырезан, место басу и бочке.
+        // 180 Hz high-pass: the low end under the Rhodes is cut, room for bass and kick.
         let (_, _, hipped) = self.hp.process(raw, HP_HZ, 0.7, sample_rate);
-        // Полировка от высоты: постоянное число гармоник вместо
-        // фиксированных 9.5 кГц — верхние ноты не свистят.
+        // Pitch-dependent polish: a constant number of harmonics instead
+        // of a fixed 9.5 kHz — high notes don't whistle.
         let polish_cut = (self.frequency * POLISH_HARMS).clamp(POLISH_FLOOR_HZ, POLISH_HZ);
         let (polished, _, _) = self
             .polish
@@ -153,6 +170,7 @@ impl Voice for KeysVoice {
         self.gain = 0.0;
         self.polish.reset();
         self.hp.reset();
+        self.click_bp.reset();
     }
 }
 
@@ -163,7 +181,7 @@ mod tests {
 
     #[test]
     fn seed_articulation_softens_attack() {
-        // Мягкий Rhodes (длинная атака) кусается меньше в первые 15 мс.
+        // A soft Rhodes (long attack) bites less in the first 15 ms.
         fn early_energy(atk: f32) -> f32 {
             let sr = 44_100.0;
             let mut keys = VoicePool::keys(7, 1);
@@ -190,7 +208,7 @@ mod tests {
         let sr = 44_100.0;
         let mut keys = VoicePool::keys(7, 8);
         keys.set_sample_rate(sr);
-        // Джазовый аккорд: тоника + септима.
+        // Jazz chord: root + seventh.
         for pitch in [48, 55, 58, 62] {
             keys.trigger(&NoteEvent::new(7, pitch, 0.7, 1.5));
         }
@@ -206,7 +224,7 @@ mod tests {
 
     #[test]
     fn attack_fits_stab_spec() {
-        // Атака 8 мс (спека 5–15): 90% пика между 5 и 30 мс.
+        // 8 ms attack (spec 5–15): 90% of peak between 5 and 30 ms.
         let sr = 44_100.0;
         let mut keys = VoicePool::keys(7, 1);
         keys.set_sample_rate(sr);

@@ -29,29 +29,52 @@ Future<PlaybackStatus> playbackSetStyle({required String styleName}) =>
 Future<PlaybackStatus> playbackSetSeed({required BigInt seed}) =>
     RustLib.instance.api.crateApiPlaybackPlaybackSetSeed(seed: seed);
 
-/// Сид кодом `XXX-XXX` (алфавит 0-9A-Z, регистр не важен).
-/// Мусор выбрасывается, короткий ввод отклоняется без смены сида.
+/// Seed by code `XXX-XXX` (alphabet 0-9A-Z, case-insensitive).
+/// Garbage is discarded, too-short input is rejected without changing the seed.
 Future<PlaybackStatus> playbackSetSeedCode({required String code}) =>
     RustLib.instance.api.crateApiPlaybackPlaybackSetSeedCode(code: code);
 
-/// Случайный сид (кнопка «кубик»): код вернется в статусе.
+/// Random seed ("dice" button): the code is returned in the status.
 Future<PlaybackStatus> playbackRandomSeed() =>
     RustLib.instance.api.crateApiPlaybackPlaybackRandomSeed();
 
-/// Живой темп в BPM (обычно 75–135, кламп 50–180).
-/// Неположительный = сброс к дефолту стиля.
+/// Live tempo in BPM (typically 75–135, clamped to 50–180).
+/// Non-positive = reset to the style default.
 Future<PlaybackStatus> playbackSetTempoBpm({required double bpm}) =>
     RustLib.instance.api.crateApiPlaybackPlaybackSetTempoBpm(bpm: bpm);
 
-/// Живая intensity 0..2 («температура» генерации).
+/// Live intensity 0..2 (the "temperature" of generation).
 Future<PlaybackStatus> playbackSetIntensity({required double intensity}) =>
     RustLib.instance.api.crateApiPlaybackPlaybackSetIntensity(
       intensity: intensity,
     );
 
-/// Громкость слота 0..1. Ноль исключает слот из генерации.
-/// Ручная правка помечает список изменённым: смена стиля и сида его
-/// больше не перетирает (сброс — отдельной кнопкой).
+/// Master effects live: reverb wet 0..0.6, size 0..1,
+/// high-cut 2000..20000 Hz, sidechain depth 0..2.
+/// They survive style and seed changes; reset is a separate function.
+Future<PlaybackStatus> playbackSetMasterFx({
+  required double reverbWet,
+  required double reverbSize,
+  required double trebleHz,
+  required double sidechain,
+}) => RustLib.instance.api.crateApiPlaybackPlaybackSetMasterFx(
+  reverbWet: reverbWet,
+  reverbSize: reverbSize,
+  trebleHz: trebleHz,
+  sidechain: sidechain,
+);
+
+/// Reset master effects to the current style's authored values.
+Future<PlaybackStatus> playbackResetMasterFx() =>
+    RustLib.instance.api.crateApiPlaybackPlaybackResetMasterFx();
+
+/// Filter openness: offset -0.5..0.5 on top of the section shape.
+Future<PlaybackStatus> playbackSetToneOpen({required double offset}) =>
+    RustLib.instance.api.crateApiPlaybackPlaybackSetToneOpen(offset: offset);
+
+/// Slot volume 0..1. Zero excludes the slot from generation.
+/// A manual edit marks the list as changed: style and seed changes
+/// no longer overwrite it (reset is a separate button).
 Future<PlaybackStatus> playbackSetTrack({
   required BigInt instrumentId,
   required double volume,
@@ -60,15 +83,15 @@ Future<PlaybackStatus> playbackSetTrack({
   volume: volume,
 );
 
-/// Сброс списка инструментов на дефолты текущего стиля (вайтлист +
-/// гости сида). Снимает пометку «правил слушатель»: дальше стиль снова
-/// влияет на состав.
+/// Reset the instrument list to the current style's and seed's default cast.
+/// Clears the "listener edited" flag: style and seed affect
+/// the lineup again.
 Future<PlaybackStatus> playbackResetInstruments() =>
     RustLib.instance.api.crateApiPlaybackPlaybackResetInstruments();
 
-/// Макро-фейдер группы 0..1 («kick», «lead», …): один «Kick» вместо
-/// «панч vs 808» — конкретный вариант под капотом выбирает стиль.
-/// Ноль глушит группу целиком. Переживает смену стиля.
+/// Group macro fader 0..1 ("kick", "lead", …): one "Kick" instead of
+/// "punchy vs 808" — the specific variant under the hood is chosen by the style.
+/// Zero mutes the whole group. Survives style changes.
 Future<PlaybackStatus> playbackSetGroupVolume({
   required String groupName,
   required double volume,
@@ -77,23 +100,23 @@ Future<PlaybackStatus> playbackSetGroupVolume({
   volume: volume,
 );
 
-/// Слоты микшера для UI: id, имена, роли, группы, слышимые громкости.
+/// Mixer slots for UI: id, names, roles, groups, audible volumes.
 Future<List<TrackInfo>> playbackTracks() =>
     RustLib.instance.api.crateApiPlaybackPlaybackTracks();
 
-/// Макро-фейдеры для UI: имя группы и ее множитель.
+/// Macro faders for UI: group name and its multiplier.
 Future<List<GroupInfo>> playbackGroups() =>
     RustLib.instance.api.crateApiPlaybackPlaybackGroups();
 
 Future<PlaybackStatus> playbackStatus() =>
     RustLib.instance.api.crateApiPlaybackPlaybackStatus();
 
-/// Диагностика живого тракта (кадры/ноты/очередь) для UI-баннера.
+/// Live pipeline diagnostics (frames/notes/queue) for the UI banner.
 Future<EngineStats> playbackEngineStats() =>
     RustLib.instance.api.crateApiPlaybackPlaybackEngineStats();
 
-/// Старт pull-сессии для фронтенда (Android играет сам):
-/// композер крутится, аудио-потока нет, сэмплы забирают по запросу.
+/// Start a pull session for the frontend (Android plays on its own):
+/// the composer runs, there is no audio stream, samples are pulled on demand.
 Future<PlaybackStatus> playbackPullStart({
   required String styleName,
   required BigInt seed,
@@ -102,9 +125,9 @@ Future<PlaybackStatus> playbackPullStart({
   seed: seed,
 );
 
-/// Pull-блок для фронтенда: стерео interleaved f32.
-/// Вызывать циклично мелкими блоками (~10 раз в секунду — онсеты
-/// точнее шага сетки), темп задает потребитель.
+/// Pull block for the frontend: stereo interleaved f32.
+/// Call repeatedly in small blocks (~10 times a second — onsets
+/// are more accurate than the grid step), tempo is set by the consumer.
 Future<Float32List> playbackPullRender({
   required BigInt frames,
   required double sampleRate,
@@ -113,8 +136,8 @@ Future<Float32List> playbackPullRender({
   sampleRate: sampleRate,
 );
 
-/// Нативный аудио-поток (Android): сессия + рендер + запись в трек
-/// целиком в Rust, Dart шлет только команды. Статус — для UI.
+/// Native audio stream (Android): session + render + track write
+/// entirely in Rust, Dart only sends commands. Status is for UI.
 Future<PlaybackStatus> playbackPullThreadStart({
   required String styleName,
   required BigInt seed,
@@ -123,30 +146,30 @@ Future<PlaybackStatus> playbackPullThreadStart({
   seed: seed,
 );
 
-/// Останов нативного потока. Сессия живет (пауза держится бэкендом).
+/// Stop the native stream. The session stays alive (pause is held by the backend).
 Future<PlaybackStatus> playbackPullThreadStop() =>
     RustLib.instance.api.crateApiPlaybackPlaybackPullThreadStop();
 
-/// Жив ли нативный поток (для UI и самодиагностики).
+/// Is the native stream alive (for UI and self-diagnostics).
 Future<bool> playbackPullAlive() =>
     RustLib.instance.api.crateApiPlaybackPlaybackPullAlive();
 
-/// Захват потока в файл (30 секунд, экспертиза скачков).
-/// Путь — публичная папка приложения снаружи.
+/// Capture the stream to a file (30 seconds, for examining transients).
+/// The path is outside the app's public folder.
 Future<bool> playbackPullCapture({required String path}) =>
     RustLib.instance.api.crateApiPlaybackPlaybackPullCapture(path: path);
 
-/// Журнал нативного потока для экрана диагностики.
+/// Native stream log for the diagnostics screen.
 Future<List<String>> playbackPullDiag() =>
     RustLib.instance.api.crateApiPlaybackPlaybackPullDiag();
 
-/// Кадр визуалайзера из живой сессии. Без сессии — нули.
+/// Visualizer frame from the live session. Without a session — zeros.
 Future<LiveVisual> playbackLiveVisual() =>
     RustLib.instance.api.crateApiPlaybackPlaybackLiveVisual();
 
 Future<List<String>> playbackStyleNames() =>
     RustLib.instance.api.crateApiPlaybackPlaybackStyleNames();
 
-/// Стили с полками каталога для сортировки фронта.
+/// Styles with catalog shelves for frontend sorting.
 Future<List<StyleMeta>> playbackStyles() =>
     RustLib.instance.api.crateApiPlaybackPlaybackStyles();

@@ -1,14 +1,14 @@
-//! Аудиодвижок: drain очереди нот -> триггер голосов -> сайдчейн ->
-//! стерео-микс -> пространство -> мастер.
+//! Audio engine: drain the note queue -> trigger voices -> sidechain ->
+//! stereo mix -> space -> master.
 //!
-//! Современный клубный тракт в миниатюре:
-//! - сайдчейн-памп: огибающая кика пригибает бас/пэды (глубина и кач);
-//! - стерео: низ по центру, полифония разложена по сторонам пулами;
-//! - мастер-пространство (темный реверб) + мягкий клиппер вместо clamp.
+//! A modern club pipeline in miniature:
+//! - sidechain pump: the kick envelope ducks bass/pads (depth and bounce);
+//! - stereo: lows centered, polyphony spread across the sides by panners;
+//! - master space (dark reverb) + a soft clipper instead of clamp.
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex, RwLock,
 };
 use std::time::{Duration, Instant};
@@ -20,25 +20,32 @@ use cpal::{
 use crossbeam::queue::ArrayQueue;
 
 use crate::core::{snapshot, MASTER_DRIVE, MAX_ACTIVE_TRACKS};
-use crate::instruments::dsp::MasterLimiter;
+use crate::instruments::dsp::{fast_tanh, MasterLimiter};
 use crate::instruments::{dsp::Svf, Instrument, InstrumentRole, NoteEvent};
 use crate::mixer::MixerState;
 use crate::playback::EngineCounters;
 use crate::space::SpaceBus;
 
-/// Затухание огибающей кика: восстановление ~180 мс (памп в темпе хауса).
+/// Kick envelope decay: ~180 ms recovery (house-tempo pump).
 const DUCK_RELEASE_SECS: f32 = 0.18;
-/// Масштаб огибающей к диапазону 0..1 (пик кика после громкости ~0.8).
+/// Envelope scaling to the 0..1 range (kick peak after volume ~0.8).
 const DUCK_ENV_SCALE: f32 = 1.25;
+/// Sidechain detector's low cut: only the kick's LOW end should pump the bass.
+/// A click-beater at 3.5 kHz used to put wideband hash into the envelope —
+/// the pump twitched on every click instead of on the body of the hit.
+const DUCK_DETECT_HZ: f32 = 180.0;
+/// Maximum instrument id for the volume table (O(1) access).
+/// Slot range 1..20, headroom up to 64.
+const VOL_ID_CAP: usize = 64;
 
-/// Мастер-эффекты от стиля: комната реверба и срез верхов.
-/// Контроллер перезаписывает при смене стиля, движок читает каждый блок.
+/// Master effects from the style: reverb room and high-cut.
+/// The controller rewrites them on a style change, the engine reads every block.
 #[derive(Debug, Clone, Copy)]
 pub struct MasterFx {
     pub reverb_wet: f32,
     pub reverb_size: f32,
     pub treble_hz: f32,
-    /// Множитель глубины сайдчейна (1.0 — характер движка).
+    /// Sidechain depth multiplier (1.0 — the engine's character).
     pub sidechain: f32,
 }
 
@@ -55,12 +62,12 @@ impl Default for MasterFx {
 
 pub type SharedFx = Arc<RwLock<MasterFx>>;
 
-/// Состояние рендера без cpal: голоса, сайдчейн, комната, верх.
-/// Темпового дилэя в тракте нет (выключен: ситуативен, мылит
-/// транзиенты; сам `Echo` живёт в space.rs и вернётся отдельной
-/// фичей с посылами из микшера, а не захардкоженными по ролям).
-/// Живой движок и офлайн-прогон (soak) используют один и тот же код —
-/// расхождений между «слышу» и «проверяю» нет по построению.
+/// Render state without cpal: voices, sidechain, room, highs.
+/// There is no tempo delay in the pipeline (disabled: situational, smears
+/// transients; `Echo` itself lives in space.rs and will return as a separate
+/// feature with sends from the mixer rather than hardcoded by role).
+/// The live engine and the offline run (soak) use the very same code —
+/// no divergence between "what I hear" and "what I check" by construction.
 pub(crate) struct RenderState {
     instruments: Vec<Box<dyn Instrument>>,
     index_by_id: HashMap<usize, usize>,
@@ -69,30 +76,36 @@ pub(crate) struct RenderState {
     treble_l: Svf,
     treble_r: Svf,
     kick_env: f32,
+    /// LP filter of the sidechain detector (only the kick's low end).
+    kick_lp: f32,
+    kick_lp_a: f32,
+    /// Volume table by id: replacing a linear search on every sample.
+    vol_cache: [f32; VOL_ID_CAP],
+    vol_key: u64,
     duck_release: f32,
-    /// Быстрая атака огибающей (2 мс): памп успевает за киком,
-    /// но не трещит широкополосным хэшем по фронту удара.
+    /// Fast envelope attack (2 ms): the pump keeps up with the kick,
+    /// but doesn't crackle with wideband hash on the hit's front edge.
     duck_attack: f32,
     duck_mult: f32,
-    /// Мастер-HP 28 Гц: режет инфраниз и постоянку (хрип динамиков
-    /// телефона), музыкального контента не трогает (минимум 32 Гц).
+    /// Master HP at 28 Hz: cuts infrabass and DC (phone speaker rasp),
+    /// doesn't touch musical content (minimum 32 Hz).
     hp_l: Svf,
     hp_r: Svf,
     sample_rate: f32,
-    /// Сглаженный срез верхов: цель прыгает на границах секций
-    /// (свип формы), фильтр едет за ней ~120 мс вместо ступеньки —
-    /// ступенька коэффициента SVF и была редким «всхлипом».
+    /// Smoothed high-cut: the target jumps at section boundaries
+    /// (form sweep), the filter follows it over ~120 ms instead of stepping —
+    /// the step in the SVF coefficient was the rare "gulp".
     treble_smooth: f32,
-    /// Пиковый лимитер мастера: мейкап + потолок после всей цепочки.
+    /// Master peak limiter: makeup + ceiling after the whole chain.
     limiter: MasterLimiter,
-    /// Коэффициент сглаживания среза верхов (~120 мс): константа
-    /// частоты дискретизации, считается в new/retune, а не на сэмпл.
+    /// High-cut smoothing coefficient (~120 ms): a sample-rate constant,
+    /// computed in new/retune, not per sample.
     smooth_k: f32,
 }
 
 impl RenderState {
-    /// Полный сброс голосов и хвоста комнаты: смена сида или стиля.
-    /// Старая генерация не должна доигрывать поверх новой.
+    /// Full reset of voices and the room tail: seed or style change.
+    /// Old generation must not keep playing over the new one.
     pub(crate) fn reset_voices(&mut self) {
         for inst in self.instruments.iter_mut() {
             inst.reset();
@@ -116,7 +129,7 @@ impl RenderState {
             .enumerate()
             .map(|(pos, inst)| (inst.id(), pos))
             .collect();
-        // Маска киков для сайдчейна: их рендерим первыми в каждом семпле.
+        // Mask of kicks for the sidechain: we render them first in every sample.
         let is_kick: Vec<bool> = instruments
             .iter()
             .map(|inst| inst.role() == InstrumentRole::Kick)
@@ -129,6 +142,10 @@ impl RenderState {
             treble_l: Svf::default(),
             treble_r: Svf::default(),
             kick_env: 0.0,
+            kick_lp: 0.0,
+            kick_lp_a: 1.0 - (-2.0 * std::f32::consts::PI * DUCK_DETECT_HZ / sample_rate).exp(),
+            vol_cache: [0.0; VOL_ID_CAP],
+            vol_key: u64::MAX,
             duck_release: (-1.0 / (sample_rate * DUCK_RELEASE_SECS)).exp(),
             duck_attack: (-1.0 / (sample_rate * 0.002)).exp(),
             duck_mult: 1.0,
@@ -141,9 +158,9 @@ impl RenderState {
         }
     }
 
-    /// Перенастройка на новую частоту (смена маршрута вывода):
-    /// голоса и их состояние сохраняются, сбрасываются только
-    /// частотно-зависимые узлы (комната, верха, сайдчейн).
+    /// Retuning to a new sample rate (output route change):
+    /// voices and their state are preserved, only
+    /// sample-rate-dependent nodes are reset (room, highs, sidechain).
     pub(crate) fn retune(&mut self, sample_rate: f32) {
         let sr = if sample_rate.is_finite() && sample_rate > 0.0 {
             sample_rate
@@ -153,7 +170,11 @@ impl RenderState {
         for inst in &mut self.instruments {
             inst.set_sample_rate(sr);
         }
-        self.space = SpaceBus::new(sr);
+        // This used to be `self.space = SpaceBus::new(sr)` — the reverb
+        // tail was cut on every headphone reconnect.
+        // Now the sample-rate-dependent nodes are retuned in place.
+        self.space.retune(sr);
+        self.kick_lp_a = 1.0 - (-2.0 * std::f32::consts::PI * DUCK_DETECT_HZ / sr).exp();
         self.treble_l = Svf::default();
         self.treble_r = Svf::default();
         self.treble_smooth = 0.0;
@@ -185,28 +206,48 @@ impl RenderState {
         self.sample_rate
     }
 
-    fn volume_of(volumes: &[(usize, f32)], id: usize) -> f32 {
-        for (vid, vol) in volumes {
-            if *vid == id {
-                return *vol;
+    /// Rebuild the volume table only when it actually changed.
+    /// In the live pipeline `volumes` is the same slice every sample — instead of
+    /// a linear search over 14 instruments we get one hash per pass
+    /// and O(1) lookup by id inside the render loop.
+    fn sync_volumes(&mut self, volumes: &[(usize, f32)]) {
+        let mut key = 0xcbf2_9ce4_8422_2325u64;
+        for &(id, vol) in volumes {
+            key ^= (id as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ vol.to_bits() as u64;
+            key = key.wrapping_mul(0x0100_0000_01b3);
+        }
+        if key == self.vol_key {
+            return;
+        }
+        self.vol_cache.fill(0.0);
+        for &(id, vol) in volumes {
+            if id < VOL_ID_CAP {
+                self.vol_cache[id] = vol;
             }
         }
-        0.0
+        self.vol_key = key;
     }
 
-    /// Один стерео-сэмпл: сайдчейн → микс → эхо → комната → верх → мастер.
-    /// `volumes` — эффективные громкости (id, vol); нулевые затихшие
-    /// голоса пропускаются без DSP.
+    #[inline]
+    fn vol_of(cache: &[f32; VOL_ID_CAP], id: usize) -> f32 {
+        cache.get(id).copied().unwrap_or(0.0)
+    }
+
+    /// One stereo sample: sidechain → mix → echo → room → highs → master.
+    /// `volumes` — effective volumes (id, vol); zero, faded-out
+    /// voices are skipped without DSP.
     pub(crate) fn render_sample(&mut self, volumes: &[(usize, f32)], treble_hz: f32) -> (f32, f32) {
-        // Проход 1: кики. Их уровень заряжает огибающую сайдчейна.
-        // Немой затихший кик пропускаем (как остальных во 2-м проходе).
+        self.sync_volumes(volumes);
+        let cache = &self.vol_cache;
+        // Pass 1: kicks. Their level charges the sidechain envelope.
+        // We skip a silent, faded-out kick (as with the others in pass 2).
         let mut kick_l = 0.0;
         let mut kick_r = 0.0;
         for (pos, inst) in self.instruments.iter_mut().enumerate() {
             if !self.is_kick[pos] {
                 continue;
             }
-            let vol = Self::volume_of(volumes, inst.id());
+            let vol = Self::vol_of(cache, inst.id());
             if vol <= 0.0 && !inst.is_active() {
                 continue;
             }
@@ -215,30 +256,34 @@ impl RenderState {
             kick_r += r * vol;
         }
         let kick_abs = (kick_l + kick_r) * 0.5;
-        // Атака сглажена (2 мс): фронт удара не плодит широкополосный
-        // хэш в огибающей, грув при этом не страдает — спад тот же.
-        let a = if kick_abs.abs() > self.kick_env {
+        // Detector LP: only the kick's LOW end (180 Hz) enters the sidechain,
+        // the 3.5 kHz click-beater no longer twitches the envelope.
+        self.kick_lp += self.kick_lp_a * (kick_abs - self.kick_lp);
+        let kick_detect = self.kick_lp.abs();
+        // Attack is smoothed (2 ms): the hit's front edge doesn't produce wideband
+        // hash in the envelope, while the groove doesn't suffer — the decay is the same.
+        let a = if kick_detect > self.kick_env {
             self.duck_attack
         } else {
             self.duck_release
         };
-        self.kick_env = kick_abs.abs() + (self.kick_env - kick_abs.abs()) * a;
+        self.kick_env = kick_detect + (self.kick_env - kick_detect) * a;
         if self.kick_env < 1e-12 {
             self.kick_env = 0.0;
         }
 
-        // Проход 2: остальные голоса с пригибанием по ролям.
-        // Немой и полностью затихший голос пропускаем вообще:
-        // исключенный слот не тратит DSP. Замьюченный, но еще
-        // звучащий хвост продвигаем без вклада, чтобы включение
-        // не выстрелило протухшим звуком.
+        // Pass 2: the remaining voices with ducking by role.
+        // We skip a silent and fully faded-out voice entirely:
+        // an excluded slot spends no DSP. A muted but still
+        // sounding tail is advanced with no contribution, so re-enabling
+        // doesn't fire a stale sound.
         let mut mix_l = kick_l;
         let mut mix_r = kick_r;
         for (pos, inst) in self.instruments.iter_mut().enumerate() {
             if self.is_kick[pos] {
                 continue;
             }
-            let vol = Self::volume_of(volumes, inst.id());
+            let vol = Self::vol_of(cache, inst.id());
             if vol > 0.0 {
                 let duck = duck_gain(inst.role(), self.kick_env, self.duck_mult);
                 let (l, r) = inst.next_sample_stereo();
@@ -249,11 +294,11 @@ impl RenderState {
             }
         }
 
-        // Чистый микс — сразу в комнату, без дилэя-прослойки.
+        // The clean mix goes straight to the room, with no delay in between.
         let (wet_l, wet_r) = self.space.process(mix_l, mix_r);
-        // Срез верхов от стиля: lofi мутный, club хирургический.
-        // Цель сглажена: прыжок на границе секции (свип формы) едет
-        // ~120 мс, а не ступенькой в коэффициент фильтра.
+        // Style's high-cut: lofi is murky, club is surgical.
+        // The target is smoothed: a jump at a section boundary (form sweep) travels
+        // over ~120 ms rather than stepping into the filter coefficient.
         let target = treble_hz.clamp(2000.0, 20000.0);
         if self.treble_smooth <= 0.0 {
             self.treble_smooth = target;
@@ -263,36 +308,36 @@ impl RenderState {
         let sr = self.sample_rate;
         let (t_l, _, _) = self.treble_l.process(wet_l, treble, 0.7, sr);
         let (t_r, _, _) = self.treble_r.process(wet_r, treble, 0.7, sr);
-        // Мастер-HP: инфраниз и постоянка вон (хрип динамиков),
-        // музыка начинается с 32 Гц (808) — не задето.
+        // Master HP: infrabass and DC out (speaker rasp),
+        // music starts at 32 Hz (808) — untouched.
         let (_, _, h_l) = self.hp_l.process(t_l, 28.0, 0.7, sr);
         let (_, _, h_r) = self.hp_r.process(t_r, 28.0, 0.7, sr);
-        // Лимитер последним: мейкап тела + потолок пиков, затем tanh.
+        // Limiter last: body makeup + peak ceiling, then tanh.
         let (l_l, l_r) = self.limiter.process(h_l, h_r, sr);
         (master_sample(l_l), master_sample(l_r))
     }
 }
 
-/// Насос выходного потока: блоковая подготовка (ноты из очереди,
-/// эффективные громкости, живые FX) + посэмпловый рендер с фейдом паузы.
+/// Output stream pump: block preparation (notes from the queue,
+/// effective volumes, live FX) + per-sample render with a pause fade.
 ///
-/// Один код для всех форматов сэмплов: часть Android-девайсов отдает
-/// только I16/U16, и мономорфный F32-поток там не строился (тишина
-/// без видимой ошибки). Конвертация — в тонких замыканиях `run`.
+/// One code path for all sample formats: some Android devices deliver
+/// only I16/U16, and a monomorphic F32 stream couldn't be built there (silence
+/// with no visible error). Conversion lives in thin `run` closures.
 ///
-/// Потолок разбора очереди за подготовку блока (см. begin_block).
+/// Cap on queue draining during block preparation (see begin_block).
 const MAX_DRAIN_PER_BLOCK: u64 = 32;
-/// Потолок выстрелов due-нот за один кадр (см. next_frame): аккордовые
-/// стеки (3–4 ноты с одним due) проходят целиком, пачка после stall'а
-/// растягивается по кадрам вместо удара в один сэмпл.
+/// Cap on due-note fires in one frame (see next_frame): chord
+/// stacks (3–4 notes with one due) pass in full, while a batch after a stall
+/// is spread over frames instead of hitting in one sample.
 const MAX_FIRES_PER_FRAME: usize = 8;
-/// Давность due-расписания, после которой нота считается протухшей
-/// и дропается (см. next_frame). 250 мс: дольше 16-й при 60 BPM —
-/// играть её уже значит врать ритм.
+/// Age of the due schedule after which a note counts as stale
+/// and is dropped (see next_frame). 250 ms: longer than a 16th at 60 BPM —
+/// playing it then would be lying about the rhythm.
 const MAX_LATE_SECS: f32 = 0.25;
 pub(crate) struct Pump {
     queue: Arc<ArrayQueue<NoteEvent>>,
-    /// Метки шагов (честная длина каждого шага): по ним сетка времени.
+    /// Step stamps (honest length of each step): the time grid is built from them.
     marks: Arc<ArrayQueue<crate::composer::StepMark>>,
     mixer: Arc<RwLock<MixerState>>,
     is_paused: Arc<AtomicBool>,
@@ -307,44 +352,44 @@ pub(crate) struct Pump {
     counters: EngineCounters,
     logged_first: bool,
     filter_open: Arc<RwLock<f32>>,
-    /// Флаг «сбросить голоса»: смена сида или стиля обрывает старую
-    /// генерацию (хвосты и реверб) — так просит слушатель.
+    /// "Reset voices" flag: a seed or style change cuts off the old
+    /// generation (tails and reverb) — as the listener requested.
     voice_reset: Arc<AtomicBool>,
-    /// Отложенные ноты (due-кадр, порядок, нота), по возрастанию due.
-    /// Насос стреляет нотой точно в ее медиакадр, а не когда разобрал
-    /// очередь: таймингом владеет бэкенд, фронт — только байты.
-    /// Порядок внутри одного кадра — порядок генерации (кик первым):
-    /// движок грузит голоса по порядку, и сортировка по id инструмента
-    /// этот порядок ломала. Емкость зарезервирована заранее: аудиоколбэк
-    /// не аллоцирует.
+    /// Deferred notes (due frame, order, note), sorted by ascending due.
+    /// The pump fires a note exactly at its media frame, not when it
+    /// drained the queue: timing is owned by the backend, the frontend only by bytes.
+    /// Order within one frame is generation order (kick first):
+    /// the engine loads voices in order, and sorting by instrument id
+    /// broke that order. Capacity is reserved up front: the audio callback
+    /// doesn't allocate.
     pending: Vec<(u64, u64, NoteEvent)>,
-    /// Счетчик порядка: монотонный, чтобы равные due сохраняли порядок
-    /// появления (сортировка нестабильная, порядок не гарантирован).
+    /// Order counter: monotonic so equal dues preserve their
+    /// arrival order (sorting is unstable, order isn't guaranteed).
     pending_seq: u64,
-    /// Сетка построена по меткам шагов (точный тайминг). Тогда ноты
-    /// в сетку не пишутся: метка уже дала длину этого шага.
+    /// The grid is built from step stamps (exact timing). Then notes
+    /// aren't written into the grid: the stamp already gave this step's length.
     marks_used: bool,
-    /// Диагностика тайминга: ноты, выстрелившие заметно позже своей
-    /// доли (ритм спотыкается), и пере-якорения сетки (генератор
-    /// отстал — расписание пересобралось на текущем кадре).
+    /// Timing diagnostics: notes that fired noticeably later than their
+    /// beat (the rhythm stumbles), and grid re-anchors (the generator
+    /// fell behind — the schedule was rebuilt on the current frame).
     late_notes: u64,
     reanchors: u64,
-    /// Ноты текущего блока до слияния с `pending`: переиспользуемый
-    /// буфер, чтобы `begin_block` не аллоцировал в аудио-пути.
+    /// Notes of the current block before merging with `pending`: a reusable
+    /// buffer so `begin_block` doesn't allocate in the audio path.
     fresh: Vec<(u64, u64, NoteEvent)>,
-    /// Медиачасы: отрендеренные кадры. Монотонны, дрейфа нет.
+    /// Media clock: rendered frames. Monotonic, no drift.
     media_cursor: u64,
-    /// Якорь сетки: какому шагу соответствует какой кадр.
-    /// Ставится по первой штампованной ноте сухого потока;
-    /// пока поток сух — следующая нота стартует «сейчас».
+    /// Grid anchor: which step corresponds to which frame.
+    /// Set from the first stamped note of the dry stream;
+    /// while the stream is dry the next note starts "now".
     anchor_step: u64,
     anchor_frame: u64,
     anchored: bool,
-    /// Карта длин шагов (шаг → кадры): свинг делает шаги неравными,
-    /// линейная формула от якоря врала тем сильнее, чем дальше нота.
-    /// Суммируем истинные длины от якоря — сетка точна всегда,
-    /// ре-якорь нужен только на реальных срывах, а не каждый свинг.
-    /// Кольцо последних 256 шагов; вытесненное сворачиваем в якорь.
+    /// Step-length map (step → frames): swing makes steps unequal,
+    /// the linear formula from the anchor lied more the farther the note was.
+    /// We sum the true lengths from the anchor — the grid is always exact,
+    /// re-anchoring is only needed on real breaks, not on every swing.
+    /// Ring of the last 256 steps; evicted entries are folded into the anchor.
     step_grid: std::collections::VecDeque<(u64, u64)>,
 }
 
@@ -363,8 +408,8 @@ impl Pump {
         filter_open: Arc<RwLock<f32>>,
         voice_reset: Arc<AtomicBool>,
     ) -> Self {
-        // Старт gain от фактической паузы: пересоздание потока в паузе
-        // не должно выстреливать 10 мс громкого звука.
+        // Start gain from the actual pause: recreating the stream while paused
+        // must not fire 10 ms of loud sound.
         let paused_now = is_paused.load(Ordering::Relaxed);
         Self {
             queue,
@@ -377,8 +422,8 @@ impl Pump {
             volumes: [(0usize, 0.0f32); MAX_ACTIVE_TRACKS],
             volume_count: 0,
             treble: MasterFx::default().treble_hz,
-            // Гейн паузы: переход play/pause идет 10-миллисекундным
-            // фейдом, а не рубкой в ноль (та рубка и была щелчком).
+            // Pause gain: the play/pause transition goes through a 10 ms
+            // fade, not a hard cut to zero (that cut was the click).
             pause_gain: if paused_now { 0.0 } else { 1.0 },
             pause_step: 1.0 / (0.01 * sample_rate),
             counters,
@@ -399,8 +444,8 @@ impl Pump {
         }
     }
 
-    /// Перенастройка насоса на новую частоту вывода (реконнект):
-    /// состояние микса сохраняется, гейны не рвутся.
+    /// Retuning the pump to a new output rate (reconnect):
+    /// mix state is preserved, gains don't tear.
     pub(crate) fn retune(&mut self, sample_rate: f32) {
         self.state.retune(sample_rate);
         self.pause_step = 1.0 / (0.01 * self.state.sample_rate);
@@ -410,16 +455,16 @@ impl Pump {
         self.state.sample_rate()
     }
 
-    /// Длина due-расписания (нот ждет свой медиакадр).
+    /// Length of the due schedule (notes waiting for their media frame).
     pub(crate) fn pending_len(&self) -> usize {
         self.pending.len()
     }
 
-    /// Подготовка блока: ноты, громкости, живые FX и время эха.
+    /// Block preparation: notes, volumes, live FX and echo time.
     fn begin_block(&mut self) {
-        // Накопленные счетчики диагностики тайминга — в общие (раз
-        // в блок, а не на каждую ноту: аудиопоток не должен трогать
-        // атомики в горячем цикле).
+        // Accumulated timing-diagnostic counters go into the shared ones (once
+        // per block, not per note: the audio stream must not touch
+        // atomics in the hot loop).
         if self.late_notes > 0 {
             self.counters
                 .late
@@ -432,12 +477,12 @@ impl Pump {
                 .fetch_add(self.reanchors, Ordering::Relaxed);
             self.reanchors = 0;
         }
-        // try_read, не блокирующий lock: аудиопоток не ждет жест UI.
-        // Свежие громкости подхватит следующий блок (~10 мс) — на слух
-        // мгновенно, зато редкая запись микшера не рвет DSP.
+        // try_read, not a blocking lock: the audio stream doesn't wait on a hard UI.
+        // Fresh volumes are picked up by the next block (~10 ms) — imperceptibly
+        // fast, while rare mixer writes don't tear the DSP.
         if let Ok(state) = self.mixer.try_read() {
-            // Эффективные громкости через volume_for, чтобы логика
-            // mute жила в одном месте (MixerState).
+            // Effective volumes via volume_for, so the mute logic
+            // lives in one place (MixerState).
             self.volume_count = 0;
             for id in state.tracks.keys() {
                 if self.volume_count < MAX_ACTIVE_TRACKS {
@@ -447,10 +492,10 @@ impl Pump {
             }
         }
         let mut eaten = 0u64;
-        // Метки шагов идут первыми: по ним сетка времени точная (каждый
-        // шаг, а не только шаги с нотами) и по ним же ставится привязка:
-        // «шаг начался сейчас» — это текущий медиакадр, а не кадр первой
-        // ноты (она может прийти на шаг позже).
+        // Step stamps go first: from them the time grid is exact (every
+        // step, not just steps with notes), and the anchor is set from them too:
+        // "the step started now" is the current media frame, not the frame of the
+        // first note (which may arrive a step later).
         let mut marks_read = 0u64;
         while let Some(mark) = self.marks.pop() {
             marks_read += 1;
@@ -459,8 +504,8 @@ impl Pump {
             if self.step_grid.back().map(|(s, _)| *s) == Some(mark.step) {
                 continue;
             }
-            // Сетка от новой шкалы: старую чистим целиком (живой сид/стиль
-            // начинает нумерацию заново — иначе длины уедут вперёд).
+            // Grid from the new scale: we clear the old one entirely (a live seed/style
+            // restarts numbering — otherwise the lengths run ahead).
             if mark.step < self.anchor_step
                 || self
                     .step_grid
@@ -472,14 +517,14 @@ impl Pump {
                 self.anchored = false;
             }
             if !self.anchored {
-                // Привязка по метке: шаг начался на этом кадре.
+                // Anchor by stamp: the step started on this frame.
                 self.anchor_step = mark.step;
                 self.anchor_frame = self.media_cursor;
                 self.anchored = true;
             }
             self.step_grid.push_back((mark.step, frames));
-            // Вытеснение с fold: старое сворачиваем в якорь,
-            // сетка от него остается точной.
+            // Eviction with fold: we fold the old part into the anchor,
+            // the grid from it stays exact.
             while self.step_grid.len() > 256 {
                 if let Some((s, f)) = self.step_grid.pop_front() {
                     if s >= self.anchor_step {
@@ -492,13 +537,13 @@ impl Pump {
             }
         }
         let _ = marks_read;
-        // Потолок разбора за вызов: backlog после stall'а раскладывается
-        // по субблокам (~12мс друг от друга — почти вовремя), а не
-        // выстреливает разом. Живой поток (<32 нот на 12мс невозможны
-        // музыкально) потолок не замечает.
-        // Штампованные ноты уходят в due-расписание (точное время),
-        // legacy без штампа (тесты, прямые вызовы) — сразу в голоса.
-        // Буфер `fresh` переиспользуется: никаких аллокаций в блоке.
+        // Per-call drain cap: a backlog after a stall is spread
+        // over subblocks (~12 ms apart — almost on time), rather than
+        // firing all at once. A live stream (<32 notes in 12 ms is musically
+        // impossible) doesn't notice the cap.
+        // Stamped notes go into the due schedule (exact time),
+        // legacy notes without a stamp (tests, direct calls) — straight into voices.
+        // The `fresh` buffer is reused: no allocations in a block.
         self.fresh.clear();
         while eaten < MAX_DRAIN_PER_BLOCK {
             let Some(note) = self.queue.pop() else {
@@ -508,16 +553,16 @@ impl Pump {
                 self.state.push_note(&note);
             } else {
                 let step_frames = note.step_us as u64 * self.state.sample_rate() as u64 / 1_000_000;
-                // Сброс нумерации шагов: живой сид/стиль заново начинает
-                // форму с due_step 0. Обычный поток монотонен (аккорды
-                // одного шага — дубликаты), поэтому шаг позади последнего
-                // в сетке — именно новая шкала, а не опоздавшая нота.
-                // Сетку старой шкалы нельзя сворачивать в якорь: её длины
-                // уедут в расписание на десятки секунд вперед (тишина
-                // после смены сида), поэтому чистим её целиком.
-                // Когда сетка идет по меткам, сброс ловим там же: метки
-                // приходят пачками впереди нот, и «шаг позади хвоста» —
-                // норма, а не сброс шкалы.
+                // Step numbering reset: a live seed/style restarts the
+                // form at due_step 0. A normal stream is monotonic (chords
+                // of one step are duplicates), so a step behind the last one
+                // in the grid means a new scale, not a late note.
+                // The old scale's grid can't be folded into the anchor: its lengths
+                // would push the schedule tens of seconds ahead (silence
+                // after a seed change), so we clear it entirely.
+                // When the grid runs on stamps, we catch the reset there too: stamps
+                // arrive in batches ahead of notes, and "a step behind the tail" is
+                // normal, not a scale reset.
                 let numbering_reset = !self.marks_used
                     && (note.due_step < self.anchor_step
                         || self
@@ -528,17 +573,17 @@ impl Pump {
                 if numbering_reset {
                     self.step_grid.clear();
                 }
-                // Карта длин: шаг уже видели — длина та же, дубликат
-                // пропускаем; новый — кладем в хвост (шаги идут по порядку).
-                // Если сетка идет по меткам, ноты в нее не пишем: длину
-                // шага уже дала метка (иначе шаг задваивался, и тайминг
-                // плыл — в полтора раза медленнее сетки).
+                // Length map: if we've seen the step, the length is the same, we skip
+                // the duplicate; if it's new, we append it to the tail (steps go in order).
+                // If the grid runs on stamps, we don't write notes into it: the stamp
+                // already gave the step length (otherwise the step was doubled and the timing
+                // drifted — one and a half times slower than the grid).
                 if !self.marks_used && self.step_grid.back().map(|(s, _)| *s) != Some(note.due_step)
                 {
                     self.step_grid
                         .push_back((note.due_step, step_frames.max(1)));
-                    // Вытеснение с fold: старое сворачиваем в якорь,
-                    // сетка от него остается точной.
+                    // Eviction with fold: we fold the old part into the anchor,
+                    // the grid from it stays exact.
                     while self.step_grid.len() > 256 {
                         if let Some((s, f)) = self.step_grid.pop_front() {
                             if s >= self.anchor_step {
@@ -550,9 +595,9 @@ impl Pump {
                         }
                     }
                 }
-                // Точная сетка: суммируем истинные длины шагов от якоря
-                // до шага ноты. Неизвестный хвост (разрыв) — линейно
-                // текущей длиной; сброс нумерации — сразу в якорь.
+                // Exact grid: sum the true step lengths from the anchor
+                // to the note's step. An unknown tail (a gap) — linearly with the
+                // current length; a numbering reset — straight into the anchor.
                 let mut due = self.anchor_frame;
                 if !numbering_reset && note.due_step >= self.anchor_step {
                     let mut cursor = self.anchor_step;
@@ -566,27 +611,27 @@ impl Pump {
                     due = due
                         .saturating_add(note.due_step.saturating_sub(cursor) * step_frames.max(1));
                 }
-                // Привязка ставится по первой штампованной ноте и
-                // держится, пока сетка актуальна: опоздание больше шага
-                // (смена темпа, догон после stall'а) — «сейчас», а не
-                // накопленная ошибка. Пустой pending — не повод
-                // ре-якориться: разреженные ноты (пэды, паузы формы)
-                // приходят на свою долю общей сетки, а не «сейчас».
+                // The anchor is set from the first stamped note and
+                // holds while the grid is current: a delay longer than a step
+                // (tempo change, catch-up after a stall) means "now", not
+                // accumulated error. An empty pending isn't a reason
+                // to re-anchor: sparse notes (pads, form pauses)
+                // arrive at their beat of the shared grid, not "now".
                 if numbering_reset
                     || !self.anchored
                     || due.saturating_add(step_frames.max(1)) < self.media_cursor
                 {
                     if self.anchored && !numbering_reset {
-                        // Пере-якорение на живом потоке: генератор отстал
-                        // больше чем на шаг (stall, смена темпа, догон).
-                        // Это и есть «ритм сбился»: расписание переехало
-                        // на текущий кадр. Считаем — видно в баннере.
+                        // Re-anchoring on a live stream: the generator fell behind
+                        // by more than a step (stall, tempo change, catch-up).
+                        // That's exactly "the rhythm stumbled": the schedule moved
+                        // to the current frame. We count it — visible in the banner.
                         self.reanchors += 1;
                     }
                     self.anchor_step = note.due_step;
                     self.anchor_frame = self.media_cursor;
                     self.anchored = true;
-                    // Карта старше якоря — мусор: чистим, память не растет.
+                    // A map older than the anchor is garbage: we clean it, memory doesn't grow.
                     while self
                         .step_grid
                         .front()
@@ -604,11 +649,11 @@ impl Pump {
         }
         if !self.fresh.is_empty() {
             self.pending.append(&mut self.fresh);
-            // Unstable-сортировка не аллоцирует (в отличие от stable):
-            // в аудио-колбэке это важнее. Порядок равных due задаёт
-            // счетчик: ноты одного кадра остаются в порядке генерации
-            // (кик первым) — движок грузит голоса по порядку, и сортировка
-            // по id инструмента этот порядок ломала.
+            // Unstable sort doesn't allocate (unlike stable):
+            // in the audio callback that matters more. The order of equal dues is set by
+            // the counter: notes of one frame stay in generation order
+            // (kick first) — the engine loads voices in order, and sorting
+            // by instrument id broke that order.
             self.pending
                 .sort_unstable_by_key(|(due, seq, _)| (*due, *seq));
         }
@@ -618,34 +663,34 @@ impl Pump {
         let fx_now = snapshot(&self.fx);
         self.state.set_room(fx_now.reverb_wet, fx_now.reverb_size);
         self.state.set_duck_mult(fx_now.sidechain);
-        // Свип формы: открытость 0..1 маппим на долю базового среза.
-        // Закрытый фильтр (~1/8 базы) — глухое интро, открытый — дроп.
+        // Form sweep: openness 0..1 mapped onto a fraction of the base high-cut.
+        // A closed filter (~1/8 of base) is a dull intro, an open one is the drop.
         let open = snapshot(&self.filter_open).clamp(0.0, 1.0);
         self.treble = fx_now.treble_hz * openness_gain(open);
-        // Живой темп публикуется композером (bpm_out) и читается здесь
-        // для будущих темповых фич (эхо вернётся с сеткой от него же).
+        // The live tempo is published by the composer (bpm_out) and read here
+        // for future tempo features (the echo will return with a grid from it too).
         let _live_bpm =
             snapshot(&self.bpm).clamp(crate::core::MIN_TEMPO_BPM, crate::core::MAX_TEMPO_BPM);
     }
 
-    /// Один стерео-фрейм f32 с подвижкой фейда паузы.
-    /// Перед рендером стреляют due-ноты, чье время пришло.
+    /// One stereo f32 frame with the pause fade advanced.
+    /// Before rendering, due notes whose time has come are fired.
     ///
-    /// Защита от залпа после stall'а: за кадр выстреливает не больше
-    /// [`MAX_FIRES_PER_FRAME`] нот, остаток догоняет в следующих кадрах
-    /// (растяжка на единицы мс вместо удара всей пачкой в один сэмпл —
-    /// пачка рвала полифонию/кражи и звучала хрипом). Ноты, опоздавшие
-    /// больше [`MAX_LATE_SECS`], дропаются молча: играть такт
-    /// трёхсекундной давности после подвиса — хуже, чем пропустить.
+    /// Guard against a volley after a stall: at most
+    /// [`MAX_FIRES_PER_FRAME`] notes fire in one frame, the rest catch up in later frames
+    /// (a stretch of a few ms instead of the whole batch in one sample —
+    /// the batch broke polyphony/theft and sounded raspy). Notes late by
+    /// more than [`MAX_LATE_SECS`] are dropped silently: playing a bar
+    /// three seconds old after a freeze is worse than skipping it.
     fn next_frame(&mut self) -> (f32, f32) {
         let late_limit = (self.state.sample_rate() * MAX_LATE_SECS) as u64;
-        // Явно поздно (больше восьми части шага): слышно как сбой ритма.
-        // Квант аудиоблока (10-46 мс) сюда не попадает — это нормальная
-        // задержка доставки, а не сбитый ритм.
+        // Clearly late (more than an eighth of a step): audible as a rhythm glitch.
+        // The audio-block quantum (10-46 ms) doesn't count — that's normal
+        // delivery latency, not a broken rhythm.
         let step_late_limit = (self.state.sample_rate() * 0.125) as u64;
-        // Сколько головных нот снимаем в этом кадре: просроченные
-        // дропаются, звучащие ограничены [`MAX_FIRES_PER_FRAME`].
-        // `drain` вместо `remove(0)` — без сдвига хвоста на каждую ноту.
+        // How many head notes we take in this frame: stale ones
+        // are dropped, firing ones are limited by [`MAX_FIRES_PER_FRAME`].
+        // `drain` instead of `remove(0)` — no shifting of the tail on every note.
         let mut take = 0usize;
         let mut fired = 0usize;
         while let Some((due, _, _)) = self.pending.get(take) {
@@ -663,13 +708,13 @@ impl Pump {
         }
         if take > 0 {
             for (due, _, note) in self.pending.drain(..take) {
-                // Протухшие дропаем: играть давно прошедшее — врать ритм.
+                // Stale ones we drop: playing long-past events is lying about the rhythm.
                 let lateness = self.media_cursor.saturating_sub(due);
                 if lateness <= late_limit {
                     self.state.push_note(&note);
-                    // Опоздание больше четверти шага — слышно: нота
-                    // встала не на свою долю. Считаем отдельно от
-                    // «протухших» (их дропаем) — это диагностика ритма.
+                    // A delay longer than a quarter of a step is audible: the note
+                    // landed off its beat. We count it separately from
+                    // "stale" ones (which we drop) — this is rhythm diagnostics.
                     if lateness > step_late_limit {
                         self.late_notes += 1;
                     }
@@ -695,15 +740,15 @@ impl Pump {
         (l * self.pause_gain, r * self.pause_gain)
     }
 
-    /// Заливка блока колбэка. Полная пауза: тишина, DSP заморожен.
+    /// Filling a callback block. Full pause: silence, DSP frozen.
     pub(crate) fn fill<T>(&mut self, data: &mut [T], channels: usize, conv: fn(f32) -> T) {
         let target = if self.is_paused.load(Ordering::Relaxed) {
             0.0
         } else {
             1.0
         };
-        // Кадры считаем в обеих ветках: для диагностики важно знать,
-        // что колбэк вообще вызывается, даже в тишине паузы.
+        // We count frames in both branches: for diagnostics it matters to know
+        // the callback is called at all, even in the silence of a pause.
         let frames_in_block = data.len() / channels.max(1);
         if !self.logged_first {
             self.logged_first = true;
@@ -713,8 +758,8 @@ impl Pump {
             for sample in data.iter_mut() {
                 *sample = conv(0.0);
             }
-            // В глухой паузе расписание сбрасывается: выход из нее —
-            // новые ноты «сейчас», а не догоняющий залп старого плана.
+            // In a dead pause the schedule is reset: leaving it means
+            // new notes "now", not a catch-up volley from the old plan.
             self.pending.clear();
             self.anchored = false;
             self.counters
@@ -723,8 +768,8 @@ impl Pump {
             return;
         }
         self.begin_block();
-        // Смена сида или стиля: старая генерация обрывается — голоса и
-        // хвост комнаты гаснут, а не доигрывают поверх новой.
+        // Seed or style change: old generation is cut off — voices and
+        // the room tail fade out rather than playing over the new one.
         if self.voice_reset.swap(false, Ordering::Relaxed) {
             self.state.reset_voices();
         }
@@ -748,25 +793,67 @@ pub(crate) fn f32_identity(x: f32) -> f32 {
     x
 }
 
-/// Маппинг открытости фильтра в долю среза верхов: 0 → 1/8 базы
-/// (глухое интро), 1 → полный срез стиля (раскрытый дроп).
-/// Чистая функция — тестируется без аудио.
+/// Mapping of filter openness onto a fraction of the high-cut: 0 → 1/8 of base
+/// (dull intro), 1 → the style's full cut (opened-up drop).
+/// Pure function — testable without audio.
 fn openness_gain(open: f32) -> f32 {
     0.125 + 0.875 * open.clamp(0.0, 1.0)
 }
 
+#[cfg(test)]
 fn f32_to_i16(x: f32) -> i16 {
     (x.clamp(-1.0, 1.0) * 32767.0) as i16
 }
 
+/// TPDF dither: two independent uniform noises in [-0.5, 0.5] LSB.
+/// Without dither a quiet tail/reverb quantizes into steps and audibly
+/// becomes "8-bit" (especially noticeable on decay).
+/// The generator is splitmix64 from a fixed seed: the audio path
+/// is deterministic, no rand/SystemTime.
+static DITHER_STATE: AtomicU64 = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+
+#[inline]
+fn dither_lsb() -> f32 {
+    let mut old = DITHER_STATE.load(Ordering::Relaxed);
+    let next = old
+        .wrapping_add(0x9e37_79b9_7f4a_7c15)
+        .wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    loop {
+        match DITHER_STATE.compare_exchange_weak(old, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(v) => {
+                old = v;
+            }
+        }
+    }
+    let mut z = next;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    ((z >> 11) as f32 * (1.0 / ((1u64 << 53) as f32))) - 0.5
+}
+
+fn f32_to_i16_dither(x: f32) -> i16 {
+    let d = dither_lsb() + dither_lsb();
+    let y = x.clamp(-1.0, 1.0) * 32767.0 + d;
+    y.round().clamp(-32768.0, 32767.0) as i16
+}
+
+#[cfg(test)]
 fn f32_to_u16(x: f32) -> u16 {
-    // −1 → 0, 0 → 32768, +1 → 65535: беззнаковый PCM без перекоса
-    // (старая формула `* 32767 + 32768` давала −1 → 1).
+    // −1 → 0, 0 → 32768, +1 → 65535: unsigned PCM without bias
+    // (the old formula `* 32767 + 32768` gave −1 → 1).
     ((x.clamp(-1.0, 1.0) + 1.0) * 32767.5).round() as u16
 }
 
-/// Приоритет конфига: F32-стерео ближе к 48 кГц — первым.
-/// Чистая функция на обычных значениях (тестируется без аудио).
+fn f32_to_u16_dither(x: f32) -> u16 {
+    let d = dither_lsb() + dither_lsb();
+    let y = (x.clamp(-1.0, 1.0) + 1.0) * 32767.5 + d;
+    y.round().clamp(0.0, 65535.0) as u16
+}
+
+/// Config priority: F32 stereo closer to 48 kHz — first.
+/// Pure function on ordinary values (testable without audio).
 fn config_score(sample_format: SampleFormat, channels: u16, max_rate: u32) -> (u8, u16, u32) {
     let fmt = match sample_format {
         SampleFormat::F32 => 0,
@@ -779,14 +866,14 @@ fn config_score(sample_format: SampleFormat, channels: u16, max_rate: u32) -> (u
     (fmt, ch, rate_dist)
 }
 
-/// Выбор конфигурации выхода: F32-стерео preferred, иначе первый
-/// поддерживаемый формат (конвертация — в `Pump::fill`).
+/// Output config choice: F32 stereo preferred, otherwise the first
+/// supported format (conversion is in `Pump::fill`).
 fn pick_output_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, String> {
-    // Кандидаты: сначала дефолт устройства (так делает рабочий v1),
-    // затем все перечисленные по приоритету. getMinBufferSize на части
-    // телефонов врет (F32 числится, а Oboe его не открывает), поэтому
-    // побеждает первый РЕАЛЬНО открывающийся конфиг, а не первый
-    // из списка.
+    // Candidates: first the device default (as the working v1 does),
+    // then everything enumerated by priority. getMinBufferSize lies on some
+    // phones (F32 is listed but Oboe won't open it), so the winner is the first
+    // config that ACTUALLY opens, rather than the first
+    // in the list.
     let mut candidates: Vec<cpal::SupportedStreamConfig> = Vec::new();
     let mut seen: Vec<(u8, u16, u32)> = Vec::new();
     let mut push_unique = |c: cpal::SupportedStreamConfig| {
@@ -823,8 +910,8 @@ fn pick_output_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConf
         .ok_or_else(|| "no supported output config (all rejected by device)".to_string())
 }
 
-/// Холостое открытие: проверяет, что конфиг реально берется Oboe.
-/// Тихий колбэк, поток сразу дропается.
+/// Dry run: checks that the config is actually accepted by Oboe.
+/// A silent callback, the stream is dropped immediately.
 fn probe_output(device: &cpal::Device, config: &cpal::SupportedStreamConfig) -> bool {
     let cfg: cpal::StreamConfig = config.config();
     let ok = match config.sample_format() {
@@ -852,7 +939,7 @@ fn probe_output(device: &cpal::Device, config: &cpal::SupportedStreamConfig) -> 
 
 pub struct AudioEngine {
     queue: Arc<ArrayQueue<NoteEvent>>,
-    /// Метки шагов: по ним насос строит точную сетку времени.
+    /// Step stamps: the pump builds the exact time grid from them.
     marks: Arc<ArrayQueue<crate::composer::StepMark>>,
     instruments: Vec<Box<dyn Instrument>>,
     mixer: Arc<RwLock<MixerState>>,
@@ -863,8 +950,8 @@ pub struct AudioEngine {
     counters: EngineCounters,
     audio_config: Arc<RwLock<String>>,
     filter_open: Arc<RwLock<f32>>,
-    /// Флаг «сбросить голоса»: смена сида или стиля обрывает старую
-    /// генерацию (хвосты и реверб) — так просит слушатель.
+    /// "Reset voices" flag: a seed or style change cuts off the old
+    /// generation (tails and reverb) — as the listener requested.
     voice_reset: Arc<AtomicBool>,
 }
 
@@ -904,14 +991,14 @@ impl AudioEngine {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
-            .ok_or("Аудиоустройство не найдено")?;
+            .ok_or("Audio device not found")?;
         let counters = self.counters.clone();
 
-        // Насос живет отдельно от потока (shared): при пересоздании потока
-        // (воткнули/выдернули наушники, звонок, затык драйвера) голоса,
-        // сайдчейн и фейды не рвутся — меняется только выход.
-        // Мьютекс здесь без конкуренции: движок трогает насос только
-        // между потоками, колбэк — только внутри потока.
+        // The pump lives separately from the stream (shared): when the stream is
+        // recreated (headphones plugged/unplugged, a call, a driver hiccup) the voices,
+        // sidechain and fades don't tear — only the output changes.
+        // The mutex has no contention here: the engine touches the pump only
+        // between streams, the callback — only inside a stream.
         let pump = Arc::new(Mutex::new(Pump::new(
             self.queue,
             self.marks,
@@ -925,8 +1012,8 @@ impl AudioEngine {
             self.filter_open,
             self.voice_reset,
         )));
-        // Флаг обрыва: ставит колбэк ошибок cpal (отключили наушники —
-        // Oboe рвет поток). Сторожок ниже ловит и немые затыки.
+        // Break flag: set by cpal's error callback (headphones unplugged —
+        // Oboe tears down the stream). The watchdog below also catches silent stalls.
         let broken = Arc::new(AtomicBool::new(false));
 
         let mut first = true;
@@ -937,10 +1024,10 @@ impl AudioEngine {
             let config = match pick_output_config(&device) {
                 Ok(c) => c,
                 Err(e) => {
-                    // Стартовая неудача — честная ошибка наружу (красный
-                    // баннер), а не вечные ретраи при мертвом устройстве.
+                    // Startup failure — an honest error out (a red
+                    // banner), not endless retries on a dead device.
                     if first {
-                        return Err(format!("Выходной формат не подошел: {e}").into());
+                        return Err(format!("Output format unsuitable: {e}").into());
                     }
                     eprintln!("[engine] no output config, retrying: {e}");
                     std::thread::sleep(Duration::from_secs(2));
@@ -953,10 +1040,10 @@ impl AudioEngine {
                 .unwrap_or_else(|e| e.into_inner())
                 .retune(sample_rate);
 
-            // Описание выбора — в статистику (баннер покажет, какой конфиг
-            // взял движок) и в logcat для глубокой отладки.
+            // The choice's description — into stats (the banner shows which config
+            // the engine took) and into logcat for deeper debugging.
             let desc = format!(
-                "{} Гц, {:?}, {}ch",
+                "{} Hz, {:?}, {}ch",
                 sample_rate as u32,
                 config.sample_format(),
                 channels
@@ -968,12 +1055,12 @@ impl AudioEngine {
 
             let broken_flag = Arc::clone(&broken);
             broken.store(false, Ordering::Relaxed);
-            // В колбэке — блокирующий lock, а не try_lock с заливкой
-            // тишины: движок берет pump только при retune, до создания
-            // нового стрима (старый к этому моменту уже остановлен),
-            // поэтому реальной конкуренции нет. try_lock при редком
-            // совпадении вырубал целый блок в тишину — хуже короткого
-            // ожидания; инвариант держит поток звука непрерывным.
+            // In the callback — a blocking lock, not try_lock with a silence
+            // fill: the engine only takes the pump during retune, before creating
+            // the new stream (the old one is already stopped by then),
+            // so there's no real contention. try_lock on a rare overlap blanked
+            // a whole block into silence — worse than a short wait; the invariant
+            // keeps the stream of sound continuous.
             let stream = match config.sample_format() {
                 SampleFormat::F32 => {
                     let pump = Arc::clone(&pump);
@@ -1000,7 +1087,7 @@ impl AudioEngine {
                         move |data: &mut [i16], _| {
                             pump.lock()
                                 .unwrap_or_else(|e| e.into_inner())
-                                .fill(data, channels, f32_to_i16);
+                                .fill(data, channels, f32_to_i16_dither);
                         },
                         move |err| {
                             eprintln!("[Engine Error] {err}");
@@ -1016,7 +1103,7 @@ impl AudioEngine {
                         move |data: &mut [u16], _| {
                             pump.lock()
                                 .unwrap_or_else(|e| e.into_inner())
-                                .fill(data, channels, f32_to_u16);
+                                .fill(data, channels, f32_to_u16_dither);
                         },
                         move |err| {
                             eprintln!("[Engine Error] {err}");
@@ -1056,9 +1143,9 @@ impl AudioEngine {
             }
             first = false;
 
-            // Сторожок: обрыв без ошибки (молча вставшие колбэки) ловим
-            // по остановившемуся счетчику кадров. В паузе колбэки идут
-            // (тишина считается), ложных срабатываний нет.
+            // Watchdog: a break without an error (callbacks silently stopped) is caught
+            // by the stalled frame counter. In a pause callbacks still come
+            // (silence is counted), so there are no false positives.
             let mut last_frames = counters.frames.load(Ordering::Relaxed);
             let mut last_tick = Instant::now();
             loop {
@@ -1079,21 +1166,20 @@ impl AudioEngine {
                     break;
                 }
             }
-            // Пауза перед переоткрытием: даем маршруту переключиться.
+            // A pause before reopening: let the route switch over.
             std::thread::sleep(Duration::from_millis(500));
         }
     }
 }
 
-/// Глубина сайдчейна по ролям: бас качается сильнее всех,
-/// кик не давится никогда. `mult` — глубина стиля (рок давит,
-/// lofi дышит). Чистая функция — тестируется без аудио.
+/// Sidechain depth by role: the bass pumps hardest,
+/// the kick is never ducked. `mult` — the style's depth (rock pushes,
+/// lofi breathes). Pure function — testable without audio.
 pub(crate) fn duck_gain(role: InstrumentRole, kick_env: f32, mult: f32) -> f32 {
     let depth = match role {
         InstrumentRole::Bass => 0.6,
         InstrumentRole::Chords => 0.5,
         InstrumentRole::Lead => 0.4,
-        InstrumentRole::Vocal => 0.45,
         InstrumentRole::Hat => 0.25,
         InstrumentRole::Snare => 0.12,
         InstrumentRole::Texture => 0.0,
@@ -1102,13 +1188,15 @@ pub(crate) fn duck_gain(role: InstrumentRole, kick_env: f32, mult: f32) -> f32 {
     1.0 - mult.clamp(0.0, 2.0) * depth * (kick_env * DUCK_ENV_SCALE).min(1.0)
 }
 
-/// Мастер-обработка: мягкое насыщение вместо жесткого клиппинга.
-/// Никогда не превышает ±1, тихие сигналы почти не трогает.
+/// Master processing: soft saturation instead of hard clipping.
+/// Never exceeds ±1, barely touches quiet signals.
 pub(crate) fn master_sample(mixed: f32) -> f32 {
-    (mixed * MASTER_DRIVE).tanh()
+    // A 2048-point table instead of libm tanh per sample: interpolation
+    // error <1e-5 (inaudible), cost — two reads.
+    fast_tanh(mixed * MASTER_DRIVE)
 }
 
-/// Совместимая обертка над [`AudioEngine::run`].
+/// Compatibility wrapper over [`AudioEngine::run`].
 pub fn run_audio_engine(
     queue: Arc<ArrayQueue<NoteEvent>>,
     marks: Arc<ArrayQueue<crate::composer::StepMark>>,
@@ -1141,7 +1229,7 @@ mod tests {
     #[test]
     fn duck_curves_pump_bass_not_kick() {
         use crate::instruments::InstrumentRole;
-        // Тишина — никакого пригибания.
+        // Silence — no ducking at all.
         for role in [
             InstrumentRole::Bass,
             InstrumentRole::Kick,
@@ -1152,14 +1240,14 @@ mod tests {
         ] {
             assert_eq!(duck_gain(role, 0.0, 1.0), 1.0);
         }
-        // Удар кика: бас пригибается сильнее всех, кик не трогаем.
+        // A kick hit: the bass ducks hardest, the kick is untouched.
         let bass = duck_gain(InstrumentRole::Bass, 1.0, 1.0);
         let chords = duck_gain(InstrumentRole::Chords, 1.0, 1.0);
         let hat = duck_gain(InstrumentRole::Hat, 1.0, 1.0);
         assert!(bass < 0.5, "bass must pump: {bass}");
         assert!(bass < chords && chords < hat, "depth order broken");
         assert_eq!(duck_gain(InstrumentRole::Kick, 1.0, 1.0), 1.0);
-        // Монотонность: сильнее кик — глубже яма.
+        // Monotonicity: a stronger kick — a deeper dip.
         assert!(
             duck_gain(InstrumentRole::Bass, 1.0, 1.0) < duck_gain(InstrumentRole::Bass, 0.3, 1.0)
         );
@@ -1168,13 +1256,13 @@ mod tests {
     #[test]
     fn duck_mult_scales_style_pump() {
         use crate::instruments::InstrumentRole;
-        // Ноль — сайдчейна нет вообще (лоуфай дышит ровно).
+        // Zero — no sidechain at all (lofi breathes evenly).
         assert_eq!(duck_gain(InstrumentRole::Bass, 1.0, 0.0), 1.0);
-        // Больше — глубже яма (рок давит).
+        // More — deeper dip (rock pushes).
         let soft = duck_gain(InstrumentRole::Bass, 1.0, 0.5);
         let hard = duck_gain(InstrumentRole::Bass, 1.0, 1.5);
         assert!(hard < soft, "mult must deepen: {hard} vs {soft}");
-        // Кик не давится ни при каком множителе.
+        // The kick is never ducked at any multiplier.
         assert_eq!(duck_gain(InstrumentRole::Kick, 1.0, 2.0), 1.0);
     }
 
@@ -1182,10 +1270,10 @@ mod tests {
     fn master_never_clips_and_preserves_quiet() {
         assert!(master_sample(10.0) <= 1.0);
         assert!(master_sample(-10.0) >= -1.0);
-        // Тихий сигнал почти не тронут (линейная зона tanh).
+        // A quiet signal is barely touched (tanh's linear region).
         let quiet = master_sample(0.1);
         assert!((quiet - 0.1 * MASTER_DRIVE).abs() < 1e-3);
-        // Громкий микс сжат, а не срезан: монотонность сохраняется.
+        // A loud mix is compressed, not cut: monotonicity is preserved.
         assert!(master_sample(3.0) > master_sample(1.5));
     }
 
@@ -1210,6 +1298,37 @@ mod tests {
     }
 
     #[test]
+    fn tpdf_dither_breaks_quantization_staircase() {
+        // A very quiet signal without dither quantizes to one
+        // repeated value; with TPDF dither the low bit "breathes" while staying
+        // within ±1 LSB of the ideal.
+        let vals: Vec<i16> = (0..4000).map(|_| f32_to_i16_dither(0.00002)).collect();
+        let min = *vals.iter().min().unwrap();
+        let max = *vals.iter().max().unwrap();
+        assert!(max - min >= 1, "dither did nothing: {min}..{max}");
+        assert!(min >= -2 && max <= 2, "dither too loud: {min}..{max}");
+        // Full scale isn't broken: +1 is still 32767.
+        assert!((f32_to_i16_dither(1.0) as i32) <= 32767);
+        assert!((f32_to_i16_dither(-1.0) as i32) >= -32767);
+    }
+
+    #[test]
+    fn volume_lookup_is_indexed_by_id() {
+        let mut state = RenderState::new(Vec::new(), 44_100.0);
+        state.sync_volumes(&[(2, 0.3), (14, 0.7)]);
+        assert_eq!(RenderState::vol_of(&state.vol_cache, 2), 0.3);
+        assert_eq!(RenderState::vol_of(&state.vol_cache, 14), 0.7);
+        assert_eq!(RenderState::vol_of(&state.vol_cache, 7), 0.0);
+        // Repeating the same values doesn't rebuild the table (same key).
+        let key = state.vol_key;
+        state.sync_volumes(&[(2, 0.3), (14, 0.7)]);
+        assert_eq!(state.vol_key, key);
+        state.sync_volumes(&[(2, 0.5)]);
+        assert_eq!(RenderState::vol_of(&state.vol_cache, 2), 0.5);
+        assert_eq!(RenderState::vol_of(&state.vol_cache, 14), 0.0);
+    }
+
+    #[test]
     fn sample_conversions_span_full_scale() {
         assert_eq!(f32_to_i16(0.0), 0);
         assert_eq!(f32_to_i16(1.0), 32767);
@@ -1223,10 +1342,10 @@ mod tests {
 
     #[test]
     fn swing_grid_lands_on_accumulated_steps() {
-        // Сетка точнее линейки: чередующиеся длинные/короткие шаги
-        // (свинг) суммируются, а не умножаются текущей длиной.
-        // Шаги 0..4 длинами 100/50/100/50мс: ноты должны встать
-        // на 0/4410/6615/11025 кадров (@44100), а не на линейке.
+        // The grid is more accurate than a ruler: alternating long/short steps
+        // (swing) are summed, not multiplied by the current length.
+        // Steps 0..4 with lengths 100/50/100/50 ms: notes must land
+        // at 0/4410/6615/11025 frames (@44100), not along a ruler.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(128));
         let marks = Arc::new(ArrayQueue::new(64));
@@ -1254,17 +1373,17 @@ mod tests {
         pump.fill(&mut block, 2, f32_identity);
         let mut dues: Vec<u64> = pump.pending.iter().map(|(d, _, _)| *d).collect();
         dues.sort();
-        // Шаг 0 выстрелил в блоке, остальные висят на точных кадрах.
+        // Step 0 fired in the block, the rest hang on exact frames.
         assert_eq!(dues, vec![4410, 6615, 11025], "swing grid off: {dues:?}");
     }
 
     #[test]
     fn stamped_notes_wait_for_due_frames() {
-        // Due-планирование: штампованные ноты ждут свой медиакадр,
-        // а не стреляют в момент разбора. 10 нот шагов 100..109
-        // по 0.1с (@44100: 4410 кадров/шаг): первый субблок (600 кадров)
-        // должен выстрелить только шаг 100, остальные — висеть
-        // в pending. Legacy без штампа стреляет сразу (тест ниже).
+        // Due scheduling: stamped notes wait for their media frame,
+        // rather than firing when the queue is drained. 10 notes of steps 100..109
+        // at 0.1 s each (@44100: 4410 frames/step): the first subblock (600 frames)
+        // must fire only step 100, the rest stay
+        // in pending. Legacy without a stamp fires immediately (test below).
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(128));
         let marks = Arc::new(ArrayQueue::new(64));
@@ -1299,7 +1418,7 @@ mod tests {
             "due scheduling broken: pending={}",
             pump.pending.len()
         );
-        // Докатываем ~1 секунду: все 10 выстрелили по своим кадрам.
+        // We run about 1 second: all 10 fire on their frames.
         for _ in 0..10 {
             let mut more = vec![0.0f32; 4410 * 2];
             pump.fill(&mut more, 2, f32_identity);
@@ -1310,15 +1429,15 @@ mod tests {
 
     #[test]
     fn step_marks_give_an_exact_time_grid() {
-        // Сетка времени строится по меткам шагов: длина каждого шага
-        // известна точно, даже если на шаге нет нот. Без меток пропуск
-        // оценивался линейно (по длине текущего шага) — при свинге
-        // ошибка копилась по 20-50 мс на шаг, и через пару секунд ноты
-        // «опоздали» на полсекунды: ритм сбивался, сетка пере-якоривалась.
+        // The time grid is built from step stamps: each step's length
+        // is known exactly, even if the step has no notes. Without stamps a gap
+        // was estimated linearly (from the current step's length) — with swing the
+        // error accumulated 20-50 ms per step, and after a couple of seconds notes
+        // were "late" by half a second: the rhythm stumbled, the grid re-anchored.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(64));
         let marks = Arc::new(ArrayQueue::new(64));
-        // Свинг: шаги чередуются 143 мс / 95 мс.
+        // Swing: steps alternate 143 ms / 95 ms.
         let lens_us = [143_000u32, 95_000u32];
         let sr = 44_100.0f32;
         let frame_of = |us: u32| -> u64 { us as u64 * sr as u64 / 1_000_000 };
@@ -1326,8 +1445,8 @@ mod tests {
             let us = lens_us[(step % 2) as usize];
             marks.push(crate::composer::StepMark { step, us }).unwrap();
             if step % 2 == 0 {
-                // Нота только на четных шагах: между ними — пустые
-                // шаги, длину которых знают только метки.
+                // Notes only on even steps: the steps between them are empty,
+                // and only the stamps know their length.
                 let mut n = NoteEvent::new(2, 36, 0.9, 0.2);
                 n.due_step = step;
                 n.step_us = us;
@@ -1351,22 +1470,22 @@ mod tests {
         pump.fill(&mut block, 2, f32_identity);
         let mut dues: Vec<u64> = pump.pending.iter().map(|(d, _, _)| *d).collect();
         dues.sort_unstable();
-        // Шаги 2, 4, 6 — точные кадры по меткам (шаг 0 прозвучал сразу).
+        // Steps 2, 4, 6 — exact frames from the stamps (step 0 sounded immediately).
         let want = vec![
             frame_of(lens_us[0]) + frame_of(lens_us[1]),
             2 * (frame_of(lens_us[0]) + frame_of(lens_us[1])),
             3 * (frame_of(lens_us[0]) + frame_of(lens_us[1])),
         ];
-        assert_eq!(dues, want, "сетка по меткам не точная");
-        assert!(pump.reanchors == 0, "пере-якорение на пустой сетке");
+        assert_eq!(dues, want, "grid from stamps is not accurate");
+        assert!(pump.reanchors == 0, "re-anchor on an empty grid");
     }
 
     #[test]
     fn live_reset_with_marks_reanchors_once() {
-        // Живая смена сида/стиля: нумерация шагов начинается заново с нуля.
-        // Метки и ноты приходят с новой шкалы — сетка пересобирается, но
-        // расписание не уезжает вперёд на десятки секунд (иначе тишина),
-        // а новая шкала снова считается точно.
+        // A live seed/style change: step numbering restarts at zero.
+        // Stamps and notes arrive from the new scale — the grid is rebuilt, but
+        // the schedule doesn't run tens of seconds ahead (otherwise silence),
+        // and the new scale is counted accurately again.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(256));
         let marks = Arc::new(ArrayQueue::new(1024));
@@ -1384,7 +1503,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         let mut block = vec![0.0f32; 4410 * 2];
-        // Старая шкала: 300 шагов, ноты на части шагов.
+        // Old scale: 300 steps, notes on some of them.
         for step in 0..300u64 {
             marks
                 .push(crate::composer::StepMark { step, us: 100_000 })
@@ -1396,12 +1515,12 @@ mod tests {
                 queue.push(n).unwrap();
             }
         }
-        // Разбираем очередь блоками, как живой тракт.
+        // We drain the queue in blocks, as the live pipeline does.
         for _ in 0..12 {
             pump.fill(&mut block, 2, f32_identity);
         }
-        assert!(pump.anchor_step > 0, "сетка не поехала");
-        // Новая шкала: шаги снова с нуля.
+        assert!(pump.anchor_step > 0, "grid didn't start");
+        // New scale: steps start from zero again.
         for step in 0..8u64 {
             marks
                 .push(crate::composer::StepMark { step, us: 100_000 })
@@ -1413,43 +1532,43 @@ mod tests {
         queue.push(n).unwrap();
         let before = pump.media_cursor;
         pump.fill(&mut block, 2, f32_identity);
-        assert!(pump.reanchors <= 1, "пере-якорений: {}", pump.reanchors);
-        assert_eq!(pump.anchor_step, 0, "якорь не пересобрался");
-        // Новая шкала считается точно: шаг 4 — это четыре шага от якоря.
+        assert!(pump.reanchors <= 1, "re-anchors: {}", pump.reanchors);
+        assert_eq!(pump.anchor_step, 0, "anchor wasn't rebuilt");
+        // The new scale is counted accurately: step 4 is four steps from the anchor.
         let due = pump
             .pending
             .iter()
             .filter(|(_, _, n)| n.due_step == 4)
             .map(|(d, _, _)| *d)
             .min()
-            .expect("нота шага 4 в расписании");
+            .expect("note of step 4 in the schedule");
         let want = pump.anchor_frame + 4 * 4410;
         assert!(
             (due as i64 - want as i64).abs() <= 2,
-            "новая шкала считается неточно: {due} против {want}"
+            "new scale counted inaccurately: {due} vs {want}"
         );
         assert!(
             due < before + 4410 * 8,
-            "расписание уехало: {due} против {before}"
+            "schedule ran ahead: {due} vs {before}"
         );
     }
 
     #[test]
     fn notes_of_one_frame_keep_generation_order() {
-        // Кик и бас в одном кадре: движок грузит голоса по порядку
-        // генерации (кик первым — фундамент, чтобы дак бочки был готов).
-        // Сортировка по id инструмента этот порядок ломала.
+        // Kick and bass in the same frame: the engine loads voices in
+        // generation order (kick first — the foundation, so the kick's duck is ready).
+        // Sorting by instrument id broke that order.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(8));
         let marks = Arc::new(ArrayQueue::new(64));
-        // Первая нота ставит якорь сетки.
+        // The first note sets the grid anchor.
         let mut first = NoteEvent::new(6, 60, 0.9, 0.2);
         first.due_step = 0;
         first.step_us = 100_000;
         queue.push(first).unwrap();
-        // Кик и бас в одном кадре: движок грузит голоса по порядку
-        // генерации (кик первым — фундамент, чтобы дак бочки был готов).
-        // Сортировка по id инструмента этот порядок ломала.
+        // Kick and bass in the same frame: the engine loads voices in
+        // generation order (kick first — the foundation, so the kick's duck is ready).
+        // Sorting by instrument id broke that order.
         for (id, pitch) in [(2usize, 36u8), (1, 40)] {
             let mut n = NoteEvent::new(id, pitch, 0.9, 0.2);
             n.due_step = 1;
@@ -1476,15 +1595,15 @@ mod tests {
             .iter()
             .map(|(_, _, n)| n.instrument_id)
             .collect();
-        assert_eq!(ids, vec![2, 1], "порядок нот кадра нарушен");
+        assert_eq!(ids, vec![2, 1], "frame note order broken");
     }
 
     #[test]
     fn live_numbering_reset_clears_old_step_grid() {
-        // Живой сид/стиль начинает форму заново с due_step 0.
-        // Старая сетка шагов не должна сворачиваться в новый якорь:
-        // иначе через круг (256 шагов) расписание уезжает на десятки
-        // секунд вперед и наступает тишина.
+        // A live seed/style restarts the form at due_step 0.
+        // The old step grid must not be folded into the new anchor:
+        // otherwise after a loop (256 steps) the schedule runs tens of
+        // seconds ahead and silence sets in.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(8));
         let marks = Arc::new(ArrayQueue::new(64));
@@ -1501,14 +1620,14 @@ mod tests {
             Arc::new(RwLock::new(0.4)),
             Arc::new(AtomicBool::new(false)),
         );
-        let mut block = vec![0.0f32; 4410 * 2]; // один шаг 100 мс
+        let mut block = vec![0.0f32; 4410 * 2]; // one step is 100 ms
         let push = |step: u64| {
             let mut n = NoteEvent::new(6, 60, 0.8, 0.2);
             n.due_step = step;
             n.step_us = 100_000;
             queue.push(n).unwrap();
         };
-        // Длинная сессия: кольцо переполняется, якорь уезжает вперед.
+        // A long session: the ring overflows, the anchor moves ahead.
         for step in 0..300u64 {
             push(step);
             pump.fill(&mut block, 2, f32_identity);
@@ -1519,8 +1638,8 @@ mod tests {
             );
         }
         assert!(pump.anchor_step > 0, "grid never folded");
-        // Сброс нумерации. Каждый шаг новой формы должен звучать
-        // в своем блоке, а не копиться в pending.
+        // Numbering reset. Every step of the new form must sound
+        // in its own block rather than piling up in pending.
         for step in 0..300u64 {
             push(step);
             pump.fill(&mut block, 2, f32_identity);
@@ -1534,9 +1653,9 @@ mod tests {
 
     #[test]
     fn sparse_notes_keep_the_shared_grid() {
-        // Разреженные ноты (пэды, паузы формы) не ре-якорятся на «сейчас»
-        // только потому, что очередь опустела: шаг 10 обязан звучать
-        // через 10 шагов от якоря, а не в момент разбора.
+        // Sparse notes (pads, form pauses) aren't re-anchored to "now"
+        // just because the queue emptied: step 10 must sound
+        // ten steps from the anchor, not at drain time.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(8));
         let marks = Arc::new(ArrayQueue::new(64));
@@ -1558,9 +1677,9 @@ mod tests {
         n.due_step = 0;
         n.step_us = 100_000;
         queue.push(n).unwrap();
-        pump.fill(&mut block, 2, f32_identity); // шаг 0 отзвучал
+        pump.fill(&mut block, 2, f32_identity); // step 0 has finished sounding
         for _ in 0..4 {
-            pump.fill(&mut block, 2, f32_identity); // четыре шага тишины
+            pump.fill(&mut block, 2, f32_identity); // four steps of silence
         }
         assert_eq!(pump.media_cursor, 5 * 4410);
         let mut n = NoteEvent::new(6, 64, 0.8, 0.2);
@@ -1577,9 +1696,9 @@ mod tests {
 
     #[test]
     fn unstamped_notes_fire_immediately() {
-        // Legacy без штампа (тесты, прямые вызовы): разбор = выстрел,
-        // никакого расписания. 100 нот одним субблоком упираются
-        // только в кап разбора 32.
+        // Legacy without a stamp (tests, direct calls): draining = firing,
+        // no schedule. 100 notes in one subblock hit
+        // only the drain cap of 32.
         use crossbeam::queue::ArrayQueue;
         let queue = Arc::new(ArrayQueue::new(128));
         let marks = Arc::new(ArrayQueue::new(64));
@@ -1608,14 +1727,14 @@ mod tests {
 
     #[test]
     fn full_ensemble_mix_stays_finite() {
-        // Мини-микс всего ансамбля через тот же RenderState, что и live:
-        // конечность + вменяемый уровень.
+        // A mini-mix of the whole ensemble through the same RenderState as live:
+        // finiteness + a sane level.
         use crate::instruments::{
             BassGuitar, HiHat, Kick, Kick808, NoteEvent, SnareDrum, Vinyl, VoicePool,
         };
         use crate::playback::{
             BASS_ID, GUITAR_ID, HAT_ID, KEYS_ID, KICK808_ID, KICK_ID, PAD_ID, PLUCK_ID, SHAKER_ID,
-            SNARE_ID, VINYL_ID, VOCAL_ID,
+            SNARE_ID, VINYL_ID,
         };
         let sr = 44_100.0;
         let insts: Vec<Box<dyn Instrument>> = vec![
@@ -1628,7 +1747,6 @@ mod tests {
             Box::new(VoicePool::keys(KEYS_ID, 8)),
             Box::new(Kick808::new(KICK808_ID)),
             Box::new(Vinyl::new(VINYL_ID)),
-            Box::new(VoicePool::vocals(VOCAL_ID, 4)),
             Box::new(VoicePool::guitars(GUITAR_ID, 6)),
             Box::new(crate::instruments::Shaker::new(SHAKER_ID)),
         ];
@@ -1647,7 +1765,6 @@ mod tests {
             (KEYS_ID, 60, 0.6, 1.0),
             (KICK808_ID, 36, 1.0, 0.1),
             (VINYL_ID, 60, 0.5, 2.0),
-            (VOCAL_ID, 69, 0.7, 0.4),
             (GUITAR_ID, 64, 0.7, 1.0),
             (SHAKER_ID, 60, 0.5, 0.05),
         ];
@@ -1671,8 +1788,8 @@ mod tests {
 
     #[test]
     fn treble_slew_converges_without_jump() {
-        // Срез верхов едет к цели ~120 мс, а не ступенькой: граница секции
-        // (свип формы) не дает щелчка в коэффициент фильтра.
+        // The high-cut travels to its target over ~120 ms, not by a step: a section
+        // boundary (form sweep) produces no click in the filter coefficient.
         use crate::instruments::{BassGuitar, Instrument};
         let sr = 44_100.0;
         let insts: Vec<Box<dyn Instrument>> = vec![Box::new(BassGuitar::new(1))];

@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:io' show File, Platform;
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-import 'package:cont/src/audio_bridge.dart';
-import 'package:cont/src/player_controller.dart';
-import 'package:cont/src/player_screen.dart';
-import 'package:cont/src/rust/frb_generated.dart';
+import 'package:continuum/src/audio_bridge.dart';
+import 'package:continuum/src/player_controller.dart';
+import 'package:continuum/src/player_screen.dart';
+import 'package:continuum/src/rust/frb_generated.dart';
 
-/// Этапы запуска с живым логом: если на устройстве виснет или падает,
-/// видно ГДЕ (а не черный экран). Лог дублируется в logcat.
+/// Startup stages with a live log: if it hangs or crashes on a device,
+/// you can see WHERE (instead of a black screen). The log is duplicated to logcat.
 class BootLog extends ChangeNotifier {
   final lines = <String>[];
 
@@ -20,11 +23,40 @@ class BootLog extends ChangeNotifier {
   }
 }
 
+/// Find the native library on desktop. The generated loader only looks into
+/// `rust/target/release/`, which breaks `flutter run` in debug mode and
+/// standalone bundles. Android/iOS keep using the generated loader (null).
+ExternalLibrary? _nativeLibrary() {
+  if (Platform.isAndroid || Platform.isIOS) return null;
+  const stem = 'rust_lib_continuum';
+  final name = Platform.isWindows
+      ? '$stem.dll'
+      : Platform.isMacOS
+          ? 'lib$stem.dylib'
+          : 'lib$stem.so';
+  final exeDir = File(Platform.resolvedExecutable).parent.path;
+  for (final path in <String>[
+    'rust/target/release/$name',
+    'rust/target/debug/$name',
+    '$exeDir/$name',
+    name,
+  ]) {
+    final file = File(path);
+    if (file.existsSync()) return ExternalLibrary.open(file.absolute.path);
+  }
+  return null;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FlutterError.onError = (details) {
     debugPrint('[flutter-error] ${details.exceptionAsString()}');
     FlutterError.presentError(details);
+  };
+  // Async errors outside runApp (FFI, timers) would otherwise be lost silently.
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('[async-error] $error\n$stack');
+    return true;
   };
   runApp(const BootApp());
 }
@@ -56,6 +88,9 @@ class _BootAppState extends State<BootApp> {
   }
 
   Future<void> _boot() async {
+    // Retry after an error: old subscriptions/handlers must not live
+    // alongside the new ones (otherwise events arrive in two controllers).
+    await _ready?.bridge.dispose();
     setState(() {
       _ready = null;
       _error = null;
@@ -63,7 +98,7 @@ class _BootAppState extends State<BootApp> {
     });
     try {
       _log.add('RustLib.init...');
-      await RustLib.init();
+      await RustLib.init(externalLibrary: _nativeLibrary());
       _log.add('rust ok');
       final controller = PlayerController();
       final bridge = AudioBridge(controller);
@@ -73,8 +108,8 @@ class _BootAppState extends State<BootApp> {
       _log.add('controller init...');
       await controller.init();
       _log.add('ready');
-      // Прогрев артов уведомления в фоне: первый тап play/стиль
-      // не будет ждать декод картинки.
+      // Warm up notification artwork in the background: the first play/style tap
+      // won't wait for image decoding.
       unawaited(bridge.warmup(controller.styles));
       if (!mounted) return;
       setState(() => _ready = _Ready(controller, bridge));
@@ -86,6 +121,12 @@ class _BootAppState extends State<BootApp> {
         _stack = st;
       });
     }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_ready?.bridge.dispose());
+    super.dispose();
   }
 
   @override
@@ -112,7 +153,7 @@ class _BootAppState extends State<BootApp> {
   }
 }
 
-/// Экран загрузки с живым логом: видно, на чем встал запуск.
+/// Loading screen with a live log: shows where startup got stuck.
 class BootLoading extends StatelessWidget {
   const BootLoading({super.key, required this.log});
 
@@ -130,7 +171,7 @@ class BootLoading extends StatelessWidget {
             children: [
               const CircularProgressIndicator(),
               const SizedBox(height: 24),
-              const Text('Continuum запускается…',
+              const Text('Starting Continuum…',
                   style: TextStyle(fontSize: 16)),
               const SizedBox(height: 16),
               Expanded(
@@ -156,8 +197,8 @@ class BootLoading extends StatelessWidget {
   }
 }
 
-/// Экран ошибки старта: короткое сообщение + первые строки стека.
-/// Полный текст уходит в logcat (`adb logcat | findstr boot`).
+/// Startup error screen: short message + first lines of the stack trace.
+/// The full text goes to logcat (`adb logcat | findstr boot`).
 class BootError extends StatelessWidget {
   const BootError({
     super.key,
@@ -170,13 +211,15 @@ class BootError extends StatelessWidget {
   final StackTrace? stack;
   final VoidCallback onRetry;
 
-  /// Первые строки стека: фреймворк добавляет ~100 одинаковых кадров,
-  /// для диагностики достаточно десятка.
+  /// First lines of the stack trace: the framework adds ~100 identical frames,
+  /// a dozen is enough for diagnostics.
   String get _shortStack {
     final lines = stack.toString().split('\n');
     const head = 12;
     final shown = lines.take(head).join('\n');
-    return lines.length > head ? '$shown\n… (${lines.length - head} строк скрыто)' : shown;
+    return lines.length > head
+        ? '$shown\n… (${lines.length - head} lines hidden)'
+        : shown;
   }
 
   @override
@@ -191,7 +234,7 @@ class BootError extends StatelessWidget {
             children: [
               const Icon(Icons.error_outline, size: 48, color: Colors.red),
               const SizedBox(height: 16),
-              const Text('Не удалось запуститься',
+              const Text('Failed to start',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
               const SizedBox(height: 12),
@@ -210,7 +253,7 @@ class BootError extends StatelessWidget {
               FilledButton.icon(
                 onPressed: onRetry,
                 icon: const Icon(Icons.refresh),
-                label: const Text('Повторить'),
+                label: const Text('Retry'),
               ),
             ],
           ),

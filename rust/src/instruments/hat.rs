@@ -3,35 +3,39 @@ use super::{
     sane_sample_rate, Instrument, InstrumentRole, Mono, NoteEvent, Voice,
 };
 
-/// Хэт в духе 808: шесть негармонических BLEP-квадратов через крутой
-/// SVF-highpass. Наивные квадраты давали алиасинговый металлический
-/// «песок» — BLEP оставляет чистый металл. Открытость — длительностью
-/// ноты, монофония с choke, как педаль живого хэта.
+/// 808-style hi-hat: six inharmonic BLEP squares at the CLASSIC 808 cymbal
+/// frequencies (205/304/370/523/540/800 Hz) → 10 kHz bandpass → 7 kHz highpass.
+/// Openness is controlled by note duration, monophonic with choke like a live
+/// hi-hat pedal.
 ///
-/// Осцилляторы стоят в ПЕРКУССИОННОМ регистре (7–14 кГц), а не в
-/// диапазоне тарелки 808 (205–556 Гц): с фильтром на 6 кГц от тарелки
-/// оставались одни слабые верхние гармоники, и хэт был на 16 дБ тише
-/// кика — в миксе его не было слышно совсем (замер соло: пик −20 дБ).
-const OSC_HZ: [f32; 6] = [7000.0, 8100.0, 9300.0, 10600.0, 12000.0, 13600.0];
-/// Срез highpass: гармоники квадратов выше него — тело тика.
-/// 5000 Гц: пропускает весь ударный диапазон хэта, но не батарею
-/// (корпус ударных должен остаться в ударных).
-const HP_HZ: f32 = 5000.0;
+/// Previous square waves at 7–13.6 kHz squealed at Nyquist: at 13.6 kHz
+/// `freq/sr ≈ 0.31`, the BLEP window degenerates, and all the "metal" sat in
+/// the last octave — a harsh whistle instead of a cymbal. Now the low-frequency
+/// generators run at 2× oversampling: the upper octave forms a real 808-metal
+/// spectrum, and the BP carves out the needed "iron" from it.
+const OSC_HZ: [f32; 6] = [205.3, 304.4, 369.6, 522.7, 540.0, 800.0];
+/// Cymbal band: select 7–14 kHz from the harmonics of the six squares.
+const METAL_BP_HZ: f32 = 10_000.0;
+const METAL_BP_Q: f32 = 0.7;
+/// Highpass cutoff: the hi-hat body lives above 7 kHz, leave the kick alone.
+const HP_HZ: f32 = 7_000.0;
 const HP_Q: f32 = 0.7;
 const CLOSED_LEN_SECS: f32 = 0.05;
 const OPEN_THRESHOLD_SECS: f32 = 0.12;
 const MAX_OPEN_SECS: f32 = 0.5;
 const CLOSED_DECAY: f32 = 90.0;
 const OPEN_DECAY: f32 = 9.0;
-/// Атака смягчена (1.5 мс): transient shaper против резких пиков,
-/// как в спеке перкуссии. Было 0.5 мс — щелкало.
+/// Attack softened (1.5 ms): a transient shaper against sharp peaks,
+/// as in the percussion spec. It was 0.5 ms — used to click.
 const ATTACK_SECS: f32 = 0.0015;
 const FADE_SECS: f32 = 0.006;
-/// Шумовой слой поверх BLEP-металла: живой хэт — это шум тарелки,
-/// одни квадраты звучат стерильно (ср. v1: шум 0.65 + звон 0.35).
-/// Тихо, чтобы не шипеть: воздух, а не песок.
-const NOISE_GAIN: f32 = 0.18;
-const METAL_GAIN: f32 = 0.82;
+/// Noise layer on top of the BLEP metal: a live hi-hat is cymbal noise;
+/// squares alone sound sterile (cf. v1: noise 0.65 + ring 0.35).
+/// Kept quiet so it doesn't hiss: air, not sand.
+const NOISE_GAIN: f32 = 0.2;
+/// BP+HP take ~26 dB off the original signal: compensate so the tick's
+/// loudness stays put (regression "hi-hat inaudible").
+const METAL_GAIN: f32 = 2.4;
 
 #[derive(Clone, Default)]
 struct HatVoice {
@@ -41,10 +45,12 @@ struct HatVoice {
     decay: f32,
     gain: f32,
     samples_left: usize,
+    /// BP in the 2× grid: shapes the 808 metal before downsampling.
+    metal_bp: Svf,
     hp: Svf,
-    /// Рекуррентная огибающая вместо посэмплового `exp`.
+    /// Recursive envelope instead of per-sample `exp`.
     env: ExpDecay,
-    /// Шум тарелки: пересеивается нотой (одинаковые тики одинаковы).
+    /// Cymbal noise: reseeded by note (identical ticks are identical).
     noise: Noise,
 }
 
@@ -65,10 +71,11 @@ impl Voice for HatVoice {
         self.gain = note.velocity;
         self.t = 0.0;
         self.env = ExpDecay::start(self.decay, self.sample_rate);
+        self.metal_bp.reset();
         self.hp.reset();
-        // Фазы осцилляторов рассеиваем от ноты: металл живет перебиениями
-        // (одинаковые фазы каждый хит дали бы machine-gun), choke-щелчок
-        // давит attack-ramp, хвост прошлого хита — кроссфейд Mono.
+        // Scatter oscillator phases from the note: metal lives on beatings
+        // (identical phases every hit would give machine-gun), the choke click
+        // pushes down the attack-ramp, and the previous hit's tail is the Mono crossfade.
         let seed = note_seed(note, 0x1A7);
         for (i, phase) in self.phases.iter_mut().enumerate() {
             let bits = seed.wrapping_add((i as u32).wrapping_mul(0x9E3779B9));
@@ -84,12 +91,23 @@ impl Voice for HatVoice {
         self.samples_left -= 1;
 
         let sample_rate = self.sample_rate;
-        let mut metal = 0.0;
-        for (phase, hz) in self.phases.iter_mut().zip(OSC_HZ) {
-            *phase = (*phase + hz / sample_rate) % 1.0;
-            metal += square_blep(*phase, hz, sample_rate);
+        let double_sr = sample_rate * 2.0;
+        // 2× oversampling: the metal filter works in the upper grid, where it
+        // has room, and the two subsamples are averaged on downsampling
+        // (simple 2-tap decimation — also suppresses the 22 kHz mirror).
+        let mut metal = 0.0f32;
+        for _ in 0..2 {
+            let mut m = 0.0f32;
+            for (phase, hz) in self.phases.iter_mut().zip(OSC_HZ) {
+                *phase = (*phase + hz / double_sr) % 1.0;
+                m += square_blep(*phase, hz, double_sr);
+            }
+            m /= OSC_HZ.len() as f32;
+            let (_, bp, _) = self
+                .metal_bp
+                .process(m, METAL_BP_HZ, METAL_BP_Q, double_sr);
+            metal += bp * 0.5;
         }
-        metal /= OSC_HZ.len() as f32;
         let src = metal * METAL_GAIN + self.noise.sample() * NOISE_GAIN;
 
         let (_, _, bright) = self.hp.process(src, HP_HZ, HP_Q, sample_rate);
@@ -112,7 +130,7 @@ impl Voice for HatVoice {
     }
 }
 
-/// Публичный инструмент: моно-голос с кроссфейдом хвоста.
+/// Public instrument: monophonic voice with tail crossfade.
 pub struct HiHat(Mono<HatVoice>);
 
 impl HiHat {
@@ -157,8 +175,8 @@ mod tests {
 
     #[test]
     fn closed_hat_is_audible() {
-        // Регрессия «хэта не слышно в миксе»: закрытый тик на полной
-        // громкости обязан давать весомую энергию, а не шепот.
+        // Regression "hi-hat inaudible in the mix": a closed tick at full
+        // velocity must deliver substantial energy, not a whisper.
         let sr = 44_100.0;
         let mut hat = HiHat::new(5);
         hat.set_sample_rate(sr);
@@ -173,7 +191,7 @@ mod tests {
         }
         assert!(n > 100, "tick too short: {n}");
         let mut peak: f32 = 0.0;
-        // второй проход для пика — перетриггерим тот же тик
+        // Second pass for the peak — retrigger the same tick.
         hat.trigger(&NoteEvent::new(5, 42, 1.0, 0.05));
         while hat.is_active() {
             peak = peak.max(hat.next_sample().abs());
@@ -183,6 +201,25 @@ mod tests {
             "hat too quiet: mean={} peak={peak}",
             sum / n as f32
         );
+    }
+
+    #[test]
+    fn metal_lives_in_the_cymbal_band_not_at_nyquist() {
+        // Classic 808 cymbal: energy at 7–10 kHz noticeably exceeds the low
+        // band (100–1500 Hz). Previous squares at 13.6 kHz squealed at Nyquist
+        // with an almost empty low end — now BP+HP hold the band.
+        use super::super::band_ratio;
+        let sr = 44_100.0;
+        let mut hat = HiHat::new(5);
+        hat.set_sample_rate(sr);
+        hat.trigger(&NoteEvent::new(5, 42, 1.0, 0.05));
+        let out: Vec<f32> = (0..(0.05 * sr) as usize)
+            .map(|_| hat.next_sample())
+            .collect();
+        let high = band_ratio(&out, sr, 7000.0, 10_000.0);
+        let low = band_ratio(&out, sr, 100.0, 1500.0);
+        assert!(high > 0.05, "no cymbal band: {high:.4}");
+        assert!(high > low * 2.0, "hat is a low thud: high={high} low={low}");
     }
 
     #[test]

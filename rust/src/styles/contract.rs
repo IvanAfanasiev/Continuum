@@ -1,22 +1,22 @@
-//! Контракт ансамбля стиля.
+//! Style ensemble contract.
 //!
-//! Стиль задаёт не независимые вероятности шагов, а жёсткие отношения
-//! между ролями, бюджет плотности и обязательную вариацию исполнения.
-//! Расширяться будет по мере переноса стилей на контракт.
+//! The style does not specify independent probabilities of steps, but rigid relationships
+//! between roles, density budget and required execution variation.
+//! It will expand as styles are transferred to the contract.
 
-/// Контракт ансамбля для одного стиля.
+/// Ensemble contract for one style.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StyleContract {
-    /// Бас не атакует на шаге, где играет кик: уступает фундаменту.
+    /// The bass does not attack at the step where the kick plays: it gives way to the foundation.
     pub bass_avoids_kick: bool,
-    /// Фраза получает лёгкую velocity-арку: растёт к концу и выдыхает.
+    /// The phrase receives a slight velocity arc: it grows towards the end and exhales.
     pub phrase_velocity_arc: bool,
-    /// Максимум мелодических онсетов на один шаг. 0 = без ограничения.
-    /// Держит слои различимыми: насыщенность — контраст, а не стена нот.
+    /// Maximum melodic onsets per step. 0 = no limit.
+    /// Keeps layers distinguishable: saturation is contrast, not a wall of notes.
     pub max_melodic_onsets_per_step: usize,
-    /// Верхняя граница регистра для мелодических ролей (MIDI). None = без
-    /// ограничения. Складывает уползшие ноты октавой вниз, чтобы слои не
-    /// лезли в одну полосу и не было высокочастотного мусора.
+    /// Upper register limit for melodic roles (MIDI). None = no
+    /// limit. Folds notes that creep too high down an octave so that layers do not
+    /// crowd into one band and no high-frequency clutter remains.
     pub melodic_ceiling: Option<u8>,
 }
 

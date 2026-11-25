@@ -1,23 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// 6 ячеек ввода сида в духе Telegram-кода: работают как один инпут.
-/// Печать — фокус вперед, стирание пустой — назад, вставка мусора режется.
+/// Six seed input boxes in the spirit of a Telegram code: they work as one input.
+/// Typing moves focus forward, clearing an empty box moves back, junk paste is cut.
 class SeedInput extends StatefulWidget {
   const SeedInput({
     super.key,
     required this.initialCode,
     required this.onSubmit,
     required this.onDice,
+    this.onPrevious,
     this.compact = false,
   });
 
-  /// 6 символов без дефиса для предзаполнения.
+  /// 6 characters without the dash for prefill.
   final String initialCode;
   final void Function(String code) onSubmit;
   final VoidCallback onDice;
+  final VoidCallback? onPrevious;
 
-  /// Компактный вид для телефонов: ячейки меньше заголовка стиля.
+  /// Compact layout for phones: boxes smaller than the style title.
   final bool compact;
 
   @override
@@ -43,7 +45,7 @@ class _SeedInputState extends State<SeedInput> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialCode != widget.initialCode &&
         !_nodes.any((n) => n.hasFocus)) {
-      // Внешнее обновление (кубик) — только когда не печатаем.
+      // External update (dice) — only when not typing.
       _fill(widget.initialCode);
     }
   }
@@ -61,7 +63,7 @@ class _SeedInputState extends State<SeedInput> {
   void _onChanged(int index, String value) {
     final was = _prev[index];
     if (value.length > 1) {
-      // Вставка: берем последний символ.
+      // Paste: take the last character.
       _controllers[index].text = value[value.length - 1];
     }
     final now = _controllers[index].text;
@@ -93,7 +95,7 @@ class _SeedInputState extends State<SeedInput> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // На телефоне инпут не должен спорить с названием стиля.
+    // On a phone the input shouldn't compete with the style title.
     final boxSize = widget.compact ? 38.0 : 48.0;
     final boxHeight = widget.compact ? 46.0 : 56.0;
     final fontSize = widget.compact ? 17.0 : 20.0;
@@ -108,8 +110,8 @@ class _SeedInputState extends State<SeedInput> {
             focusNode: _nodes[i],
             textAlign: TextAlign.center,
             textAlignVertical: TextAlignVertical.center,
-            // Тап мимо ячеек гасит фокус: клавиатура не всплывает
-            // от последнего выбранного слота.
+            // Tapping outside the boxes clears focus: the keyboard won't pop up
+            // from the last selected slot.
             onTapOutside: (_) => FocusScope.of(context).unfocus(),
             style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600),
             maxLength: 2,
@@ -125,8 +127,8 @@ class _SeedInputState extends State<SeedInput> {
             decoration: InputDecoration(
               filled: true,
               fillColor: scheme.surfaceContainerHighest,
-              // Ноль справа/сверху/снизу + 1px слева: компенсация
-              // оптики глифов — иначе символ сидит чуть левее центра.
+              // Zero right/top/bottom + 1px left: glyph optical compensation —
+              // otherwise the character sits slightly left of center.
               contentPadding: const EdgeInsets.only(left: 1),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -153,10 +155,19 @@ class _SeedInputState extends State<SeedInput> {
         cells.add(const SizedBox(width: 6));
       }
     }
-    cells.add(const SizedBox(width: 8));
+    cells.add(const SizedBox(width: 4));
+    if (widget.onPrevious != null) {
+      cells.add(
+        IconButton(
+          tooltip: 'Previous seed',
+          onPressed: widget.onPrevious,
+          icon: const Icon(Icons.undo),
+        ),
+      );
+    }
     cells.add(
       IconButton(
-        tooltip: 'Случайный сид',
+        tooltip: 'Random seed',
         onPressed: widget.onDice,
         icon: const Icon(Icons.casino_outlined),
       ),
@@ -168,7 +179,7 @@ class _SeedInputState extends State<SeedInput> {
   }
 }
 
-/// Верхний регистр прямо при вводе.
+/// Uppercase as you type.
 class UpperCaseFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(

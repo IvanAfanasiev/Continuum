@@ -1,4 +1,4 @@
-package com.example.cont
+package com.continuum.app
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -10,9 +10,9 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 
 /**
- * Точка входа: audio_service требует наследника AudioServiceActivity.
- * Звук идет из нативного Rust-потока (свой AudioTrack по JNI),
- * здесь только события маршрута (наушники выдернули -> пауза).
+ * Entry point: audio_service requires an AudioServiceActivity descendant.
+ * Sound comes from the native Rust thread (its own AudioTrack via JNI);
+ * this class only handles route events (headphones unplugged -> pause).
  */
 class MainActivity : AudioServiceActivity() {
     private var events: EventChannel.EventSink? = null
@@ -20,8 +20,8 @@ class MainActivity : AudioServiceActivity() {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                // Наушники выдернули: Dart довершит паузу (состояние,
-                // уведомление, останов нативного потока) через событие.
+                // Headphones unplugged: Dart completes the pause (state,
+                // notification, stopping the native stream) via this event.
                 events?.success("noisy")
             }
         }
@@ -31,7 +31,7 @@ class MainActivity : AudioServiceActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         EventChannel(
-            flutterEngine.dartExecutor.binaryMessenger, "cont/audio_events"
+            flutterEngine.dartExecutor.binaryMessenger, "continuum/audio_events"
         ).setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(args: Any?, sink: EventChannel.EventSink) {
                 events = sink
